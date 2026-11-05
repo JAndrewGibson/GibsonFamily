@@ -467,15 +467,25 @@ def test_income_fluctuations_under_review_requests_and_mobile_push(client):
     )
     assert inc_nov_2.status_code == 201
 
-    # Verify November income & fluctuation metrics in /api/finance/summary?month=2026-11
+    # Verify November income, projected income (from Oct $5,000), & fluctuation metrics in /api/finance/summary?month=2026-11
     nov_summary = client.get("/api/finance/summary?month=2026-11", headers=alex_headers).get_json()
     assert nov_summary["total_monthly_income"] == 5750.0
     assert nov_summary["expected_monthly_income"] == 5200.0
     assert nov_summary["previous_month_income"] == 5000.0
+    assert nov_summary["projected_monthly_income"] == 5000.0
+    assert nov_summary["projected_income_months_count"] == 1
+    assert nov_summary["income_vs_projected"] == 750.0
     assert nov_summary["income_fluctuation_vs_prev"] == 750.0
     assert nov_summary["income_fluctuation_vs_prev_pct"] == 15.0
     assert nov_summary["income_fluctuation_vs_expected"] == 550.0
     assert len(nov_summary["income_entries"]) == 2
+
+    # Check December 2026 projected income based on Oct ($5,000) and Nov ($5,750) -> $5,375.00
+    dec_summary = client.get("/api/finance/summary?month=2026-12", headers=alex_headers).get_json()
+    assert dec_summary["projected_monthly_income"] == 5375.0
+    assert dec_summary["projected_income_months_count"] == 2
+    assert dec_summary["projected_recurring_income"] == 5000.0
+    assert dec_summary["projected_variable_income"] == 375.0
 
     # Verify /api/finance/history includes monthly income & fluctuation fields
     hist = client.get("/api/finance/history", headers=alex_headers).get_json()
@@ -545,6 +555,64 @@ def test_income_fluctuations_under_review_requests_and_mobile_push(client):
     assert test_push.status_code == 201
     assert test_push.get_json()["sent"] is True
     assert test_push.get_json()["notification"]["notif_type"] == "push_test"
+
+    # 4. Category Management Panel (Pre-Loaded & Custom Categories) + Untracked Category Flagging
+    # Log a transaction in November with an untracked custom category "Coffee Shops"
+    tx_coffee = client.post(
+        "/api/finance/transactions",
+        headers=alex_headers,
+        json={
+            "name": "Blue Bottle Coffee",
+            "amount": 18.50,
+            "category": "Coffee Shops",
+            "date": "2026-11-04",
+        },
+    ).get_json()
+    assert tx_coffee["category"] == "Coffee Shops"
+
+    # Check November summary: "Coffee Shops" must be flagged in untracked_categories with $18.50 spend!
+    nov_cat_check = client.get("/api/finance/summary?month=2026-11", headers=alex_headers).get_json()
+    untracked_names = [u["name"] for u in nov_cat_check["untracked_categories"]]
+    assert "Coffee Shops" in untracked_names
+    coffee_untracked = next(u for u in nov_cat_check["untracked_categories"] if u["name"] == "Coffee Shops")
+    assert coffee_untracked["month_spent"] == 18.50
+    assert coffee_untracked["is_tracked"] is False
+    assert nov_cat_check["untracked_monthly_spent"] >= 18.50
+    assert nov_cat_check["transactions"][0]["is_category_tracked"] is False
+
+    # Rename / merge "Coffee Shops" into "Groceries & Dining" via PUT /api/finance/categories
+    merge_res = client.put(
+        "/api/finance/categories",
+        headers=alex_headers,
+        json={"old_name": "Coffee Shops", "new_name": "Groceries & Dining"},
+    )
+    assert merge_res.status_code == 200
+
+    # Set a budget for "Groceries & Dining" in 2026-11 so it is tracked
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_headers,
+        json={"category": "Groceries & Dining", "monthly_limit": 600.0, "budget_month": "2026-11"},
+    )
+    nov_after_merge = client.get("/api/finance/summary?month=2026-11", headers=alex_headers).get_json()
+    assert not any(u["name"] == "Coffee Shops" for u in nov_after_merge["untracked_categories"])
+    assert nov_after_merge["transactions"][0]["category"] == "Groceries & Dining"
+    assert nov_after_merge["transactions"][0]["is_category_tracked"] is True
+
+    # Remove/hide a pre-loaded category ("Future Purchase Savings") via DELETE /api/finance/categories
+    del_preloaded = client.delete(
+        "/api/finance/categories",
+        headers=alex_headers,
+        json={"name": "Future Purchase Savings", "month": "2026-11"},
+    )
+    assert del_preloaded.status_code == 200
+    nov_after_hide = client.get("/api/finance/summary?month=2026-11", headers=alex_headers).get_json()
+    assert "Future Purchase Savings" not in nov_after_hide["all_categories"]
+    fps_entry = next(
+        c for c in nov_after_hide["categories_catalog"] if c["name"] == "Future Purchase Savings"
+    )
+    assert fps_entry["is_archived"] is True
+
 
 
 

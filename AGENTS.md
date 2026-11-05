@@ -99,9 +99,13 @@ GibsonFamily/
 - **Transaction Budget Month (`transactions.budget_month`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.
-- **Income & Fluctuation Tracking (`income_entries` table)**:
+- **Income, Projected Income & Fluctuation Tracking (`income_entries` table)**:
   - Stores monthly income (`source_name`, `amount`, `expected_monthly_amount`, `income_type` [`paycheck`, `variable`, `bonus`, `side_income`, `other`], `date`, `budget_month`). Plaid inflows (`amount < 0` or `personal_finance_category.primary == "INCOME"`) are also automatically synced into `income_entries`.
-  - `GET /api/finance/summary` and `GET /api/finance/history` compute `total_monthly_income`, `expected_monthly_income`, `previous_month_income`, `average_monthly_income`, `income_fluctuation_vs_prev` (`$` and `%`), `income_fluctuation_vs_expected`, `net_monthly_cashflow` (`income - spent`), and `unallocated_income` (`income - budget`).
+  - `GET /api/finance/summary` and `GET /api/finance/history` compute `total_monthly_income`, `projected_monthly_income` (calculated from up to 6 prior active months `< selected_month`, broken down into `projected_recurring_income`, `projected_variable_income`, and historical `projected_income_min`/`projected_income_max`), `income_vs_projected` (`$` and `%`), `expected_monthly_income`, `previous_month_income`, `average_monthly_income`, `income_fluctuation_vs_prev` (`$` and `%`), `income_fluctuation_vs_expected`, `net_monthly_cashflow` (`income - spent`), and `unallocated_income` (`income - budget`).
+- **Category Catalog, Category Manager Panel & Untracked Category Flagging (`category_catalog` table)**:
+  - Stores both pre-loaded (`is_preloaded = 1`) and custom (`is_preloaded = 0`) categories along with `is_archived` status so unwanted pre-loaded or custom categories can be hidden/removed without re-populating in dropdowns.
+  - Managed via `GET /api/finance/categories`, `POST /api/finance/categories` (create/restore), `PUT /api/finance/categories` (rename/merge across all transactions, budgets, requests, and future plans), and `DELETE /api/finance/categories` (hide/delete with optional transaction reassignment).
+  - `GET /api/finance/summary` flags `untracked_categories` (categories that have spending in `selected_month` or are active in the catalog but have no active budget in `selected_month`), `untracked_monthly_spent`, and per-transaction `is_category_tracked`.
 - **Per-Month Budgets (`monthly_budgets` table)**:
   - Each `YYYY-MM` month materializes its own rows in `monthly_budgets(budget_month, category, monthly_limit, color, is_active)`.
   - Adding, editing, or cancelling a category supports `apply_scope`:

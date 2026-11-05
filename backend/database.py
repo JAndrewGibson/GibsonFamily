@@ -134,6 +134,15 @@ CREATE TABLE IF NOT EXISTS monthly_budgets (
     UNIQUE(budget_month, category)
 );
 
+CREATE TABLE IF NOT EXISTS category_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    is_preloaded INTEGER NOT NULL DEFAULT 0,
+    is_archived INTEGER NOT NULL DEFAULT 0,
+    color TEXT NOT NULL DEFAULT '#6366f1',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS income_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     partner_id INTEGER,

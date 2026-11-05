@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowUpDown,
   Building2,
   Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   CreditCard,
   DollarSign,
   Edit3,
@@ -17,6 +20,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Tags,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -148,8 +152,26 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   // Cancel / Remove Budget Category Confirmation Drawer
   const [cancellingBudget, setCancellingBudget] = useState(null);
 
-  // Income & Fluctuation Tracker Form State
+  // Category Manager Panel State (Pre-Loaded + Custom Categories & Untracked Flags)
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [catFilter, setCatFilter] = useState('all');
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatLimit, setNewCatLimit] = useState('');
+  const [renamingCatName, setRenamingCatName] = useState(null);
+  const [renameCatTarget, setRenameCatTarget] = useState('');
+  const [deletingCatObj, setDeletingCatObj] = useState(null);
+  const [reassignCatTarget, setReassignCatTarget] = useState('');
+
+  // Income & Fluctuation Tracker Form & Collapsible Entries State
   const [showAddIncome, setShowAddIncome] = useState(false);
+  const [incomeEntriesExpanded, setIncomeEntriesExpanded] = useState(
+    () => getCookie('gibson_income_entries_open', '0') === '1'
+  );
+  const toggleIncomeEntriesExpanded = () => {
+    const next = !incomeEntriesExpanded;
+    setIncomeEntriesExpanded(next);
+    setCookie('gibson_income_entries_open', next ? '1' : '0', 365);
+  };
   const [incSource, setIncSource] = useState('');
   const [incAmount, setIncAmount] = useState('');
   const [incExpected, setIncExpected] = useState('');
@@ -539,6 +561,75 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
   };
 
+  const handleQuickTrackCategory = (catName) => {
+    setBudgetCat(catName);
+    setBudgetLimit('300');
+    setBudgetScope('this_and_future');
+    setShowBudgetModal(true);
+  };
+
+  const handleCreateManagedCategory = async (e) => {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+    await apiFetch('/api/finance/categories', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: newCatName.trim(),
+        monthly_limit: newCatLimit ? parseFloat(newCatLimit) : 0,
+        budget_month: selectedMonth,
+        apply_scope: 'this_and_future',
+      }),
+    });
+    setNewCatName('');
+    setNewCatLimit('');
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+  };
+
+  const handleRenameOrMergeCategory = async (oldName) => {
+    const cleanTarget = renameCatTarget.trim();
+    if (!cleanTarget || cleanTarget === oldName) {
+      setRenamingCatName(null);
+      return;
+    }
+    await apiFetch('/api/finance/categories', {
+      method: 'PUT',
+      body: JSON.stringify({
+        old_name: oldName,
+        new_name: cleanTarget,
+      }),
+    });
+    setRenamingCatName(null);
+    setRenameCatTarget('');
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleDeleteOrArchiveCategory = async (catObj) => {
+    await apiFetch('/api/finance/categories', {
+      method: 'DELETE',
+      body: JSON.stringify({
+        name: catObj.name,
+        reassign_to: reassignCatTarget || '',
+        month: selectedMonth,
+      }),
+    });
+    setDeletingCatObj(null);
+    setReassignCatTarget('');
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleRestoreCategory = async (catName) => {
+    await apiFetch('/api/finance/categories', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: catName,
+        budget_month: selectedMonth,
+      }),
+    });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+  };
+
   if (loading && !summary) {
     return <div className="card">Loading financial dashboard...</div>;
   }
@@ -546,12 +637,29 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   if (!summary) return null;
 
   const availableCategories = Array.from(
-    new Set([
-      ...(summary.all_categories || []),
-      ...(summary.budgets || []).map((b) => b.category),
-      ...DEFAULT_CATEGORIES,
-    ])
+    new Set(
+      summary.all_categories && summary.all_categories.length > 0
+        ? [
+            ...summary.all_categories,
+            ...(summary.budgets || []).map((b) => b.category),
+          ]
+        : [
+            ...(summary.budgets || []).map((b) => b.category),
+            ...DEFAULT_CATEGORIES,
+          ]
+    )
   );
+
+  const catalogList = summary.categories_catalog || [];
+  const untrackedCategories = summary.untracked_categories || [];
+  const untrackedWithSpend = untrackedCategories.filter((c) => c.month_spent > 0);
+  const filteredCatalog = catalogList.filter((c) => {
+    if (catFilter === 'untracked') return !c.is_tracked && !c.is_archived;
+    if (catFilter === 'preloaded') return c.is_preloaded && !c.is_archived;
+    if (catFilter === 'custom') return c.is_custom && !c.is_archived;
+    if (catFilter === 'archived') return c.is_archived;
+    return !c.is_archived;
+  });
 
   // Sort Category Budgets according to user's persistent cookie setting
   const sortedBudgets = [...(summary.budgets || [])].sort((a, b) => {
@@ -612,6 +720,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             onClick={() => setShowAccountModal(!showAccountModal)}
           >
             <Wallet size={16} /> Add Account
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowCategoryManager(!showCategoryManager)}
+          >
+            <Tags size={16} /> Manage Categories
+            {untrackedCategories.length > 0 && (
+              <span className="pill pill-amber" style={{ marginLeft: '0.25rem', fontSize: '0.7rem' }}>
+                {untrackedCategories.length} Untracked
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -849,17 +969,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             ${Number(summary.total_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </strong>
           <small className="kpi-sub">
-            {summary.income_fluctuation_vs_prev !== 0 ? (
-              <span className={summary.income_fluctuation_vs_prev >= 0 ? 'text-green' : 'text-amber'}>
-                {summary.income_fluctuation_vs_prev >= 0 ? '+' : '-'}$
-                {Math.abs(Number(summary.income_fluctuation_vs_prev || 0)).toLocaleString('en-US', {
-                  minimumFractionDigits: 0,
-                })}{' '}
-                vs {formatShortMonth(summary.previous_month)}
-              </span>
-            ) : (
-              `Expected: $${Number(summary.expected_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`
-            )}
+            Projected (from prior mos): $
+            {Number(summary.projected_monthly_income || 0).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+            })}
           </small>
         </div>
         <div className="kpi-card">
@@ -1288,15 +1401,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <strong className="text-green">
                           ${Number(mItem.total_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                         </strong>
-                        {mItem.income_fluctuation_delta !== 0 && (
-                          <small
-                            style={{ display: 'block', fontSize: '0.72rem' }}
-                            className={mItem.income_fluctuation_delta >= 0 ? 'text-green' : 'text-amber'}
-                          >
-                            {mItem.income_fluctuation_delta >= 0 ? '+' : '-'}$
-                            {Math.abs(Number(mItem.income_fluctuation_delta || 0)).toFixed(0)} vs prior mo
-                          </small>
-                        )}
+                        <small style={{ display: 'block', fontSize: '0.72rem' }} className="text-muted">
+                          Projected: ${Number(mItem.projected_income || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}
+                        </small>
                       </div>
                       <div>
                         <span className="text-muted">Total Spent</span>
@@ -1385,49 +1492,53 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               </div>
 
               <div className="income-metric-box">
-                <span className="text-muted">Fluctuation vs. {formatShortMonth(summary.previous_month)}</span>
-                <strong
-                  className={
-                    Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? 'text-green' : 'text-amber'
-                  }
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-                >
-                  {Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? (
-                    <TrendingUp size={16} />
-                  ) : (
-                    <TrendingDown size={16} />
-                  )}
-                  {Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? '+' : '-'}$
-                  {Math.abs(Number(summary.income_fluctuation_vs_prev || 0)).toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                  })}
-                  {summary.income_fluctuation_vs_prev_pct !== null &&
-                    summary.income_fluctuation_vs_prev_pct !== undefined && (
-                      <small>
-                        ({summary.income_fluctuation_vs_prev_pct >= 0 ? '+' : ''}
-                        {summary.income_fluctuation_vs_prev_pct}%)
-                      </small>
-                    )}
+                <span className="text-muted">Projected Income (Prior Months)</span>
+                <strong className="text-cyan">
+                  ${Number(summary.projected_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </strong>
                 <small className="text-muted">
-                  Prior month: ${Number(summary.previous_month_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {summary.projected_income_months_count > 0 ? (
+                    <>
+                      Based on {summary.projected_income_months_count} prior mo(s) • Recurring $
+                      {Number(summary.projected_recurring_income || 0).toFixed(0)} + Var $
+                      {Number(summary.projected_variable_income || 0).toFixed(0)}
+                    </>
+                  ) : (
+                    'Log prior month income to build historical projection'
+                  )}
                 </small>
               </div>
 
               <div className="income-metric-box">
-                <span className="text-muted">Actual vs. Expected Baseline</span>
+                <span className="text-muted">Actual vs. Projected Income</span>
                 <strong
                   className={
-                    Number(summary.income_fluctuation_vs_expected || 0) >= 0 ? 'text-cyan' : 'text-amber'
+                    Number(summary.income_vs_projected || 0) >= 0 ? 'text-green' : 'text-amber'
                   }
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                 >
-                  {Number(summary.income_fluctuation_vs_expected || 0) >= 0 ? '+' : '-'}$
-                  {Math.abs(Number(summary.income_fluctuation_vs_expected || 0)).toLocaleString('en-US', {
+                  {Number(summary.income_vs_projected || 0) >= 0 ? (
+                    <TrendingUp size={16} />
+                  ) : (
+                    <TrendingDown size={16} />
+                  )}
+                  {Number(summary.income_vs_projected || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.income_vs_projected || 0)).toLocaleString('en-US', {
                     minimumFractionDigits: 2,
                   })}
+                  {summary.income_vs_projected_pct !== undefined && (
+                    <small>
+                      ({summary.income_vs_projected_pct >= 0 ? '+' : ''}
+                      {summary.income_vs_projected_pct}%)
+                    </small>
+                  )}
                 </strong>
                 <small className="text-muted">
-                  Multi-month avg: ${Number(summary.average_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  Vs. {formatShortMonth(summary.previous_month)}:{' '}
+                  {Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.income_fluctuation_vs_prev || 0)).toFixed(0)} (Range $
+                  {Number(summary.projected_income_min || 0).toFixed(0)}–$
+                  {Number(summary.projected_income_max || 0).toFixed(0)})
                 </small>
               </div>
 
@@ -1444,60 +1555,441 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   })}
                 </strong>
                 <small className="text-muted">
-                  Income minus ${Number(summary.total_monthly_budget || 0).toFixed(0)} budgeted
+                  Projected after budget:{' '}
+                  {Number(summary.projected_unallocated_income || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.projected_unallocated_income || 0)).toFixed(0)}
                 </small>
               </div>
             </div>
 
             {(summary.income_entries || []).length > 0 && (
-              <div className="income-entries-list">
-                {summary.income_entries.map((inc) => {
-                  const diff = Number(inc.amount || 0) - Number(inc.expected_monthly_amount || inc.amount || 0);
-                  return (
-                    <div key={inc.id} className="income-entry-row">
-                      <div className="income-entry-left">
-                        <div className="request-badges">
-                          <strong>{inc.source_name}</strong>
-                          <span className="pill pill-outline">{inc.income_type}</span>
-                          {inc.partner_name && (
-                            <span className="pill pill-cyan">{inc.partner_name}</span>
-                          )}
-                        </div>
-                        <small className="text-muted">
-                          {inc.date}
-                          {inc.notes ? ` • ${inc.notes}` : ''}
-                        </small>
-                      </div>
-                      <div className="income-entry-right">
-                        <div style={{ textAlign: 'right' }}>
-                          <strong className="text-green font-mono">
-                            +${Number(inc.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </strong>
-                          {Math.abs(diff) >= 0.01 && (
-                            <small
-                              style={{ display: 'block', fontSize: '0.72rem' }}
-                              className={diff >= 0 ? 'text-cyan' : 'text-amber'}
-                            >
-                              {diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(2)} vs expected ($
-                              {Number(inc.expected_monthly_amount).toFixed(0)})
+              <div className="income-entries-collapsible">
+                <button
+                  type="button"
+                  className="income-entries-toggle-btn"
+                  onClick={toggleIncomeEntriesExpanded}
+                  aria-expanded={incomeEntriesExpanded}
+                >
+                  <div className="income-entries-toggle-left">
+                    {incomeEntriesExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    <strong>
+                      {incomeEntriesExpanded ? 'Hide' : 'Show'} Income & Refund Entries (
+                      {summary.income_entries.length})
+                    </strong>
+                    <span className="text-muted">
+                      — Paychecks, deposits & returns in {formatShortMonth(selectedMonth)}
+                    </span>
+                  </div>
+                  <span className="pill pill-outline">
+                    +${Number(summary.total_monthly_income || 0).toLocaleString('en-US', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </button>
+
+                {incomeEntriesExpanded && (
+                  <div className="income-entries-list">
+                    {summary.income_entries.map((inc) => {
+                      const diff =
+                        Number(inc.amount || 0) -
+                        Number(inc.expected_monthly_amount || inc.amount || 0);
+                      return (
+                        <div key={inc.id} className="income-entry-row">
+                          <div className="income-entry-left">
+                            <div className="request-badges">
+                              <strong>{inc.source_name}</strong>
+                              <span className="pill pill-outline">{inc.income_type}</span>
+                              {inc.partner_name && (
+                                <span className="pill pill-cyan">{inc.partner_name}</span>
+                              )}
+                            </div>
+                            <small className="text-muted">
+                              {inc.date}
+                              {inc.notes ? ` • ${inc.notes}` : ''}
                             </small>
-                          )}
+                          </div>
+                          <div className="income-entry-right">
+                            <div style={{ textAlign: 'right' }}>
+                              <strong className="text-green font-mono">
+                                +$
+                                {Number(inc.amount).toLocaleString('en-US', {
+                                  minimumFractionDigits: 2,
+                                })}
+                              </strong>
+                              {Math.abs(diff) >= 0.01 && (
+                                <small
+                                  style={{ display: 'block', fontSize: '0.72rem' }}
+                                  className={diff >= 0 ? 'text-cyan' : 'text-amber'}
+                                >
+                                  {diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(2)} vs expected ($
+                                  {Number(inc.expected_monthly_amount).toFixed(0)})
+                                </small>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="btn-icon-danger"
+                              onClick={() => handleDeleteIncome(inc.id)}
+                              title="Delete income entry"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          className="btn-icon-danger"
-                          onClick={() => handleDeleteIncome(inc.id)}
-                          title="Delete income entry"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
+
+          {/* Untracked Categories Warning Banner */}
+          {untrackedCategories.length > 0 && (
+            <div className="card untracked-flag-banner">
+              <div className="untracked-flag-header">
+                <div className="untracked-flag-title">
+                  <AlertTriangle size={20} className="text-amber" />
+                  <div>
+                    <strong>
+                      {untrackedWithSpend.length > 0
+                        ? `${untrackedWithSpend.length} Categor${
+                            untrackedWithSpend.length === 1 ? 'y has' : 'ies have'
+                          } $${Number(summary.untracked_monthly_spent || 0).toFixed(
+                            2
+                          )} in Untracked Spending for ${formatShortMonth(selectedMonth)}`
+                        : `${untrackedCategories.length} Categor${
+                            untrackedCategories.length === 1 ? 'y is' : 'ies are'
+                          } Not Tracked in ${formatShortMonth(selectedMonth)}'s Budget`}
+                    </strong>
+                    <p className="text-muted" style={{ fontSize: '0.82rem' }}>
+                      These pre-loaded or custom categories do not have a monthly budget limit set for{' '}
+                      <strong>{formatMonthLabel(selectedMonth)}</strong>. Set a budget to track them, or open{' '}
+                      <strong>Manage Categories</strong> to merge or remove unused ones.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCategoryManager(!showCategoryManager)}
+                >
+                  <Tags size={14} /> {showCategoryManager ? 'Hide Category Manager' : 'Manage Categories'}
+                </button>
+              </div>
+
+              <div className="untracked-chips-list">
+                {untrackedCategories.map((uc) => (
+                  <div
+                    key={uc.name}
+                    className={`untracked-cat-chip ${uc.month_spent > 0 ? 'has-spend' : ''}`}
+                  >
+                    <div>
+                      <strong>{uc.name}</strong>
+                      <small className="text-muted" style={{ display: 'block' }}>
+                        {uc.is_preloaded ? 'Pre-Loaded' : 'Custom'} •{' '}
+                        {uc.month_spent > 0 ? (
+                          <span className="text-amber">
+                            ${uc.month_spent.toFixed(2)} spent ({uc.month_tx_count} tx)
+                          </span>
+                        ) : (
+                          'No budget set'
+                        )}
+                      </small>
+                    </div>
+                    <div className="topbar-right">
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-xs"
+                        onClick={() => handleQuickTrackCategory(uc.name)}
+                        title={`Set a monthly budget for ${uc.name}`}
+                      >
+                        + Track
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => {
+                          setShowCategoryManager(true);
+                          setDeletingCatObj(uc);
+                          setReassignCatTarget(
+                            availableCategories.find((c) => c !== uc.name) || ''
+                          );
+                        }}
+                        title={`Remove or merge ${uc.name}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Dedicated Category Manager Panel (Pre-Loaded & Custom Categories) */}
+          {showCategoryManager && (
+            <div className="card category-manager-panel">
+              <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
+                <div>
+                  <h3>
+                    <Tags size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
+                    Category Manager — Pre-Loaded & Custom Categories
+                  </h3>
+                  <small className="text-muted">
+                    Clean up unused pre-loaded or custom categories, merge duplicates across all transactions, or flag & track unbudgeted categories.
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setShowCategoryManager(false)}
+                >
+                  <X size={15} /> Close Panel
+                </button>
+              </div>
+
+              <form className="category-create-bar" onSubmit={handleCreateManagedCategory}>
+                <input
+                  type="text"
+                  className="input input-sm"
+                  placeholder="New category name (e.g., Pet Care, Subscriptions)..."
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  required
+                />
+                <input
+                  type="number"
+                  step="5"
+                  min="0"
+                  className="input input-sm"
+                  placeholder="Optional monthly budget ($)"
+                  value={newCatLimit}
+                  onChange={(e) => setNewCatLimit(e.target.value)}
+                />
+                <button type="submit" className="btn btn-primary btn-sm">
+                  <Plus size={14} /> Add Category
+                </button>
+              </form>
+
+              <div className="filter-pills-row">
+                {[
+                  {
+                    id: 'all',
+                    label: `All Active (${catalogList.filter((c) => !c.is_archived).length})`,
+                  },
+                  {
+                    id: 'untracked',
+                    label: `⚠️ Not Tracked (${
+                      catalogList.filter((c) => !c.is_tracked && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'preloaded',
+                    label: `Pre-Loaded (${
+                      catalogList.filter((c) => c.is_preloaded && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'custom',
+                    label: `Custom (${
+                      catalogList.filter((c) => c.is_custom && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'archived',
+                    label: `Hidden / Archived (${catalogList.filter((c) => c.is_archived).length})`,
+                  },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`filter-pill ${catFilter === tab.id ? 'active' : ''}`}
+                    onClick={() => setCatFilter(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="category-manager-list">
+                {filteredCatalog.length === 0 ? (
+                  <div className="empty-state-box">
+                    <p className="text-muted">No categories match this filter.</p>
+                  </div>
+                ) : (
+                  filteredCatalog.map((cat) => {
+                    const isRenaming = renamingCatName === cat.name;
+                    const isDeleting = deletingCatObj?.name === cat.name;
+                    return (
+                      <div
+                        key={cat.name}
+                        className={`category-manager-item ${
+                          !cat.is_tracked && !cat.is_archived ? 'untracked-item' : ''
+                        }`}
+                      >
+                        <div className="category-manager-main">
+                          <div className="category-manager-info">
+                            <div className="request-badges">
+                              <strong>{cat.name}</strong>
+                              <span className="pill pill-outline">
+                                {cat.is_preloaded ? 'Pre-Loaded' : 'Custom'}
+                              </span>
+                              {cat.is_archived ? (
+                                <span className="pill pill-outline">Archived / Hidden</span>
+                              ) : cat.is_tracked ? (
+                                <span className="pill pill-green">
+                                  ✓ Tracked (${cat.monthly_limit.toFixed(0)}/mo)
+                                </span>
+                              ) : (
+                                <span className="pill pill-amber">
+                                  ⚠️ Not Tracked in {formatShortMonth(selectedMonth)} Budget
+                                </span>
+                              )}
+                            </div>
+                            <small className="text-muted">
+                              {formatShortMonth(selectedMonth)}: ${cat.month_spent.toFixed(2)} (
+                              {cat.month_tx_count} tx) • All-time: $
+                              {cat.total_spent_all_time.toFixed(2)} ({cat.total_tx_count} tx)
+                            </small>
+                          </div>
+
+                          <div className="category-manager-actions">
+                            {cat.is_archived ? (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-xs"
+                                onClick={() => handleRestoreCategory(cat.name)}
+                              >
+                                <RotateCcw size={13} /> Restore Category
+                              </button>
+                            ) : (
+                              <>
+                                {!cat.is_tracked && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-xs"
+                                    onClick={() => handleQuickTrackCategory(cat.name)}
+                                  >
+                                    <Plus size={13} /> Track in Budget
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-xs"
+                                  onClick={() => {
+                                    setRenamingCatName(isRenaming ? null : cat.name);
+                                    setRenameCatTarget(cat.name);
+                                    setDeletingCatObj(null);
+                                  }}
+                                >
+                                  <Edit3 size={13} /> Rename / Merge
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger-outline btn-xs"
+                                  onClick={() => {
+                                    setDeletingCatObj(isDeleting ? null : cat);
+                                    setReassignCatTarget(
+                                      availableCategories.find((c) => c !== cat.name) || ''
+                                    );
+                                    setRenamingCatName(null);
+                                  }}
+                                >
+                                  <Trash2 size={13} /> Remove / Hide
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {isRenaming && (
+                          <div className="category-inline-drawer">
+                            <label>
+                              Rename <strong>"{cat.name}"</strong> or type/select an existing category name to merge all transactions & budgets into it:
+                            </label>
+                            <div className="category-inline-controls">
+                              <input
+                                type="text"
+                                className="input input-sm"
+                                list="merge-category-suggestions"
+                                value={renameCatTarget}
+                                onChange={(e) => setRenameCatTarget(e.target.value)}
+                                placeholder="New or target category name..."
+                              />
+                              <datalist id="merge-category-suggestions">
+                                {availableCategories
+                                  .filter((c) => c !== cat.name)
+                                  .map((c) => (
+                                    <option key={c} value={c} />
+                                  ))}
+                              </datalist>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleRenameOrMergeCategory(cat.name)}
+                              >
+                                Save / Merge
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setRenamingCatName(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {isDeleting && (
+                          <div className="category-inline-drawer danger">
+                            <label>
+                              Remove / hide <strong>"{cat.name}"</strong> from dropdowns and active budgets?
+                              {cat.total_tx_count > 0 &&
+                                ` (${cat.total_tx_count} existing transaction(s) can be reassigned below):`}
+                            </label>
+                            <div className="category-inline-controls">
+                              {cat.total_tx_count > 0 && (
+                                <select
+                                  className="input input-sm"
+                                  value={reassignCatTarget}
+                                  onChange={(e) => setReassignCatTarget(e.target.value)}
+                                >
+                                  <option value="">Keep original category label on past transactions</option>
+                                  {availableCategories
+                                    .filter((c) => c !== cat.name)
+                                    .map((c) => (
+                                      <option key={c} value={c}>
+                                        Reassign all {cat.total_tx_count} tx to: {c}
+                                      </option>
+                                    ))}
+                                </select>
+                              )}
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleDeleteOrArchiveCategory(cat)}
+                              >
+                                Confirm Remove
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setDeletingCatObj(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="finance-two-col">
             {/* Monthly Category Budgets with Persistent Sort Order & Per-Month Scope */}
@@ -1821,18 +2313,32 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 </button>
                               </div>
                             ) : (
-                              <select
-                                className="input input-sm tx-cat-select"
-                                value={tx.category}
-                                onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
-                              >
-                                {availableCategories.map((cat) => (
-                                  <option key={cat} value={cat}>
-                                    {cat}
-                                  </option>
-                                ))}
-                                <option value="__custom__">+ Custom Category...</option>
-                              </select>
+                              <div className="tx-cat-select-stack">
+                                <select
+                                  className="input input-sm tx-cat-select"
+                                  value={tx.category}
+                                  onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
+                                >
+                                  {Array.from(new Set([...availableCategories, tx.category])).map(
+                                    (cat) => (
+                                      <option key={cat} value={cat}>
+                                        {cat}
+                                      </option>
+                                    )
+                                  )}
+                                  <option value="__custom__">+ Custom Category...</option>
+                                </select>
+                                {tx.is_category_tracked === false && (
+                                  <button
+                                    type="button"
+                                    className="pill pill-amber tx-untracked-pill"
+                                    onClick={() => handleQuickTrackCategory(tx.category)}
+                                    title={`"${tx.category}" is not tracked in your monthly budget. Tap to set a budget limit.`}
+                                  >
+                                    <AlertTriangle size={11} /> Untracked — Set Budget
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </td>
 

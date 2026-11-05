@@ -398,6 +398,7 @@ def reset_all_data():
         "transactions",
         "accounts",
         "plaid_items",
+        "category_catalog",
         "monthly_budgets",
         "budgets",
         "todos",

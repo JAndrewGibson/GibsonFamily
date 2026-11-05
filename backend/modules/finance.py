@@ -29,6 +29,146 @@ def _shift_year_month(ym: str, delta_months: int) -> str:
         return date.today().strftime("%Y-%m")
 
 
+def _ensure_category_in_catalog(db, name: str, is_preloaded: int = 0, unarchive: bool = True) -> None:
+    clean = (name or "").strip()
+    if not clean:
+        return
+    db.execute(
+        """
+        INSERT INTO category_catalog (name, is_preloaded, is_archived, color)
+        VALUES (?, ?, 0, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            is_archived = CASE WHEN ? THEN 0 ELSE category_catalog.is_archived END
+        """,
+        (clean, 1 if is_preloaded else 0, "#6366f1" if is_preloaded else "#06b6d4", 1 if unarchive else 0),
+    )
+
+
+def _sync_category_catalog(db) -> list[dict]:
+    """
+    Ensures pre-loaded DEFAULT_CATEGORIES and any custom categories from budgets/transactions
+    are registered in `category_catalog` without resurrecting categories the user archived/removed.
+    """
+    for def_cat in DEFAULT_CATEGORIES:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color)
+            VALUES (?, 1, 0, '#6366f1')
+            """,
+            (def_cat,),
+        )
+
+    discovered = db.execute(
+        """
+        SELECT DISTINCT category FROM budgets
+        UNION
+        SELECT DISTINCT category FROM monthly_budgets WHERE is_active = 1
+        UNION
+        SELECT DISTINCT category FROM transactions
+        """
+    ).fetchall()
+    for r in discovered:
+        cat_name = (r["category"] or "").strip()
+        if cat_name:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color)
+                VALUES (?, ?, 0, '#06b6d4')
+                """,
+                (cat_name, 1 if cat_name in DEFAULT_CATEGORIES else 0),
+            )
+    db.commit()
+    return [
+        dict(r)
+        for r in db.execute(
+            "SELECT * FROM category_catalog ORDER BY is_archived ASC, is_preloaded DESC, name ASC"
+        ).fetchall()
+    ]
+
+
+def _build_category_management_payload(
+    db,
+    selected_month: str,
+    month_budgets: list[dict],
+    month_transactions: list[dict],
+    all_transactions: list[dict],
+) -> dict:
+    catalog_rows = _sync_category_catalog(db)
+    tracked_map = {
+        b["category"]: b
+        for b in month_budgets
+        if b.get("is_active", 1) and float(b.get("monthly_limit") or 0) > 0
+    }
+
+    month_spend_map = {}
+    month_cnt_map = {}
+    for tx in month_transactions:
+        cat = (tx.get("category") or "").strip()
+        if cat:
+            month_spend_map[cat] = month_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
+            month_cnt_map[cat] = month_cnt_map.get(cat, 0) + 1
+
+    all_spend_map = {}
+    all_cnt_map = {}
+    for tx in all_transactions:
+        cat = (tx.get("category") or "").strip()
+        if cat:
+            all_spend_map[cat] = all_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
+            all_cnt_map[cat] = all_cnt_map.get(cat, 0) + 1
+
+    enriched_catalog = []
+    for row in catalog_rows:
+        cat_name = row["name"]
+        is_tracked = cat_name in tracked_map
+        b_row = tracked_map.get(cat_name)
+        m_spent = round(month_spend_map.get(cat_name, 0.0), 2)
+        m_cnt = month_cnt_map.get(cat_name, 0)
+        tot_spent = round(all_spend_map.get(cat_name, 0.0), 2)
+        tot_cnt = all_cnt_map.get(cat_name, 0)
+        enriched_catalog.append({
+            "id": row["id"],
+            "name": cat_name,
+            "is_preloaded": bool(row["is_preloaded"]),
+            "is_custom": not bool(row["is_preloaded"]),
+            "is_archived": bool(row["is_archived"]),
+            "color": b_row["color"] if b_row else row["color"],
+            "is_tracked": is_tracked,
+            "monthly_limit": round(float(b_row["monthly_limit"]), 2) if b_row else 0.0,
+            "budget_id": b_row["id"] if b_row else None,
+            "month_spent": m_spent,
+            "month_tx_count": m_cnt,
+            "total_spent_all_time": tot_spent,
+            "total_tx_count": tot_cnt,
+        })
+
+    # Active categories for dropdowns: non-archived catalog categories + any category actively budgeted this month
+    active_categories = [
+        c["name"]
+        for c in enriched_catalog
+        if not c["is_archived"] or c["is_tracked"]
+    ]
+
+    # Untracked categories: active (or having spend in selected_month) but NO active budget in selected_month
+    untracked_categories = [
+        c
+        for c in enriched_catalog
+        if not c["is_tracked"] and (not c["is_archived"] or c["month_tx_count"] > 0)
+    ]
+    untracked_categories.sort(
+        key=lambda c: (-c["month_spent"], -c["month_tx_count"], -c["total_tx_count"], c["name"])
+    )
+    untracked_monthly_spent = round(sum(c["month_spent"] for c in untracked_categories), 2)
+
+    return {
+        "active_categories": active_categories,
+        "categories_catalog": enriched_catalog,
+        "untracked_categories": untracked_categories,
+        "untracked_count": len(untracked_categories),
+        "untracked_with_spend_count": sum(1 for c in untracked_categories if c["month_spent"] > 0),
+        "untracked_monthly_spent": untracked_monthly_spent,
+    }
+
+
 def _ensure_monthly_budgets_for_month(db, ym: str) -> list[dict]:
     """
     Ensures `monthly_budgets` has entries for `ym` (copying from the closest prior month or base `budgets` table if uninitialized)
@@ -492,6 +632,8 @@ def finance_summary():
 
     income_by_month = {}
     expected_by_month = {}
+    recurring_by_month = {}
+    variable_by_month = {}
     for inc in all_income_entries:
         ym = inc["effective_budget_month"]
         inc["budget_month"] = ym
@@ -501,6 +643,10 @@ def finance_summary():
             exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
             income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
             expected_by_month[ym] = expected_by_month.get(ym, 0.0) + exp
+            if inc.get("income_type") == "paycheck":
+                recurring_by_month[ym] = recurring_by_month.get(ym, 0.0) + amt
+            else:
+                variable_by_month[ym] = variable_by_month.get(ym, 0.0) + amt
 
     month_income_entries = [inc for inc in all_income_entries if inc["budget_month"] == selected_month]
     prev_ym = _shift_year_month(selected_month, -1)
@@ -516,6 +662,44 @@ def finance_summary():
     expected_monthly_income = round(
         expected_by_month.get(selected_month, average_monthly_income or previous_month_income),
         2,
+    )
+
+    # Compute Projected Monthly Income based on previous months (< selected_month, up to trailing 6 active months)
+    prior_active_yms = sorted(
+        [ym for ym, tot in income_by_month.items() if ym < selected_month and tot > 0]
+    )[-6:]
+    if prior_active_yms:
+        prior_totals = [round(income_by_month[ym], 2) for ym in prior_active_yms]
+        projected_monthly_income = round(sum(prior_totals) / len(prior_totals), 2)
+        projected_recurring_income = round(
+            sum(recurring_by_month.get(ym, 0.0) for ym in prior_active_yms) / len(prior_active_yms),
+            2,
+        )
+        projected_variable_income = round(
+            sum(variable_by_month.get(ym, 0.0) for ym in prior_active_yms) / len(prior_active_yms),
+            2,
+        )
+        projected_income_min = round(min(prior_totals), 2)
+        projected_income_max = round(max(prior_totals), 2)
+        projected_income_months_used = [
+            {"month": ym, "total_income": round(income_by_month[ym], 2)}
+            for ym in prior_active_yms
+        ]
+    else:
+        # Fallback if no prior months have logged income yet: use current expected or multi-month average
+        fallback_proj = expected_monthly_income or average_monthly_income or total_monthly_income
+        projected_monthly_income = round(fallback_proj, 2)
+        projected_recurring_income = round(recurring_by_month.get(selected_month, fallback_proj), 2)
+        projected_variable_income = round(variable_by_month.get(selected_month, 0.0), 2)
+        projected_income_min = projected_monthly_income
+        projected_income_max = projected_monthly_income
+        projected_income_months_used = []
+
+    income_vs_projected = round(total_monthly_income - projected_monthly_income, 2)
+    income_vs_projected_pct = (
+        round((income_vs_projected / projected_monthly_income) * 100, 1)
+        if projected_monthly_income > 0
+        else 0.0
     )
 
     income_fluctuation_vs_prev = round(total_monthly_income - previous_month_income, 2)
@@ -555,20 +739,21 @@ def finance_summary():
             "utilization_pct": pct,
         })
 
-    # All known custom + standard categories across all months
-    all_budget_cats = [
-        r["category"]
-        for r in db.execute(
-            "SELECT DISTINCT category FROM monthly_budgets UNION SELECT DISTINCT category FROM budgets"
-        ).fetchall()
-    ]
-    all_categories = list(
-        dict.fromkeys(all_budget_cats + sorted(tx_categories) + DEFAULT_CATEGORIES)
+    cat_mgmt = _build_category_management_payload(
+        db, selected_month, month_budgets, month_transactions, all_transactions
     )
+    all_categories = cat_mgmt["active_categories"]
+
+    # Mark each transaction with whether its category is currently tracked in its budget month
+    tracked_cat_names = {b["category"] for b in enriched_budgets}
+    for tx in all_transactions:
+        tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
 
     total_monthly_spent = round(sum(float(t["amount"]) for t in month_transactions), 2)
     net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
     unallocated_income = round(total_monthly_income - total_budget_limit, 2)
+    projected_net_cashflow = round(projected_monthly_income - total_monthly_spent, 2)
+    projected_unallocated_income = round(projected_monthly_income - total_budget_limit, 2)
 
     return jsonify({
         "selected_month": selected_month,
@@ -577,6 +762,11 @@ def finance_summary():
         "next_month": _shift_year_month(selected_month, 1),
         "available_months": sorted(month_set, reverse=True),
         "all_categories": all_categories,
+        "categories_catalog": cat_mgmt["categories_catalog"],
+        "untracked_categories": cat_mgmt["untracked_categories"],
+        "untracked_count": cat_mgmt["untracked_count"],
+        "untracked_with_spend_count": cat_mgmt["untracked_with_spend_count"],
+        "untracked_monthly_spent": cat_mgmt["untracked_monthly_spent"],
         "net_cash": round(total_cash, 2),
         "credit_balance": round(total_credit_used, 2),
         "net_liquid": round(total_cash - total_credit_used, 2),
@@ -587,6 +777,17 @@ def finance_summary():
         "expected_monthly_income": expected_monthly_income,
         "previous_month_income": previous_month_income,
         "average_monthly_income": average_monthly_income,
+        "projected_monthly_income": projected_monthly_income,
+        "projected_recurring_income": projected_recurring_income,
+        "projected_variable_income": projected_variable_income,
+        "projected_income_min": projected_income_min,
+        "projected_income_max": projected_income_max,
+        "projected_income_months_used": projected_income_months_used,
+        "projected_income_months_count": len(projected_income_months_used),
+        "income_vs_projected": income_vs_projected,
+        "income_vs_projected_pct": income_vs_projected_pct,
+        "projected_net_cashflow": projected_net_cashflow,
+        "projected_unallocated_income": projected_unallocated_income,
         "income_fluctuation_vs_prev": income_fluctuation_vs_prev,
         "income_fluctuation_vs_prev_pct": income_fluctuation_vs_prev_pct,
         "income_fluctuation_vs_expected": income_fluctuation_vs_expected,
@@ -677,6 +878,12 @@ def finance_history():
         expected_income = round(expected_totals_by_month.get(ym, 0.0), 2)
         prev_ym = _shift_year_month(ym, -1)
         prev_income = round(income_totals_by_month.get(prev_ym, 0.0), 2)
+        prior_hist_yms = sorted([k for k, v in income_totals_by_month.items() if k < ym and v > 0])[-6:]
+        projected_inc = (
+            round(sum(income_totals_by_month[k] for k in prior_hist_yms) / len(prior_hist_yms), 2)
+            if prior_hist_yms
+            else round(expected_income or total_income, 2)
+        )
         inc_delta = round(total_income - prev_income, 2)
         inc_delta_pct = round((inc_delta / prev_income) * 100, 1) if prev_income > 0 else 0.0
 
@@ -715,6 +922,7 @@ def finance_history():
             "total_spent": total_spent,
             "total_budget": total_limit,
             "total_income": total_income,
+            "projected_income": projected_inc,
             "expected_income": expected_income,
             "net_cashflow": round(total_income - total_spent, 2),
             "income_fluctuation_delta": inc_delta,
@@ -753,7 +961,7 @@ def create_income_entry():
         else round(amount, 2)
     )
     income_type = (data.get("income_type") or "paycheck").strip()
-    is_recurring = 1 if data.get("is_recurring", True) else 0
+    is_recurring = 1 if data.get("is_recurring", income_type == "paycheck") else 0
     notes = (data.get("notes") or "").strip()
 
     db = get_db()
@@ -883,6 +1091,7 @@ def create_transaction():
     category = (data.get("category") or "Groceries & Dining").strip()
 
     db = get_db()
+    _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     cur = db.execute(
         """
         INSERT INTO transactions (account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes)
@@ -939,6 +1148,7 @@ def update_transaction(tx_id: int):
     new_notes = data.get("notes", existing["notes"])
     new_name = (data.get("name") or existing["name"]).strip()
 
+    _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
@@ -980,6 +1190,7 @@ def upsert_budget():
     apply_scope = data.get("apply_scope", "this_and_future")
 
     db = get_db()
+    _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     # Ensure the target month is initialized before modifying it
     _ensure_monthly_budgets_for_month(db, target_month)
 
@@ -1069,3 +1280,220 @@ def delete_budget(budget_id: int):
 
     db.commit()
     return jsonify({"deleted": True, "id": budget_id})
+
+
+# --- Category Management Panel API (Pre-Loaded & Custom Categories + Untracked Flagging) ---
+
+@finance_bp.route("/categories", methods=["GET"])
+def list_categories_catalog():
+    current_ym = date.today().strftime("%Y-%m")
+    selected_month = (request.args.get("month") or current_ym).strip()[:7]
+    db = get_db()
+    month_budgets = _ensure_monthly_budgets_for_month(db, selected_month)
+    all_txs = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month
+            FROM transactions t
+            """
+        ).fetchall()
+    ]
+    month_txs = [tx for tx in all_txs if tx["effective_budget_month"] == selected_month]
+    payload = _build_category_management_payload(db, selected_month, month_budgets, month_txs, all_txs)
+    return jsonify(payload)
+
+
+@finance_bp.route("/categories", methods=["POST"])
+def create_or_restore_category():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+
+    color = (data.get("color") or "#06b6d4").strip()
+    monthly_limit = float(data.get("monthly_limit") or 0.0)
+    target_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
+    apply_scope = data.get("apply_scope", "this_and_future")
+
+    db = get_db()
+    _sync_category_catalog(db)
+    db.execute(
+        """
+        INSERT INTO category_catalog (name, is_preloaded, is_archived, color)
+        VALUES (?, ?, 0, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            is_archived = 0,
+            color = excluded.color
+        """,
+        (name, 1 if name in DEFAULT_CATEGORIES else 0, color),
+    )
+
+    if monthly_limit > 0:
+        _ensure_monthly_budgets_for_month(db, target_month)
+        db.execute(
+            """
+            INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(budget_month, category) DO UPDATE SET
+                monthly_limit = excluded.monthly_limit,
+                color = excluded.color,
+                is_active = 1
+            """,
+            (target_month, name, monthly_limit, color),
+        )
+        if apply_scope == "this_and_future":
+            db.execute(
+                """
+                INSERT INTO budgets (category, monthly_limit, color)
+                VALUES (?, ?, ?)
+                ON CONFLICT(category) DO UPDATE SET
+                    monthly_limit = excluded.monthly_limit,
+                    color = excluded.color
+                """,
+                (name, monthly_limit, color),
+            )
+            future_months = db.execute(
+                "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month > ?",
+                (target_month,),
+            ).fetchall()
+            for fm in future_months:
+                db.execute(
+                    """
+                    INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
+                    VALUES (?, ?, ?, ?, 1)
+                    ON CONFLICT(budget_month, category) DO UPDATE SET
+                        monthly_limit = excluded.monthly_limit,
+                        color = excluded.color,
+                        is_active = 1
+                    """,
+                    (fm["budget_month"], name, monthly_limit, color),
+                )
+
+    db.commit()
+    cat_row = dict(db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone())
+    return jsonify(cat_row), 201
+
+
+@finance_bp.route("/categories", methods=["PUT"])
+def rename_or_merge_category():
+    """
+    Renames a category or merges `old_name` into `new_name` across all transactions,
+    budgets, monthly_budgets, purchase_requests, future_purchases, and category_catalog.
+    """
+    data = request.get_json(silent=True) or {}
+    old_name = (data.get("old_name") or "").strip()
+    new_name = (data.get("new_name") or "").strip()
+    if not old_name or not new_name:
+        return jsonify({"error": "Both old_name and new_name are required"}), 400
+
+    db = get_db()
+    _sync_category_catalog(db)
+
+    if old_name == new_name:
+        return jsonify({"updated": True, "old_name": old_name, "new_name": new_name})
+
+    # Ensure new_name exists and is unarchived in category_catalog
+    _ensure_category_in_catalog(
+        db,
+        new_name,
+        is_preloaded=1 if new_name in DEFAULT_CATEGORIES else 0,
+        unarchive=True,
+    )
+
+    # Reassign transactions, purchase_requests, and future_purchases
+    db.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (new_name, old_name))
+
+    # Merge or rename in base `budgets`
+    old_base = db.execute("SELECT * FROM budgets WHERE category = ?", (old_name,)).fetchone()
+    new_base = db.execute("SELECT * FROM budgets WHERE category = ?", (new_name,)).fetchone()
+    if old_base and not new_base:
+        db.execute("UPDATE budgets SET category = ? WHERE id = ?", (new_name, old_base["id"]))
+    elif old_base and new_base:
+        db.execute("DELETE FROM budgets WHERE id = ?", (old_base["id"],))
+
+    # Merge or rename in `monthly_budgets`
+    old_mbs = db.execute("SELECT * FROM monthly_budgets WHERE category = ?", (old_name,)).fetchall()
+    for omb in old_mbs:
+        existing_target = db.execute(
+            "SELECT * FROM monthly_budgets WHERE budget_month = ? AND category = ?",
+            (omb["budget_month"], new_name),
+        ).fetchone()
+        if not existing_target:
+            db.execute("UPDATE monthly_budgets SET category = ? WHERE id = ?", (new_name, omb["id"]))
+        else:
+            if omb["is_active"] and not existing_target["is_active"]:
+                db.execute(
+                    "UPDATE monthly_budgets SET is_active = 1, monthly_limit = ? WHERE id = ?",
+                    (omb["monthly_limit"], existing_target["id"]),
+                )
+            db.execute("DELETE FROM monthly_budgets WHERE id = ?", (omb["id"],))
+
+    # Archive old_name if pre-loaded (so it doesn't get re-seeded), or delete if custom
+    old_cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (old_name,)).fetchone()
+    if old_cat_row and old_cat_row["is_preloaded"]:
+        db.execute("UPDATE category_catalog SET is_archived = 1 WHERE name = ?", (old_name,))
+    else:
+        db.execute("DELETE FROM category_catalog WHERE name = ?", (old_name,))
+
+    db.commit()
+    return jsonify({"updated": True, "old_name": old_name, "new_name": new_name})
+
+
+@finance_bp.route("/categories", methods=["DELETE"])
+def delete_or_archive_category():
+    """
+    Removes/archives a pre-loaded or custom category so it no longer clutters dropdowns or budgets.
+    Optionally reassigns any existing transactions to `reassign_to`.
+    """
+    data = request.get_json(silent=True) or {}
+    name = (request.args.get("name") or data.get("name") or "").strip()
+    reassign_to = (request.args.get("reassign_to") or data.get("reassign_to") or "").strip()
+    target_month = (request.args.get("month") or data.get("month") or date.today().strftime("%Y-%m")).strip()[:7]
+
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+
+    db = get_db()
+    _sync_category_catalog(db)
+
+    if reassign_to and reassign_to != name:
+        _ensure_category_in_catalog(
+            db,
+            reassign_to,
+            is_preloaded=1 if reassign_to in DEFAULT_CATEGORIES else 0,
+            unarchive=True,
+        )
+        db.execute("UPDATE transactions SET category = ? WHERE category = ?", (reassign_to, name))
+        db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (reassign_to, name))
+        db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (reassign_to, name))
+
+    # Remove from base budgets and deactivate in monthly_budgets from target_month onward
+    db.execute("DELETE FROM budgets WHERE category = ?", (name,))
+    db.execute(
+        "UPDATE monthly_budgets SET is_active = 0 WHERE category = ? AND budget_month >= ?",
+        (name, target_month),
+    )
+
+    cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone()
+    remaining_tx = db.execute(
+        "SELECT COUNT(*) AS cnt FROM transactions WHERE category = ?", (name,)
+    ).fetchone()["cnt"]
+
+    if (cat_row and cat_row["is_preloaded"]) or remaining_tx > 0:
+        db.execute(
+            """
+            INSERT INTO category_catalog (name, is_preloaded, is_archived, color)
+            VALUES (?, ?, 1, '#6366f1')
+            ON CONFLICT(name) DO UPDATE SET is_archived = 1
+            """,
+            (name, 1 if name in DEFAULT_CATEGORIES else 0),
+        )
+    else:
+        db.execute("DELETE FROM category_catalog WHERE name = ?", (name,))
+
+    db.commit()
+    return jsonify({"deleted": True, "name": name, "reassigned_to": reassign_to or None})
