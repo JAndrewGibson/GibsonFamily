@@ -12,11 +12,43 @@ CREATE TABLE IF NOT EXISTS app_settings (
 CREATE TABLE IF NOT EXISTS partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    email TEXT DEFAULT '',
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL DEFAULT 'Partner',
     avatar_color TEXT NOT NULL DEFAULT '#6366f1',
     monthly_fun_allowance REAL NOT NULL DEFAULT 0.0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    partner_id INTEGER NOT NULL,
+    is_screen_locked INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    identifier TEXT NOT NULL,
+    attempted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_partner_id INTEGER NOT NULL,
+    actor_partner_id INTEGER,
+    notif_type TEXT NOT NULL DEFAULT 'info',
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    link_tab TEXT NOT NULL DEFAULT 'requests',
+    reference_id INTEGER,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (recipient_partner_id) REFERENCES partners (id) ON DELETE CASCADE,
+    FOREIGN KEY (actor_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (
@@ -267,8 +299,16 @@ def init_db(app) -> None:
     with app.app_context():
         db = get_db()
         db.executescript(SCHEMA_SQL)
+        _ensure_schema_migrations(db)
         _ensure_module_definitions(db)
         db.commit()
+
+
+def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
+    """Safely adds new columns if upgrading an existing SQLite file."""
+    cols = [r["name"] for r in db.execute("PRAGMA table_info(partners)").fetchall()]
+    if "password_hash" not in cols:
+        db.execute("ALTER TABLE partners ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
 
 
 def _ensure_module_definitions(db: sqlite3.Connection) -> None:
@@ -296,3 +336,25 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
         db.execute(
             "INSERT INTO app_settings (key, value) VALUES ('household_name', 'Gibson Household')"
         )
+
+
+def create_notification(
+    db: sqlite3.Connection,
+    recipient_partner_id: int,
+    actor_partner_id: int | None,
+    notif_type: str,
+    title: str,
+    message: str,
+    link_tab: str = "requests",
+    reference_id: int | None = None,
+) -> None:
+    if not recipient_partner_id:
+        return
+    db.execute(
+        """
+        INSERT INTO notifications
+        (recipient_partner_id, actor_partner_id, notif_type, title, message, link_tab, reference_id, is_read)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        """,
+        (recipient_partner_id, actor_partner_id, notif_type, title, message, link_tab, reference_id),
+    )

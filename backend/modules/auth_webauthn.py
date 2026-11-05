@@ -3,8 +3,19 @@ import hashlib
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, make_response, request
+from werkzeug.security import check_password_hash, generate_password_hash
 from backend.database import get_db
+from backend.security import (
+    SESSION_COOKIE_NAME,
+    check_rate_limit,
+    clear_failed_logins,
+    create_session_for_partner,
+    extract_request_token,
+    hash_session_token,
+    record_failed_login,
+    sanitize_partner,
+)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -18,8 +29,22 @@ def _b64url_decode(val: str) -> bytes:
     return base64.urlsafe_b64decode(val + padding)
 
 
+def _attach_session_cookie(resp, raw_token: str):
+    is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto", "") == "https"
+    resp.set_cookie(
+        SESSION_COOKIE_NAME,
+        raw_token,
+        httponly=True,
+        secure=is_secure,
+        samesite="Lax",
+        max_age=7 * 24 * 3600,
+        path="/",
+    )
+    return resp
+
+
 def _get_partners_with_passkeys(db):
-    partners = [dict(r) for r in db.execute("SELECT * FROM partners ORDER BY id").fetchall()]
+    partners = [sanitize_partner(r) for r in db.execute("SELECT * FROM partners ORDER BY id").fetchall()]
     creds = [
         dict(r)
         for r in db.execute(
@@ -31,31 +56,150 @@ def _get_partners_with_passkeys(db):
     return partners, len(creds)
 
 
+def _is_onboarding_completed(db) -> bool:
+    row = db.execute("SELECT value FROM app_settings WHERE key = 'onboarding_completed'").fetchone()
+    partner_cnt = db.execute("SELECT COUNT(*) AS cnt FROM partners").fetchone()["cnt"]
+    return bool(row and row["value"] == "1" and partner_cnt >= 1)
+
+
 @auth_bp.route("/setup-status", methods=["GET"])
 def setup_status():
     db = get_db()
-    onboarding_row = db.execute(
-        "SELECT value FROM app_settings WHERE key = 'onboarding_completed'"
-    ).fetchone()
+    onboarding_completed = _is_onboarding_completed(db)
     household_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'household_name'"
     ).fetchone()
+    household_name = household_row["value"] if household_row else "Gibson Household"
+
     partners, total_passkeys = _get_partners_with_passkeys(db)
-    onboarding_completed = (
-        onboarding_row is not None
-        and onboarding_row["value"] == "1"
-        and len(partners) >= 1
-    )
+
+    if getattr(g, "current_partner", None):
+        return jsonify({
+            "onboarding_completed": onboarding_completed,
+            "authenticated": True,
+            "is_screen_locked": bool(g.current_session.get("is_screen_locked")),
+            "current_partner": g.current_partner,
+            "household_name": household_name,
+            "partners": partners,
+            "total_passkeys": total_passkeys,
+        })
+
+    # Unauthenticated view: only expose minimal login-selector metadata
+    public_partners = [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "email": p["email"],
+            "avatar_color": p["avatar_color"],
+            "has_passkey": len(p.get("passkeys", [])) > 0,
+        }
+        for p in partners
+    ]
     return jsonify({
         "onboarding_completed": onboarding_completed,
-        "household_name": household_row["value"] if household_row else "Gibson Household",
-        "partners": partners,
+        "authenticated": False,
+        "is_screen_locked": False,
+        "current_partner": None,
+        "household_name": household_name,
+        "partners": public_partners,
         "total_passkeys": total_passkeys,
     })
 
 
+@auth_bp.route("/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    identifier = (data.get("email") or data.get("identifier") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not identifier or not password:
+        return jsonify({"error": "Email/username and password are required"}), 400
+
+    db = get_db()
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
+    rate_key = f"{client_ip}:{identifier}"
+
+    if not check_rate_limit(db, rate_key):
+        return jsonify({"error": "Too many failed login attempts. Please wait 15 minutes or sign in with your Passkey."}), 429
+
+    partner_row = db.execute(
+        "SELECT * FROM partners WHERE lower(email) = ? OR lower(name) = ?",
+        (identifier, identifier),
+    ).fetchone()
+
+    if not partner_row or not partner_row["password_hash"] or not check_password_hash(partner_row["password_hash"], password):
+        record_failed_login(db, rate_key)
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    clear_failed_logins(db, rate_key)
+    raw_token = create_session_for_partner(db, partner_row["id"])
+    partners, _ = _get_partners_with_passkeys(db)
+    current_p = next((p for p in partners if p["id"] == partner_row["id"]), sanitize_partner(partner_row))
+
+    resp = make_response(
+        jsonify({
+            "authenticated": True,
+            "token": raw_token,
+            "partner": current_p,
+            "partners": partners,
+        })
+    )
+    return _attach_session_cookie(resp, raw_token)
+
+
+@auth_bp.route("/logout", methods=["POST"])
+def logout():
+    raw_token = extract_request_token()
+    if raw_token:
+        db = get_db()
+        db.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (hash_session_token(raw_token),))
+        db.commit()
+    resp = make_response(jsonify({"logged_out": True}))
+    resp.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return resp
+
+
+@auth_bp.route("/lock", methods=["POST"])
+def lock_screen():
+    if not getattr(g, "current_session", None):
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    db.execute(
+        "UPDATE auth_sessions SET is_screen_locked = 1 WHERE id = ?",
+        (g.current_session["id"],),
+    )
+    db.commit()
+    return jsonify({"is_screen_locked": True})
+
+
+@auth_bp.route("/unlock-password", methods=["POST"])
+def unlock_with_password():
+    if not getattr(g, "current_session", None) or not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+    db = get_db()
+    partner_row = db.execute(
+        "SELECT * FROM partners WHERE id = ?",
+        (g.current_partner["id"],),
+    ).fetchone()
+
+    if not partner_row or not check_password_hash(partner_row["password_hash"], password):
+        return jsonify({"error": "Incorrect password"}), 401
+
+    db.execute(
+        "UPDATE auth_sessions SET is_screen_locked = 0 WHERE id = ?",
+        (g.current_session["id"],),
+    )
+    db.commit()
+    return jsonify({"unlocked": True, "partner": g.current_partner})
+
+
 @auth_bp.route("/partners", methods=["GET"])
 def list_partners():
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
     db = get_db()
     partners, total_passkeys = _get_partners_with_passkeys(db)
     return jsonify({"partners": partners, "total_passkeys": total_passkeys})
@@ -64,14 +208,14 @@ def list_partners():
 @auth_bp.route("/partners", methods=["POST"])
 def create_partners():
     """
-    Creates either a single partner or both partners during onboarding.
-    Accepts either:
-      { "household_name": "...", "partners": [ {name, email, role, avatar_color, monthly_fun_allowance}, ... ] }
-    or a single partner object:
-      { "name": "...", "email": "...", "role": "...", "avatar_color": "#6366f1", "monthly_fun_allowance": 200 }
+    Creates initial partner accounts during onboarding (only when onboarding_completed == 0
+    or when already authenticated). Requires email & password (min 8 chars) for each partner.
     """
-    data = request.get_json(silent=True) or {}
     db = get_db()
+    if _is_onboarding_completed(db) and not getattr(g, "current_partner", None):
+        return jsonify({"error": "Onboarding is already completed. Please log in."}), 403
+
+    data = request.get_json(silent=True) or {}
 
     if "household_name" in data and str(data["household_name"]).strip():
         db.execute(
@@ -81,60 +225,70 @@ def create_partners():
 
     partner_inputs = data.get("partners")
     if isinstance(partner_inputs, list):
-        # If setting up partners in onboarding, update existing or insert new
         created_ids = []
         for idx, p_in in enumerate(partner_inputs):
             name = (p_in.get("name") or "").strip()
             if not name:
                 continue
-            email = (p_in.get("email") or "").strip()
+            email = (p_in.get("email") or f"{name.lower().replace(' ', '.')}@gibsonfamily.local").strip().lower()
+            raw_password = p_in.get("password") or ""
+            existing_id = p_in.get("id")
+
+            if not existing_id and len(raw_password) < 8:
+                return jsonify({"error": f"Password for {name} must be at least 8 characters."}), 400
+
             role = (p_in.get("role") or (f"Partner {idx + 1}")).strip()
             avatar_color = (p_in.get("avatar_color") or ("#6366f1" if idx == 0 else "#ec4899")).strip()
             allowance = float(p_in.get("monthly_fun_allowance") or 0.0)
 
-            existing_id = p_in.get("id")
             if existing_id and db.execute("SELECT id FROM partners WHERE id = ?", (existing_id,)).fetchone():
-                db.execute(
-                    "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
-                    (name, email, role, avatar_color, allowance, existing_id),
-                )
+                if raw_password:
+                    if len(raw_password) < 8:
+                        return jsonify({"error": f"Password for {name} must be at least 8 characters."}), 400
+                    pw_hash = generate_password_hash(raw_password)
+                    db.execute(
+                        "UPDATE partners SET name = ?, email = ?, password_hash = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
+                        (name, email, pw_hash, role, avatar_color, allowance, existing_id),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
+                        (name, email, role, avatar_color, allowance, existing_id),
+                    )
                 created_ids.append(existing_id)
             else:
+                pw_hash = generate_password_hash(raw_password)
                 cur = db.execute(
-                    "INSERT INTO partners (name, email, role, avatar_color, monthly_fun_allowance) VALUES (?, ?, ?, ?, ?)",
-                    (name, email, role, avatar_color, allowance),
+                    "INSERT INTO partners (name, email, password_hash, role, avatar_color, monthly_fun_allowance) VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, email, pw_hash, role, avatar_color, allowance),
                 )
                 created_ids.append(cur.lastrowid)
 
         if not created_ids:
-            return jsonify({"error": "At least one partner name is required"}), 400
+            return jsonify({"error": "At least one partner profile is required"}), 400
 
         db.commit()
         partners, total_passkeys = _get_partners_with_passkeys(db)
-        return jsonify({"partners": partners, "total_passkeys": total_passkeys}), 201
+        raw_token = create_session_for_partner(db, created_ids[0])
+        resp = make_response(
+            jsonify({
+                "partners": partners,
+                "total_passkeys": total_passkeys,
+                "token": raw_token,
+                "current_partner": partners[0],
+            }),
+            201,
+        )
+        return _attach_session_cookie(resp, raw_token)
 
-    # Single partner creation
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "Partner name is required"}), 400
-
-    email = (data.get("email") or "").strip()
-    role = (data.get("role") or "Partner").strip()
-    avatar_color = (data.get("avatar_color") or "#6366f1").strip()
-    allowance = float(data.get("monthly_fun_allowance") or 0.0)
-
-    cur = db.execute(
-        "INSERT INTO partners (name, email, role, avatar_color, monthly_fun_allowance) VALUES (?, ?, ?, ?, ?)",
-        (name, email, role, avatar_color, allowance),
-    )
-    db.commit()
-    partner = dict(db.execute("SELECT * FROM partners WHERE id = ?", (cur.lastrowid,)).fetchone())
-    partner["passkeys"] = []
-    return jsonify(partner), 201
+    return jsonify({"error": "Invalid partner payload"}), 400
 
 
 @auth_bp.route("/partners/<int:partner_id>", methods=["PUT"])
 def update_partner(partner_id: int):
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
+
     data = request.get_json(silent=True) or {}
     db = get_db()
     partner = db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone()
@@ -142,25 +296,37 @@ def update_partner(partner_id: int):
         return jsonify({"error": "Partner not found"}), 404
 
     name = data.get("name", partner["name"]).strip()
-    email = data.get("email", partner["email"] or "").strip()
+    email = data.get("email", partner["email"] or "").strip().lower()
     role = data.get("role", partner["role"]).strip()
     avatar_color = data.get("avatar_color", partner["avatar_color"]).strip()
     monthly_fun_allowance = float(data.get("monthly_fun_allowance", partner["monthly_fun_allowance"]))
+    new_password = data.get("password") or ""
 
-    db.execute(
-        "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
-        (name, email, role, avatar_color, monthly_fun_allowance, partner_id),
-    )
+    if new_password:
+        if len(new_password) < 8:
+            return jsonify({"error": "New password must be at least 8 characters"}), 400
+        pw_hash = generate_password_hash(new_password)
+        db.execute(
+            "UPDATE partners SET name = ?, email = ?, password_hash = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
+            (name, email, pw_hash, role, avatar_color, monthly_fun_allowance, partner_id),
+        )
+    else:
+        db.execute(
+            "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
+            (name, email, role, avatar_color, monthly_fun_allowance, partner_id),
+        )
     db.commit()
-    updated = dict(db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone())
+    updated = sanitize_partner(db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone())
     return jsonify(updated)
 
 
 @auth_bp.route("/onboarding/complete", methods=["POST"])
 def complete_onboarding():
-    data = request.get_json(silent=True) or {}
     db = get_db()
+    if _is_onboarding_completed(db) and not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
 
+    data = request.get_json(silent=True) or {}
     partners = db.execute("SELECT * FROM partners").fetchall()
     if len(partners) == 0:
         return jsonify({"error": "Please create your user profile before completing setup."}), 400
@@ -171,7 +337,6 @@ def complete_onboarding():
             (str(data["household_name"]).strip(),),
         )
 
-    # Optional initial budgets created during onboarding
     budgets = data.get("budgets")
     if isinstance(budgets, list):
         for b in budgets:
@@ -190,7 +355,6 @@ def complete_onboarding():
                     (cat, limit_val, color),
                 )
 
-    # Optional module enable/disable states during onboarding
     enabled_modules = data.get("enabled_modules")
     if isinstance(enabled_modules, dict):
         for mod_id, is_enabled in enabled_modules.items():
@@ -214,9 +378,13 @@ def complete_onboarding():
 
 @auth_bp.route("/reset-all", methods=["POST"])
 def reset_all_data():
-    """Resets all user data and returns the app to the first-time onboarding flow."""
+    """Requires an authenticated session and password confirmation to reset workspace."""
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required to reset workspace"}), 401
+
     db = get_db()
     for table in [
+        "notifications",
         "request_comments",
         "future_purchases",
         "purchase_requests",
@@ -229,18 +397,24 @@ def reset_all_data():
         "admin_records",
         "webauthn_challenges",
         "webauthn_credentials",
+        "auth_sessions",
         "partners",
     ]:
         db.execute(f"DELETE FROM {table}")
     db.execute("UPDATE app_settings SET value = '0' WHERE key = 'onboarding_completed'")
     db.commit()
-    return jsonify({"reset": True, "onboarding_completed": False})
+    resp = make_response(jsonify({"reset": True, "onboarding_completed": False}))
+    resp.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return resp
 
 
 @auth_bp.route("/webauthn/register/options", methods=["POST"])
 def webauthn_register_options():
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "You must be logged in to register a Passkey."}), 401
+
     data = request.get_json(silent=True) or {}
-    partner_id = int(data.get("partner_id", 1))
+    partner_id = int(data.get("partner_id", g.current_partner["id"]))
     db = get_db()
     partner = db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone()
     if not partner:
@@ -305,8 +479,11 @@ def webauthn_register_options():
 
 @auth_bp.route("/webauthn/register/verify", methods=["POST"])
 def webauthn_register_verify():
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "You must be logged in to register a Passkey."}), 401
+
     data = request.get_json(silent=True) or {}
-    partner_id = int(data.get("partner_id", 1))
+    partner_id = int(data.get("partner_id", g.current_partner["id"]))
     device_name = (data.get("device_name") or "Passkey (Windows Hello / Touch ID)").strip()
     credential = data.get("credential") or {}
 
@@ -357,7 +534,7 @@ def webauthn_register_verify():
     )
     db.commit()
 
-    partner = dict(db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone())
+    partner = sanitize_partner(db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone())
     return jsonify({
         "verified": True,
         "partner": partner,
@@ -466,21 +643,42 @@ def webauthn_authenticate_verify():
         "UPDATE webauthn_credentials SET sign_count = sign_count + 1, last_used_at = datetime('now') WHERE id = ?",
         (cred_row["id"],),
     )
-    db.commit()
 
-    partner = dict(
-        db.execute("SELECT * FROM partners WHERE id = ?", (cred_row["partner_id"],)).fetchone()
+    partner_id = cred_row["partner_id"]
+    # If the user already has a session for this partner, unlock it; otherwise create a new session!
+    if getattr(g, "current_session", None) and g.current_session["partner_id"] == partner_id:
+        db.execute(
+            "UPDATE auth_sessions SET is_screen_locked = 0 WHERE id = ?",
+            (g.current_session["id"],),
+        )
+        db.commit()
+        raw_token = extract_request_token()
+    else:
+        raw_token = create_session_for_partner(db, partner_id)
+
+    partners, _ = _get_partners_with_passkeys(db)
+    partner = next((p for p in partners if p["id"] == partner_id), None)
+
+    resp = make_response(
+        jsonify({
+            "verified": True,
+            "unlocked": True,
+            "authenticated": True,
+            "token": raw_token,
+            "partner": partner,
+            "partners": partners,
+            "device_name": cred_row["device_name"],
+        })
     )
-    return jsonify({
-        "verified": True,
-        "unlocked": True,
-        "partner": partner,
-        "device_name": cred_row["device_name"],
-    })
+    if raw_token:
+        return _attach_session_cookie(resp, raw_token)
+    return resp
 
 
 @auth_bp.route("/webauthn/credentials/<int:cred_id>", methods=["DELETE"])
 def delete_credential(cred_id: int):
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
     db = get_db()
     db.execute("DELETE FROM webauthn_credentials WHERE id = ?", (cred_id,))
     db.commit()

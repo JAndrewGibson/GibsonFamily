@@ -1,5 +1,5 @@
-from flask import Blueprint, jsonify, request
-from backend.database import get_db
+from flask import Blueprint, g, jsonify, request
+from backend.database import create_notification, get_db
 
 hub_bp = Blueprint("couples_hub", __name__, url_prefix="/api")
 
@@ -26,6 +26,75 @@ def toggle_module(module_id: str):
     db.commit()
     updated = dict(db.execute("SELECT * FROM module_registry WHERE id = ?", (module_id,)).fetchone())
     return jsonify(updated)
+
+
+# --- Notifications API ---
+
+@hub_bp.route("/notifications", methods=["GET"])
+def list_notifications():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"notifications": [], "unread_count": 0})
+
+    db = get_db()
+    rows = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT n.*, p.name AS actor_name, p.avatar_color AS actor_color
+            FROM notifications n
+            LEFT JOIN partners p ON n.actor_partner_id = p.id
+            WHERE n.recipient_partner_id = ?
+            ORDER BY n.is_read ASC, n.id DESC
+            LIMIT 50
+            """,
+            (actor["id"],),
+        ).fetchall()
+    ]
+    unread_count = sum(1 for r in rows if not r["is_read"])
+    return jsonify({"notifications": rows, "unread_count": unread_count})
+
+
+@hub_bp.route("/notifications/<int:notif_id>/read", methods=["PUT"])
+def mark_notification_read(notif_id: int):
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    db.execute(
+        "UPDATE notifications SET is_read = 1 WHERE id = ? AND recipient_partner_id = ?",
+        (notif_id, actor["id"]),
+    )
+    db.commit()
+    return jsonify({"read": True, "id": notif_id})
+
+
+@hub_bp.route("/notifications/read-all", methods=["POST"])
+def mark_all_notifications_read():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    db.execute(
+        "UPDATE notifications SET is_read = 1 WHERE recipient_partner_id = ?",
+        (actor["id"],),
+    )
+    db.commit()
+    return jsonify({"read_all": True})
+
+
+@hub_bp.route("/notifications/<int:notif_id>", methods=["DELETE"])
+def delete_notification(notif_id: int):
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    db.execute(
+        "DELETE FROM notifications WHERE id = ? AND recipient_partner_id = ?",
+        (notif_id, actor["id"]),
+    )
+    db.commit()
+    return jsonify({"deleted": True, "id": notif_id})
 
 
 # --- Couples Admin & Medical Paperwork ---
@@ -61,6 +130,9 @@ def create_admin_record():
     if not title:
         return jsonify({"error": "Title is required"}), 400
 
+    actor = getattr(g, "current_partner", None)
+    owner_id = int(data.get("owner_partner_id", actor["id"] if actor else 1))
+
     db = get_db()
     cur = db.execute(
         """
@@ -70,13 +142,26 @@ def create_admin_record():
         (
             title,
             data.get("record_type", "medical"),
-            int(data.get("owner_partner_id", 1)),
+            owner_id,
             data.get("status", "todo"),
             data.get("due_or_renewal_date") or None,
             (data.get("provider_or_location") or "").strip(),
             (data.get("notes") or "").strip(),
         ),
     )
+
+    if actor and owner_id != actor["id"]:
+        create_notification(
+            db,
+            recipient_partner_id=owner_id,
+            actor_partner_id=actor["id"],
+            notif_type="admin_assigned",
+            title=f"Admin / Medical Task Assigned: {title}",
+            message=f"{actor['name']} assigned \"{title}\" to you.",
+            link_tab="admin_docs",
+            reference_id=cur.lastrowid,
+        )
+
     db.commit()
     row = dict(
         db.execute(
@@ -155,6 +240,9 @@ def create_todo():
     if not title:
         return jsonify({"error": "Task title is required"}), 400
 
+    actor = getattr(g, "current_partner", None)
+    assigned_to = int(data.get("assigned_to", actor["id"] if actor else 1))
+
     db = get_db()
     cur = db.execute(
         """
@@ -164,11 +252,24 @@ def create_todo():
         (
             title,
             data.get("category", "Household"),
-            int(data.get("assigned_to", 1)),
+            assigned_to,
             data.get("due_date") or None,
             data.get("priority", "medium"),
         ),
     )
+
+    if actor and assigned_to != actor["id"]:
+        create_notification(
+            db,
+            recipient_partner_id=assigned_to,
+            actor_partner_id=actor["id"],
+            notif_type="todo_assigned",
+            title=f"New Shared Task: {title}",
+            message=f"{actor['name']} assigned task \"{title}\" to you.",
+            link_tab="todos",
+            reference_id=cur.lastrowid,
+        )
+
     db.commit()
     row = dict(
         db.execute(
@@ -248,6 +349,9 @@ def create_grocery_item():
     if not name:
         return jsonify({"error": "Grocery item name is required"}), 400
 
+    actor = getattr(g, "current_partner", None)
+    added_by = actor["id"] if actor else int(data.get("added_by", 1))
+
     db = get_db()
     cur = db.execute(
         """
@@ -259,7 +363,7 @@ def create_grocery_item():
             data.get("aisle_category", "Produce"),
             str(data.get("quantity", "1")).strip() or "1",
             round(float(data.get("estimated_price", 0.0)), 2),
-            int(data.get("added_by", 1)),
+            added_by,
         ),
     )
     db.commit()
@@ -307,4 +411,3 @@ def clear_checked_groceries():
     db.execute("DELETE FROM grocery_items WHERE checked = 1")
     db.commit()
     return jsonify({"cleared": True})
-

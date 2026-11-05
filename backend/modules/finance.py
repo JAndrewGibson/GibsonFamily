@@ -1,6 +1,7 @@
 import requests
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from backend.database import get_db
+from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 finance_bp = Blueprint("finance", __name__, url_prefix="/api/finance")
 
@@ -185,7 +186,7 @@ def exchange_public_token():
         db = get_db()
         db.execute(
             "INSERT OR REPLACE INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id) VALUES (?, ?, ?, ?)",
-            (item_id, access_token, institution_name, partner_id_int),
+            (item_id, encrypt_plaid_token(access_token), institution_name, partner_id_int),
         )
         db.commit()
 
@@ -245,7 +246,7 @@ def sandbox_quick_connect():
         db = get_db()
         db.execute(
             "INSERT OR REPLACE INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id) VALUES (?, ?, ?, ?)",
-            (item_id, access_token, institution_name, partner_id_int),
+            (item_id, encrypt_plaid_token(access_token), institution_name, partner_id_int),
         )
         db.commit()
 
@@ -271,8 +272,9 @@ def sync_all_plaid_items():
     total_acc = 0
     total_tx = 0
     for item in items:
+        raw_access_token = decrypt_plaid_token(item["access_token"])
         acc_cnt, tx_cnt = _sync_plaid_accounts_and_transactions(
-            item["access_token"], item["institution_name"], item["linked_by_partner_id"]
+            raw_access_token, item["institution_name"], item["linked_by_partner_id"]
         )
         total_acc += acc_cnt
         total_tx += tx_cnt

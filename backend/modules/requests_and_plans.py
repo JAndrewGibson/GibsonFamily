@@ -1,7 +1,7 @@
 import math
 from datetime import date, timedelta
-from flask import Blueprint, jsonify, request
-from backend.database import get_db
+from flask import Blueprint, g, jsonify, request
+from backend.database import create_notification, get_db
 
 requests_bp = Blueprint("requests_and_plans", __name__, url_prefix="/api")
 
@@ -64,6 +64,11 @@ def _hydrate_request(db, req_row) -> dict:
     return r
 
 
+def _other_partner_id(db, actor_id: int) -> int | None:
+    row = db.execute("SELECT id FROM partners WHERE id != ? ORDER BY id LIMIT 1", (actor_id,)).fetchone()
+    return row["id"] if row else actor_id
+
+
 @requests_bp.route("/requests", methods=["GET"])
 def list_requests():
     db = get_db()
@@ -99,12 +104,14 @@ def create_request():
     if not title or amount <= 0:
         return jsonify({"error": "Title and a positive amount are required"}), 400
 
-    requester_id = int(data.get("requester_id", 2))
-    reviewer_id = int(data.get("reviewer_id", 1 if requester_id == 2 else 2))
+    db = get_db()
+    actor = getattr(g, "current_partner", None)
+    requester_id = actor["id"] if actor else int(data.get("requester_id", 1))
+    reviewer_id = int(data.get("reviewer_id") or _other_partner_id(db, requester_id) or requester_id)
+
     proposed_monthly = float(data["proposed_monthly_contribution"]) if data.get("proposed_monthly_contribution") else None
     proposed_target_date = data.get("proposed_target_date") or None
 
-    db = get_db()
     cur = db.execute(
         """
         INSERT INTO purchase_requests (
@@ -136,6 +143,19 @@ def create_request():
             (req_id, requester_id, initial_note),
         )
 
+    actor_name = actor["name"] if actor else "Your partner"
+    if reviewer_id and reviewer_id != requester_id:
+        create_notification(
+            db,
+            recipient_partner_id=reviewer_id,
+            actor_partner_id=requester_id,
+            notif_type="request_created",
+            title=f"New Purchase Request: {title}",
+            message=f"{actor_name} submitted a request for ${amount:,.2f} ({title}). Review to approve, deny, or set up a budget timeline.",
+            link_tab="requests",
+            reference_id=req_id,
+        )
+
     db.commit()
     row = db.execute(
         """
@@ -154,14 +174,48 @@ def create_request():
     return jsonify(_hydrate_request(db, row)), 201
 
 
+@requests_bp.route("/requests/<int:req_id>", methods=["DELETE"])
+def delete_request(req_id: int):
+    db = get_db()
+    existing = db.execute("SELECT * FROM purchase_requests WHERE id = ?", (req_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Purchase request not found"}), 404
+
+    actor = getattr(g, "current_partner", None)
+    actor_id = actor["id"] if actor else existing["requester_id"]
+    actor_name = actor["name"] if actor else "Your partner"
+
+    # Also remove linked future_purchases if requested, or unlink
+    if request.args.get("delete_linked_plan") == "true":
+        db.execute("DELETE FROM future_purchases WHERE linked_request_id = ?", (req_id,))
+    else:
+        db.execute("UPDATE future_purchases SET linked_request_id = NULL WHERE linked_request_id = ?", (req_id,))
+
+    db.execute("DELETE FROM purchase_requests WHERE id = ?", (req_id,))
+
+    notify_target = (
+        existing["reviewer_id"]
+        if actor_id == existing["requester_id"]
+        else existing["requester_id"]
+    )
+    if notify_target and notify_target != actor_id:
+        create_notification(
+            db,
+            recipient_partner_id=notify_target,
+            actor_partner_id=actor_id,
+            notif_type="request_deleted",
+            title=f"Request Removed: {existing['title']}",
+            message=f"{actor_name} removed the purchase request for \"{existing['title']}\" (${existing['amount']:,.2f}).",
+            link_tab="requests",
+            reference_id=None,
+        )
+
+    db.commit()
+    return jsonify({"deleted": True, "id": req_id})
+
+
 @requests_bp.route("/requests/<int:req_id>/decision", methods=["POST"])
 def decide_request(req_id: int):
-    """
-    Allows a partner to:
-    - approve ('approved')
-    - deny ('denied')
-    - set up a budget/timeline ('budget_planned') with monthly_contribution, target_date, and optional initial saved_amount
-    """
     data = request.get_json(silent=True) or {}
     action = data.get("status") or data.get("action")
     if action not in ("approved", "denied", "budget_planned", "pending", "purchased"):
@@ -172,7 +226,10 @@ def decide_request(req_id: int):
     if not existing:
         return jsonify({"error": "Purchase request not found"}), 404
 
-    partner_id = int(data.get("partner_id", existing["reviewer_id"]))
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else int(data.get("partner_id", existing["reviewer_id"]))
+    actor_name = actor["name"] if actor else "Your partner"
+
     decision_notes = (data.get("decision_notes") or "").strip()
     monthly_contrib = (
         float(data["proposed_monthly_contribution"])
@@ -220,7 +277,6 @@ def decide_request(req_id: int):
         (req_id, partner_id, log_text, action_type_map.get(action, "comment")),
     )
 
-    # If a budget/timeline was set up, automatically create or update a linked Future Purchase plan!
     if action == "budget_planned":
         linked = db.execute(
             "SELECT id FROM future_purchases WHERE linked_request_id = ?",
@@ -262,6 +318,30 @@ def decide_request(req_id: int):
                 ),
             )
 
+    # Notify the other partner about the decision!
+    notify_target = (
+        existing["requester_id"]
+        if partner_id != existing["requester_id"]
+        else existing["reviewer_id"]
+    )
+    if notify_target and notify_target != partner_id:
+        status_label = {
+            "approved": "Approved",
+            "denied": "Placed on Hold / Denied",
+            "budget_planned": "Budget & Timeline Proposed",
+            "purchased": "Marked Purchased",
+        }.get(action, action)
+        create_notification(
+            db,
+            recipient_partner_id=notify_target,
+            actor_partner_id=partner_id,
+            notif_type=f"request_{action}",
+            title=f"{status_label}: {existing['title']}",
+            message=f"{actor_name} updated \"{existing['title']}\": {log_text}",
+            link_tab="requests",
+            reference_id=req_id,
+        )
+
     db.commit()
     row = db.execute(
         """
@@ -284,7 +364,6 @@ def decide_request(req_id: int):
 def contribute_to_request(req_id: int):
     data = request.get_json(silent=True) or {}
     add_amount = float(data.get("amount", 0))
-    partner_id = int(data.get("partner_id", 1))
     if add_amount <= 0:
         return jsonify({"error": "Contribution amount must be positive"}), 400
 
@@ -292,6 +371,10 @@ def contribute_to_request(req_id: int):
     existing = db.execute("SELECT * FROM purchase_requests WHERE id = ?", (req_id,)).fetchone()
     if not existing:
         return jsonify({"error": "Request not found"}), 404
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else int(data.get("partner_id", 1))
+    actor_name = actor["name"] if actor else "Your partner"
 
     new_saved = round(float(existing["saved_amount"] or 0.0) + add_amount, 2)
     new_status = "approved" if new_saved >= float(existing["amount"]) and existing["status"] == "budget_planned" else existing["status"]
@@ -308,6 +391,24 @@ def contribute_to_request(req_id: int):
         "UPDATE future_purchases SET current_saved = ? WHERE linked_request_id = ?",
         (new_saved, req_id),
     )
+
+    notify_target = (
+        existing["requester_id"]
+        if partner_id != existing["requester_id"]
+        else existing["reviewer_id"]
+    )
+    if notify_target and notify_target != partner_id:
+        create_notification(
+            db,
+            recipient_partner_id=notify_target,
+            actor_partner_id=partner_id,
+            notif_type="request_contribution",
+            title=f"+${add_amount:.0f} Saved Toward {existing['title']}",
+            message=f"{actor_name} contributed ${add_amount:.2f} toward \"{existing['title']}\" (Total saved: ${new_saved:.2f} of ${existing['amount']:.2f}).",
+            link_tab="requests",
+            reference_id=req_id,
+        )
+
     db.commit()
 
     row = db.execute(
@@ -331,15 +432,40 @@ def contribute_to_request(req_id: int):
 def add_request_comment(req_id: int):
     data = request.get_json(silent=True) or {}
     comment = (data.get("comment") or "").strip()
-    partner_id = int(data.get("partner_id", 1))
     if not comment:
         return jsonify({"error": "Comment cannot be empty"}), 400
 
     db = get_db()
+    existing = db.execute("SELECT * FROM purchase_requests WHERE id = ?", (req_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Request not found"}), 404
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else int(data.get("partner_id", 1))
+    actor_name = actor["name"] if actor else "Your partner"
+
     db.execute(
         "INSERT INTO request_comments (request_id, partner_id, comment, action_type) VALUES (?, ?, ?, 'comment')",
         (req_id, partner_id, comment),
     )
+
+    notify_target = (
+        existing["requester_id"]
+        if partner_id != existing["requester_id"]
+        else existing["reviewer_id"]
+    )
+    if notify_target and notify_target != partner_id:
+        create_notification(
+            db,
+            recipient_partner_id=notify_target,
+            actor_partner_id=partner_id,
+            notif_type="request_comment",
+            title=f"New Comment on \"{existing['title']}\"",
+            message=f"{actor_name}: \"{comment}\"",
+            link_tab="requests",
+            reference_id=req_id,
+        )
+
     db.commit()
     row = db.execute(
         """
@@ -457,4 +583,3 @@ def delete_future_purchase(plan_id: int):
     db.execute("DELETE FROM future_purchases WHERE id = ?", (plan_id,))
     db.commit()
     return jsonify({"deleted": True, "id": plan_id})
-

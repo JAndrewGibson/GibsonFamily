@@ -11,6 +11,7 @@ import {
   Plus,
   Send,
   Sparkles,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { apiFetch } from '../api';
@@ -147,6 +148,17 @@ export default function RequestsModule({ activePartner, partners, onDataChanged 
     });
     setCommentInputs((prev) => ({ ...prev, [reqId]: '' }));
     await loadRequests();
+  };
+
+  const handleDeleteRequest = async (req) => {
+    if (!window.confirm(`Remove purchase request "${req.title}"?`)) {
+      return;
+    }
+    await apiFetch(`/api/requests/${req.id}?delete_linked_plan=true`, {
+      method: 'DELETE',
+    });
+    await loadRequests();
+    onDataChanged?.();
   };
 
   const filteredRequests = requests.filter((r) =>
@@ -522,6 +534,16 @@ export default function RequestsModule({ activePartner, partners, onDataChanged 
                       Hold Off / Deny
                     </button>
                   </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm text-danger"
+                    onClick={() => handleDeleteRequest(req)}
+                    title="Remove this purchase request"
+                  >
+                    <Trash2 size={15} />
+                    Remove Request
+                  </button>
                 </div>
 
                 {/* Interactive Budget & Timeline Builder Drawer */}

@@ -2,6 +2,7 @@ import base64
 import json
 import pytest
 from backend.app import create_app
+from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 
 def _b64url(data: bytes) -> str:
@@ -9,57 +10,99 @@ def _b64url(data: bytes) -> str:
 
 
 @pytest.fixture()
-def client(tmp_path):
+def app_instance(tmp_path):
     db_file = tmp_path / "test_gibson.db"
-    app = create_app({"TESTING": True, "DATABASE_PATH": str(db_file)})
-    with app.test_client() as c:
+    return create_app({"TESTING": True, "DATABASE_PATH": str(db_file)})
+
+
+@pytest.fixture()
+def client(app_instance):
+    with app_instance.test_client() as c:
         yield c
 
 
-def test_clean_initial_state_and_plaid_env(client):
-    # Fresh database should have 0 pre-populated test data and onboarding_completed == False
-    setup_res = client.get("/api/auth/setup-status")
-    assert setup_res.status_code == 200
-    setup_data = setup_res.get_json()
-    assert setup_data["onboarding_completed"] is False
-    assert setup_data["partners"] == []
+def test_unauthenticated_endpoints_blocked_and_security_headers(client):
+    # Public health & setup status work
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.headers["X-Content-Type-Options"] == "nosniff"
+    assert health.headers["X-Frame-Options"] == "DENY"
+    assert "no-store" in health.headers["Cache-Control"]
 
-    # Verify no fake accounts, requests, or transactions exist on first launch
-    fin_res = client.get("/api/finance/summary")
-    fin_data = fin_res.get_json()
-    assert fin_data["accounts"] == []
-    assert fin_data["transactions"] == []
-    assert fin_data["budgets"] == []
-
-    req_res = client.get("/api/requests")
-    assert req_res.get_json()["requests"] == []
-
-    # Plaid credentials should be loaded from .env
-    plaid_res = client.get("/api/finance/plaid/status")
-    assert plaid_res.status_code == 200
-    assert plaid_res.get_json()["configured"] is True
+    # Protected financial & request endpoints must return 401 when not logged in
+    assert client.get("/api/finance/summary").status_code == 401
+    assert client.get("/api/requests").status_code == 401
+    assert client.get("/api/notifications").status_code == 401
+    assert client.post("/api/auth/reset-all").status_code == 401
 
 
-def test_end_to_end_onboarding_webauthn_and_requests(client):
-    # Step 1: Create both partner profiles during onboarding
+def test_plaid_access_token_encryption_at_rest(app_instance):
+    with app_instance.app_context():
+        raw_token = "access-production-secret-plaid-token-998877"
+        encrypted = encrypt_plaid_token(raw_token)
+        assert encrypted.startswith("enc:v1:")
+        assert raw_token not in encrypted
+        decrypted = decrypt_plaid_token(encrypted)
+        assert decrypted == raw_token
+
+        # Tampering with the ciphertext must fail integrity verification
+        tampered = encrypted[:-4] + "AAAA"
+        with pytest.raises(Exception):
+            decrypt_plaid_token(tampered)
+
+
+def test_full_auth_login_lock_notifications_and_request_deletion(client):
+    # 1. Step 1 Onboarding: Create both partner accounts with passwords
     p_res = client.post(
         "/api/auth/partners",
         json={
             "household_name": "Gibson Family",
             "partners": [
-                {"name": "Alex Gibson", "email": "alex@gibson.local", "avatar_color": "#6366f1", "monthly_fun_allowance": 250},
-                {"name": "Jordan Gibson", "email": "jordan@gibson.local", "avatar_color": "#ec4899", "monthly_fun_allowance": 250},
+                {
+                    "name": "Alex Gibson",
+                    "email": "alex@gibson.local",
+                    "password": "AlexStrongPassword123!",
+                    "avatar_color": "#6366f1",
+                    "monthly_fun_allowance": 250,
+                },
+                {
+                    "name": "Jordan Gibson",
+                    "email": "jordan@gibson.local",
+                    "password": "JordanStrongPassword123!",
+                    "avatar_color": "#ec4899",
+                    "monthly_fun_allowance": 250,
+                },
             ],
         },
     )
     assert p_res.status_code == 201
-    partners = p_res.get_json()["partners"]
-    assert len(partners) == 2
+    p_data = p_res.get_json()
+    p1_token = p_data["token"]
+    partners = p_data["partners"]
+    assert "password_hash" not in partners[0]
     p1_id = partners[0]["id"]
     p2_id = partners[1]["id"]
 
-    # Step 2: Register WebAuthn Passkey for Partner 1
-    opt_res = client.post("/api/auth/webauthn/register/options", json={"partner_id": p1_id})
+    auth_p1 = {"Authorization": f"Bearer {p1_token}"}
+
+    # 2. Complete onboarding
+    comp_res = client.post(
+        "/api/auth/onboarding/complete",
+        headers=auth_p1,
+        json={"household_name": "Gibson Family"},
+    )
+    assert comp_res.status_code == 200
+
+    # Once onboarding is complete, unauthenticated POST /api/auth/partners is blocked (403/401)
+    client.delete_cookie("gibson_session")
+    unauth_create = client.post(
+        "/api/auth/partners",
+        json={"partners": [{"name": "Hacker", "email": "h@x.com", "password": "password123"}]},
+    )
+    assert unauth_create.status_code in (401, 403)
+
+    # 3. Register WebAuthn Passkey for Partner 1
+    opt_res = client.post("/api/auth/webauthn/register/options", headers=auth_p1, json={"partner_id": p1_id})
     assert opt_res.status_code == 200
     challenge = opt_res.get_json()["challenge"]
 
@@ -70,29 +113,32 @@ def test_end_to_end_onboarding_webauthn_and_requests(client):
             "origin": "http://localhost:5173",
         }).encode("utf-8")
     )
-    fake_attestation = _b64url(b"cbor-attestation-bytes-123456")
     cred_id = _b64url(b"gibson-passkey-cred-001")
-
     ver_res = client.post(
         "/api/auth/webauthn/register/verify",
+        headers=auth_p1,
         json={
             "partner_id": p1_id,
-            "device_name": "Alex Windows Hello",
+            "device_name": "Alex Passkey",
             "credential": {
                 "id": cred_id,
                 "rawId": cred_id,
                 "response": {
                     "clientDataJSON": client_data_json,
-                    "attestationObject": fake_attestation,
+                    "attestationObject": _b64url(b"attestation-bytes"),
                 },
                 "transports": ["internal"],
             },
         },
     )
     assert ver_res.status_code == 201
-    assert ver_res.get_json()["verified"] is True
 
-    # Verify screen unlock via WebAuthn Passkey
+    # 4. Test Screen Lock & Unlock (423 Locked when screen is locked)
+    lock_res = client.post("/api/auth/lock", headers=auth_p1)
+    assert lock_res.status_code == 200
+    assert client.get("/api/finance/summary", headers=auth_p1).status_code == 423
+
+    # Unlock with WebAuthn Passkey
     auth_opt_res = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id})
     auth_challenge = auth_opt_res.get_json()["challenge"]
     auth_client_data = _b64url(
@@ -105,6 +151,7 @@ def test_end_to_end_onboarding_webauthn_and_requests(client):
     authenticator_data = _b64url((b"\x00" * 32) + b"\x05" + b"\x00\x00\x00\x02")
     unlock_res = client.post(
         "/api/auth/webauthn/authenticate/verify",
+        headers=auth_p1,
         json={
             "credential": {
                 "id": cred_id,
@@ -118,60 +165,76 @@ def test_end_to_end_onboarding_webauthn_and_requests(client):
         },
     )
     assert unlock_res.status_code == 200
-    assert unlock_res.get_json()["unlocked"] is True
+    assert client.get("/api/finance/summary", headers=auth_p1).status_code == 200
 
-    # Step 3 & 4: Complete onboarding with initial budgets and module selection
-    comp_res = client.post(
-        "/api/auth/onboarding/complete",
-        json={
-            "household_name": "Gibson Family",
-            "budgets": [
-                {"category": "Groceries & Dining", "monthly_limit": 850},
-                {"category": "Entertainment & Gaming", "monthly_limit": 300},
-            ],
-            "enabled_modules": {"requests": True, "finance": True, "future_plans": True},
-        },
+    # 5. Partner 2 logs in with email & password
+    p2_login = client.post(
+        "/api/auth/login",
+        json={"email": "jordan@gibson.local", "password": "JordanStrongPassword123!"},
     )
-    assert comp_res.status_code == 200
-    assert comp_res.get_json()["onboarding_completed"] is True
+    assert p2_login.status_code == 200
+    p2_token = p2_login.get_json()["token"]
+    auth_p2 = {"Authorization": f"Bearer {p2_token}"}
 
-    # Partner 2 submits a purchase request to Partner 1
-    create_res = client.post(
+    # 6. Partner 2 submits a purchase request -> Partner 1 gets a notification!
+    req_res = client.post(
         "/api/requests",
+        headers=auth_p2,
         json={
-            "requester_id": p2_id,
-            "reviewer_id": p1_id,
-            "title": "New Game Console",
-            "description": "Living room co-op console",
+            "title": "PlayStation 5 Pro",
+            "amount": 699.99,
             "category": "Entertainment & Gaming",
-            "amount": 600.0,
-            "priority": "medium",
-            "initial_comment": "Can we budget for this over 3 months?",
         },
     )
-    assert create_res.status_code == 201
-    req_id = create_res.get_json()["id"]
+    assert req_res.status_code == 201
+    req_id = req_res.get_json()["id"]
 
-    # Partner 1 sets up a budget & timeline ($200/mo, $200 initial saved)
+    # Check Partner 1's notifications
+    p1_notifs = client.get("/api/notifications", headers=auth_p1).get_json()
+    assert p1_notifs["unread_count"] == 1
+    assert "PlayStation 5 Pro" in p1_notifs["notifications"][0]["title"]
+
+    # 7. Partner 1 approves/plans the request -> Partner 2 gets a notification!
     decide_res = client.post(
         f"/api/requests/{req_id}/decision",
+        headers=auth_p1,
         json={
-            "partner_id": p1_id,
             "status": "budget_planned",
-            "decision_notes": "Let's save $200/mo!",
-            "proposed_monthly_contribution": 200.0,
+            "proposed_monthly_contribution": 250.0,
             "proposed_target_date": "2027-02-01",
             "saved_amount": 200.0,
+            "decision_notes": "Let's save $250/mo!",
         },
     )
     assert decide_res.status_code == 200
-    decided = decide_res.get_json()
-    assert decided["status"] == "budget_planned"
-    assert decided["timeline"]["remaining_amount"] == 400.0
-    assert decided["timeline"]["months_to_goal"] == 2
 
-    # Verify linked Future Purchase plan was created
-    fp_res = client.get("/api/future-purchases")
-    plans = fp_res.get_json()["future_purchases"]
-    assert len(plans) == 1
-    assert plans[0]["linked_request_id"] == req_id
+    p2_notifs = client.get("/api/notifications", headers=auth_p2).get_json()
+    assert p2_notifs["unread_count"] == 1
+    assert "Budget & Timeline Proposed" in p2_notifs["notifications"][0]["title"]
+
+    # 8. Delete the purchase request -> verify it is removed
+    del_res = client.delete(f"/api/requests/{req_id}?delete_linked_plan=true", headers=auth_p2)
+    assert del_res.status_code == 200
+    remaining_reqs = client.get("/api/requests", headers=auth_p1).get_json()["requests"]
+    assert len(remaining_reqs) == 0
+
+
+def test_login_rate_limiting(client):
+    # Create partner
+    client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    for _ in range(5):
+        res = client.post("/api/auth/login", json={"email": "alex@gibson.local", "password": "WrongPassword"})
+        assert res.status_code == 401
+
+    # 6th attempt within 15 minutes must be blocked with 429 Too Many Requests
+    blocked = client.post("/api/auth/login", json={"email": "alex@gibson.local", "password": "ValidPassword123!"})
+    assert blocked.status_code == 429

@@ -15,7 +15,7 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
-import { apiFetch, registerPasskeyForPartner } from '../api';
+import { apiFetch, registerPasskeyForPartner, setAuthToken } from '../api';
 
 const SANDBOX_BANKS = [
   { id: 'ins_109508', name: 'First Platypus Bank (Plaid Sandbox)' },
@@ -34,11 +34,13 @@ export default function OnboardingWizard({ onComplete }) {
   const [householdName, setHouseholdName] = useState('');
   const [p1Name, setP1Name] = useState('');
   const [p1Email, setP1Email] = useState('');
+  const [p1Password, setP1Password] = useState('');
   const [p1Color, setP1Color] = useState('#6366f1');
   const [p1Allowance, setP1Allowance] = useState('');
 
   const [p2Name, setP2Name] = useState('');
   const [p2Email, setP2Email] = useState('');
+  const [p2Password, setP2Password] = useState('');
   const [p2Color, setP2Color] = useState('#ec4899');
   const [p2Allowance, setP2Allowance] = useState('');
 
@@ -91,6 +93,14 @@ export default function OnboardingWizard({ onComplete }) {
       setError('Please enter both your name and your partner’s name so you can submit requests to each other.');
       return;
     }
+    if (!createdPartners[0]?.id && p1Password.length < 8) {
+      setError('Your password must be at least 8 characters.');
+      return;
+    }
+    if (!createdPartners[1]?.id && p2Password.length < 8) {
+      setError('Your partner’s password must be at least 8 characters.');
+      return;
+    }
 
     setBusy(true);
     try {
@@ -103,6 +113,7 @@ export default function OnboardingWizard({ onComplete }) {
               id: createdPartners[0]?.id,
               name: p1Name.trim(),
               email: p1Email.trim(),
+              password: p1Password,
               role: 'Partner 1',
               avatar_color: p1Color,
               monthly_fun_allowance: parseFloat(p1Allowance || 0),
@@ -111,6 +122,7 @@ export default function OnboardingWizard({ onComplete }) {
               id: createdPartners[1]?.id,
               name: p2Name.trim(),
               email: p2Email.trim(),
+              password: p2Password,
               role: 'Partner 2',
               avatar_color: p2Color,
               monthly_fun_allowance: parseFloat(p2Allowance || 0),
@@ -118,10 +130,29 @@ export default function OnboardingWizard({ onComplete }) {
           ],
         }),
       });
+      if (res.token) {
+        setAuthToken(res.token);
+      }
       setCreatedPartners(res.partners || []);
       if (res.partners?.length) {
         setSelectedPasskeyPartnerId(res.partners[0].id);
       }
+
+      // Now that we are authenticated, load Plaid status & modules
+      const [pStat, mData] = await Promise.all([
+        apiFetch('/api/finance/plaid/status').catch(() => null),
+        apiFetch('/api/modules').catch(() => ({ modules: [] })),
+      ]);
+      if (pStat) setPlaidStatus(pStat);
+      if (mData?.modules) {
+        setModules(mData.modules);
+        const map = {};
+        mData.modules.forEach((m) => {
+          map[m.id] = Boolean(m.enabled);
+        });
+        setEnabledModules(map);
+      }
+
       setStep(2);
     } catch (err) {
       setError(err.message);
@@ -367,13 +398,26 @@ export default function OnboardingWizard({ onComplete }) {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Email or Handle (for WebAuthn Passkey)</label>
+                  <label>Login Email *</label>
                   <input
-                    type="text"
+                    type="email"
                     className="input"
                     placeholder="alex@example.com"
                     value={p1Email}
                     onChange={(e) => setP1Email(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Password (min 8 characters) *</label>
+                  <input
+                    type="password"
+                    minLength={8}
+                    className="input"
+                    placeholder="Create your login password"
+                    value={p1Password}
+                    onChange={(e) => setP1Password(e.target.value)}
+                    required={!createdPartners[0]?.id}
                   />
                 </div>
                 <div className="form-grid-2">
@@ -414,13 +458,26 @@ export default function OnboardingWizard({ onComplete }) {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Partner's Email or Handle</label>
+                  <label>Partner's Login Email *</label>
                   <input
-                    type="text"
+                    type="email"
                     className="input"
                     placeholder="jordan@example.com"
                     value={p2Email}
                     onChange={(e) => setP2Email(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Partner's Password (min 8 characters) *</label>
+                  <input
+                    type="password"
+                    minLength={8}
+                    className="input"
+                    placeholder="Create partner login password"
+                    value={p2Password}
+                    onChange={(e) => setP2Password(e.target.value)}
+                    required={!createdPartners[1]?.id}
                   />
                 </div>
                 <div className="form-grid-2">
