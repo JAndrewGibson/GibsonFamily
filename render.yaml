@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: gibsonfamily-hub
+    runtime: python
+    buildCommand: npm install --prefix frontend && npm run build --prefix frontend && pip install -r requirements.txt
+    startCommand: gunicorn backend.app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: PLAID_ENV
+        value: production
+      - key: plaid_client_id
+        sync: false
+      - key: plaid_production_secret
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: WEBAUTHN_RP_NAME
+        value: GibsonFamily Hub
+
