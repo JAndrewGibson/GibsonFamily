@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
-export function AdminDocsSubModule({ activePartner, partners, onDataChanged }) {
+export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [records, setRecords] = useState([]);
   const [title, setTitle] = useState('');
   const [recordType, setRecordType] = useState('medical');
@@ -28,7 +28,7 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged }) {
 
   useEffect(() => {
     loadRecords();
-  }, []);
+  }, [syncVersion]);
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -215,7 +215,7 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged }) {
   );
 }
 
-export function TodosSubModule({ activePartner, partners, onDataChanged }) {
+export function TodosSubModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [todos, setTodos] = useState([]);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Household');
@@ -230,7 +230,7 @@ export function TodosSubModule({ activePartner, partners, onDataChanged }) {
 
   useEffect(() => {
     loadTodos();
-  }, []);
+  }, [syncVersion]);
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -359,7 +359,7 @@ export function TodosSubModule({ activePartner, partners, onDataChanged }) {
   );
 }
 
-export function GroceriesSubModule({ activePartner, onDataChanged }) {
+export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }) {
   const [groceries, setGroceries] = useState([]);
   const [totals, setTotals] = useState({ estimated_total: 0, unchecked_total: 0 });
   const [name, setName] = useState('');
@@ -378,7 +378,7 @@ export function GroceriesSubModule({ activePartner, onDataChanged }) {
 
   useEffect(() => {
     loadGroceries();
-  }, []);
+  }, [syncVersion]);
 
   const handleAdd = async (e) => {
     e.preventDefault();

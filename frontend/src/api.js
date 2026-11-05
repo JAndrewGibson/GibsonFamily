@@ -4,6 +4,33 @@ export function setAuthToken(token) {
   memoryAuthToken = token || null;
 }
 
+export function getCookie(name, defaultValue = '') {
+  if (typeof document === 'undefined') return defaultValue;
+  const match = document.cookie.match(
+    new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)')
+  );
+  return match ? decodeURIComponent(match[1]) : defaultValue;
+}
+
+export function setCookie(name, value, days = 365) {
+  if (typeof document === 'undefined') return;
+  const expires = new Date(Date.now() + days * 864e5).toUTCString();
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax${secure}`;
+}
+
+export function notifyLocalSync() {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel('gibson_sync');
+      ch.postMessage({ type: 'MUTATION', ts: Date.now() });
+      ch.close();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export async function apiFetch(path, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
@@ -24,6 +51,12 @@ export async function apiFetch(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+
+  const method = (options.method || 'GET').toUpperCase();
+  if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
+    notifyLocalSync();
+  }
+
   return data;
 }
 

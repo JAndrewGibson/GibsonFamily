@@ -3,7 +3,7 @@ from pathlib import Path
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 from backend.config import Config
-from backend.database import get_db, init_db
+from backend.database import bump_state_version, get_db, init_db
 from backend.security import load_current_session
 from backend.modules.auth_webauthn import auth_bp
 from backend.modules.finance import finance_bp
@@ -79,6 +79,18 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.after_request
     def apply_security_headers(response):
+        if (
+            request.path.startswith("/api/")
+            and request.method in ("POST", "PUT", "DELETE")
+            and 200 <= response.status_code < 300
+        ):
+            try:
+                db = get_db()
+                bump_state_version(db)
+                db.commit()
+            except Exception:
+                pass
+
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -106,10 +118,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "plaid_configured": bool(app.config.get("PLAID_CLIENT_ID") and app.config.get("PLAID_SECRET")),
         })
 
-    @app.route("/api/overview", methods=["GET"])
-    def overview():
-        db = get_db()
-        actor = g.current_partner
+    def _build_overview_payload(db, actor):
         pending_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'pending'").fetchone()["cnt"]
         planned_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'budget_planned'").fetchone()["cnt"]
         open_todos = db.execute("SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0").fetchone()["cnt"]
@@ -120,7 +129,10 @@ def create_app(test_config: dict | None = None) -> Flask:
             "SELECT COUNT(*) AS cnt FROM notifications WHERE recipient_partner_id = ? AND is_read = 0",
             (actor["id"],),
         ).fetchone()["cnt"]
-        return jsonify({
+        sv_row = db.execute("SELECT value FROM app_settings WHERE key = 'state_version'").fetchone()
+        state_version = int(sv_row["value"]) if sv_row and str(sv_row["value"]).isdigit() else 1
+        return {
+            "state_version": state_version,
             "pending_requests": pending_reqs,
             "planned_requests": planned_reqs,
             "open_todos": open_todos,
@@ -128,7 +140,19 @@ def create_app(test_config: dict | None = None) -> Flask:
             "active_admin_records": active_admin,
             "future_goals": future_goals,
             "unread_notifications": unread_notifs,
-        })
+        }
+
+    @app.route("/api/overview", methods=["GET"])
+    def overview():
+        db = get_db()
+        actor = g.current_partner
+        return jsonify(_build_overview_payload(db, actor))
+
+    @app.route("/api/sync-pulse", methods=["GET"])
+    def sync_pulse():
+        db = get_db()
+        actor = g.current_partner
+        return jsonify(_build_overview_payload(db, actor))
 
     # Serve compiled React SPA in production (e.g., on Render)
     @app.route("/", defaults={"path": ""})

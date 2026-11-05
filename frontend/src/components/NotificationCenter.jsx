@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, CheckCheck, Sparkles, Trash2 } from 'lucide-react';
 import { apiFetch } from '../api';
 
-export default function NotificationCenter({ onNavigateTab }) {
+export default function NotificationCenter({ onNavigateTab, syncVersion }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -51,6 +51,12 @@ export default function NotificationCenter({ onNavigateTab }) {
     const timer = setInterval(() => loadNotifications(true), 15000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (syncVersion > 1) {
+      loadNotifications(true);
+    }
+  }, [syncVersion]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {

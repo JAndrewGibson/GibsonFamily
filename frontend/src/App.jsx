@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   CalendarClock,
   CheckSquare,
@@ -9,10 +9,11 @@ import {
   Layers,
   Lock,
   LogOut,
+  Radio,
   ShoppingCart,
   Wallet,
 } from 'lucide-react';
-import { apiFetch, setAuthToken } from './api';
+import { apiFetch, getCookie, setAuthToken, setCookie } from './api';
 import OnboardingWizard from './components/OnboardingWizard';
 import LoginScreen from './components/LoginScreen';
 import NotificationCenter from './components/NotificationCenter';
@@ -54,13 +55,36 @@ export default function App() {
     unread_notifications: 0,
   });
 
-  const [activeTab, setActiveTab] = useState(
-    typeof window !== 'undefined' && window.location.search.includes('oauth_state_id=')
-      ? 'finance'
-      : 'requests'
-  );
+  const [activeTab, setActiveTabState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('oauth_state_id=')) {
+      return 'finance';
+    }
+    const fromCookie = getCookie('gibson_active_tab', '');
+    if (fromCookie) return fromCookie;
+    try {
+      const fromStorage = window.localStorage.getItem('gibson_active_tab');
+      if (fromStorage) return fromStorage;
+    } catch {
+      // ignore
+    }
+    return 'requests';
+  });
+
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    setCookie('gibson_active_tab', tab, 365);
+    try {
+      window.localStorage.setItem('gibson_active_tab', tab);
+    } catch {
+      // ignore
+    }
+  };
+
   const [isLocked, setIsLocked] = useState(false);
   const [showPasskeyModal, setShowPasskeyModal] = useState(false);
+  const [syncVersion, setSyncVersion] = useState(1);
+  const [livePartnerPulse, setLivePartnerPulse] = useState(false);
+  const lastStateVersionRef = useRef(null);
 
   const loadCoreState = async () => {
     try {
@@ -94,6 +118,9 @@ export default function App() {
         ]);
         setModules(mData.modules || []);
         setOverview(oData);
+        if (oData.state_version) {
+          lastStateVersionRef.current = oData.state_version;
+        }
       }
     } catch (err) {
       console.error('Failed to load initial state:', err);
@@ -105,6 +132,54 @@ export default function App() {
   useEffect(() => {
     loadCoreState();
   }, []);
+
+  // Real-time reactivity across both partners & open tabs
+  useEffect(() => {
+    if (!authenticated || isLocked) return undefined;
+
+    const checkPulse = async () => {
+      try {
+        const pulse = await apiFetch('/api/sync-pulse');
+        setOverview(pulse);
+        if (
+          pulse.state_version &&
+          lastStateVersionRef.current !== null &&
+          pulse.state_version !== lastStateVersionRef.current
+        ) {
+          lastStateVersionRef.current = pulse.state_version;
+          setSyncVersion((v) => v + 1);
+          setLivePartnerPulse(true);
+          setTimeout(() => setLivePartnerPulse(false), 2500);
+        } else if (pulse.state_version && lastStateVersionRef.current === null) {
+          lastStateVersionRef.current = pulse.state_version;
+        }
+      } catch {
+        // ignore transient network error
+      }
+    };
+
+    const intervalId = setInterval(checkPulse, 3000);
+    const onFocus = () => checkPulse();
+    window.addEventListener('focus', onFocus);
+
+    let channel = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('gibson_sync');
+        channel.onmessage = () => {
+          checkPulse();
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+      if (channel) channel.close();
+    };
+  }, [authenticated, isLocked]);
 
   const handleToggleModule = async (modId) => {
     await apiFetch(`/api/modules/${modId}/toggle`, { method: 'PUT' });
@@ -264,10 +339,20 @@ export default function App() {
               <strong>{activePartner.name}</strong>
               <span className="text-muted">({activePartner.email})</span>
             </div>
+            <span
+              className={`live-sync-pill ${livePartnerPulse ? 'pulsing' : ''}`}
+              title="Real-time partner sync is active"
+            >
+              <Radio size={12} />
+              {livePartnerPulse ? 'Synced update!' : 'Live Sync'}
+            </span>
           </div>
 
           <div className="topbar-right">
-            <NotificationCenter onNavigateTab={(tab) => setActiveTab(tab)} />
+            <NotificationCenter
+              onNavigateTab={(tab) => setActiveTab(tab)}
+              syncVersion={syncVersion}
+            />
 
             <button
               type="button"
@@ -304,15 +389,20 @@ export default function App() {
                 activePartner={activePartner}
                 partners={partners}
                 onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
               />
             )}
             {activeTab === 'future_plans' && (
-              <FuturePurchasesModule onDataChanged={loadCoreState} />
+              <FuturePurchasesModule
+                onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
+              />
             )}
             {activeTab === 'finance' && (
               <FinanceModule
                 activePartner={activePartner}
                 onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
               />
             )}
             {activeTab === 'admin_docs' && (
@@ -320,6 +410,7 @@ export default function App() {
                 activePartner={activePartner}
                 partners={partners}
                 onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
               />
             )}
             {activeTab === 'todos' && (
@@ -327,12 +418,14 @@ export default function App() {
                 activePartner={activePartner}
                 partners={partners}
                 onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
               />
             )}
             {activeTab === 'groceries' && (
               <GroceriesSubModule
                 activePartner={activePartner}
                 onDataChanged={loadCoreState}
+                syncVersion={syncVersion}
               />
             )}
             {activeTab === 'modules_registry' && (

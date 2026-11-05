@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CalendarClock, PiggyBank, Plus, Sparkles, Target, Trash2 } from 'lucide-react';
 import { apiFetch } from '../api';
 
-export default function FuturePurchasesModule({ onDataChanged }) {
+export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -16,19 +16,25 @@ export default function FuturePurchasesModule({ onDataChanged }) {
   const [priority, setPriority] = useState('medium');
   const [notes, setNotes] = useState('');
 
-  const loadPlans = async () => {
-    setLoading(true);
+  const loadPlans = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const data = await apiFetch('/api/future-purchases');
       setPlans(data.future_purchases || []);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadPlans();
+    loadPlans(false);
   }, []);
+
+  useEffect(() => {
+    if (syncVersion > 1) {
+      loadPlans(true);
+    }
+  }, [syncVersion]);
 
   const handleCreatePlan = async (e) => {
     e.preventDefault();

@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from pathlib import Path
 from flask import current_app, g
 
@@ -121,6 +122,16 @@ CREATE TABLE IF NOT EXISTS budgets (
     alert_threshold REAL NOT NULL DEFAULT 0.8,
     is_shared INTEGER NOT NULL DEFAULT 1,
     color TEXT NOT NULL DEFAULT '#6366f1'
+);
+
+CREATE TABLE IF NOT EXISTS monthly_budgets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_month TEXT NOT NULL,
+    category TEXT NOT NULL,
+    monthly_limit REAL NOT NULL,
+    color TEXT NOT NULL DEFAULT '#6366f1',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(budget_month, category)
 );
 
 CREATE TABLE IF NOT EXISTS purchase_requests (
@@ -330,20 +341,25 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
             """,
             DEFAULT_MODULES,
         )
-    onboarding_row = db.execute(
-        "SELECT value FROM app_settings WHERE key = 'onboarding_completed'"
-    ).fetchone()
-    if not onboarding_row:
-        db.execute(
-            "INSERT INTO app_settings (key, value) VALUES ('onboarding_completed', '0')"
-        )
-    household_row = db.execute(
-        "SELECT value FROM app_settings WHERE key = 'household_name'"
-    ).fetchone()
-    if not household_row:
-        db.execute(
-            "INSERT INTO app_settings (key, value) VALUES ('household_name', 'Gibson Household')"
-        )
+    defaults = {
+        "onboarding_completed": "0",
+        "household_name": "Gibson Household",
+        "state_version": str(int(time.time() * 1000)),
+        "plaid_banner_dismissed": "0",
+    }
+    for k, v in defaults.items():
+        row = db.execute("SELECT value FROM app_settings WHERE key = ?", (k,)).fetchone()
+        if not row:
+            db.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)", (k, v))
+
+
+def bump_state_version(db: sqlite3.Connection) -> str:
+    new_ver = str(int(time.time() * 1000))
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('state_version', ?)",
+        (new_ver,),
+    )
+    return new_ver
 
 
 def create_notification(
@@ -366,3 +382,4 @@ def create_notification(
         """,
         (recipient_partner_id, actor_partner_id, notif_type, title, message, link_tab, reference_id),
     )
+    bump_state_version(db)

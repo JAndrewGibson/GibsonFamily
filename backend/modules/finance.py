@@ -29,6 +29,51 @@ def _shift_year_month(ym: str, delta_months: int) -> str:
         return date.today().strftime("%Y-%m")
 
 
+def _ensure_monthly_budgets_for_month(db, ym: str) -> list[dict]:
+    """
+    Ensures `monthly_budgets` has entries for `ym` (copying from the closest prior month or base `budgets` table if uninitialized)
+    and returns active budget rows for `ym`.
+    """
+    existing = db.execute(
+        "SELECT * FROM monthly_budgets WHERE budget_month = ? ORDER BY id",
+        (ym,),
+    ).fetchall()
+
+    if not existing:
+        # Check if there is a prior month in monthly_budgets to inherit from
+        prior_month_row = db.execute(
+            "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month < ? ORDER BY budget_month DESC LIMIT 1",
+            (ym,),
+        ).fetchone()
+
+        if prior_month_row:
+            source_rows = db.execute(
+                "SELECT category, monthly_limit, color FROM monthly_budgets WHERE budget_month = ? AND is_active = 1",
+                (prior_month_row["budget_month"],),
+            ).fetchall()
+        else:
+            source_rows = db.execute(
+                "SELECT category, monthly_limit, color FROM budgets ORDER BY id"
+            ).fetchall()
+
+        if source_rows:
+            for r in source_rows:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
+                    VALUES (?, ?, ?, ?, 1)
+                    """,
+                    (ym, r["category"], r["monthly_limit"], r["color"]),
+                )
+            db.commit()
+
+    active_rows = db.execute(
+        "SELECT * FROM monthly_budgets WHERE budget_month = ? AND is_active = 1 ORDER BY id",
+        (ym,),
+    ).fetchall()
+    return [dict(r) for r in active_rows]
+
+
 def _plaid_headers_and_auth():
     client_id = current_app.config.get("PLAID_CLIENT_ID", "")
     secret = current_app.config.get("PLAID_SECRET", "")
@@ -47,6 +92,11 @@ def plaid_status():
             "SELECT id, item_id, institution_name, linked_by_partner_id, created_at FROM plaid_items ORDER BY id DESC"
         ).fetchall()
     ]
+    dismissed_row = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'plaid_banner_dismissed'"
+    ).fetchone()
+    banner_dismissed = bool(dismissed_row and dismissed_row["value"] == "1")
+
     return jsonify({
         "configured": bool(client_id and secret),
         "environment": env_name,
@@ -54,7 +104,21 @@ def plaid_status():
         "base_url": base_url,
         "client_id_preview": f"{client_id[:6]}...{client_id[-4:]}" if len(client_id) >= 10 else ("configured" if client_id else ""),
         "linked_items": items,
+        "banner_dismissed": banner_dismissed,
     })
+
+
+@finance_bp.route("/plaid/dismiss-banner", methods=["POST"])
+def dismiss_plaid_banner():
+    data = request.get_json(silent=True) or {}
+    dismissed = "1" if data.get("dismissed", True) else "0"
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('plaid_banner_dismissed', ?)",
+        (dismissed,),
+    )
+    db.commit()
+    return jsonify({"banner_dismissed": dismissed == "1"})
 
 
 @finance_bp.route("/plaid/create_link_token", methods=["POST"])
@@ -180,7 +244,6 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
         tx_date = tx.get("date") or date.today().isoformat()
         tx_budget_month = tx_date[:7]
 
-        # INSERT OR IGNORE preserves any user-reassigned category or budget_month on existing transactions
         db.execute(
             """
             INSERT OR IGNORE INTO transactions
@@ -337,19 +400,13 @@ def sync_all_plaid_items():
 
 @finance_bp.route("/summary", methods=["GET"])
 def finance_summary():
-    """
-    Returns financial summary separated strictly on the 1st of the month by `budget_month`.
-    Query params:
-      - month: YYYY-MM (defaults to current calendar month)
-      - include_all_months: 'true' to list all transactions in the ledger while still calculating budget spend strictly for `month`
-    """
     current_ym = date.today().strftime("%Y-%m")
     selected_month = (request.args.get("month") or current_ym).strip()[:7]
     include_all = request.args.get("include_all_months") == "true"
 
     db = get_db()
     accounts = [dict(r) for r in db.execute("SELECT * FROM accounts ORDER BY id").fetchall()]
-    budgets = [dict(r) for r in db.execute("SELECT * FROM budgets ORDER BY id").fetchall()]
+    month_budgets = _ensure_monthly_budgets_for_month(db, selected_month)
 
     all_transactions = [
         dict(r)
@@ -368,8 +425,8 @@ def finance_summary():
         ).fetchall()
     ]
 
-    # Collect available months for month switcher UI (always include prev, current, next, and any month with transactions)
     month_set = {
+        _shift_year_month(selected_month, -2),
         _shift_year_month(selected_month, -1),
         selected_month,
         _shift_year_month(selected_month, 1),
@@ -386,7 +443,11 @@ def finance_summary():
         if tx.get("category"):
             tx_categories.add(tx["category"])
 
-    # Strictly filter transactions belonging to `selected_month` (separated on the 1st of the month, plus any manually allocated to `selected_month`)
+    # Also include any months from monthly_budgets
+    for mb_row in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
+        if mb_row["budget_month"]:
+            month_set.add(mb_row["budget_month"])
+
     month_transactions = [
         tx for tx in all_transactions if tx["budget_month"] == selected_month
     ]
@@ -402,7 +463,7 @@ def finance_summary():
     enriched_budgets = []
     total_budget_limit = 0.0
     total_budget_spent = 0.0
-    for b in budgets:
+    for b in month_budgets:
         spent = round(spend_by_category.get(b["category"], 0.0), 2)
         limit_val = float(b["monthly_limit"])
         total_budget_limit += limit_val
@@ -415,10 +476,15 @@ def finance_summary():
             "utilization_pct": pct,
         })
 
-    # Combine custom budget categories, transaction categories, and defaults
-    budget_cat_names = [b["category"] for b in budgets]
+    # All known custom + standard categories across all months
+    all_budget_cats = [
+        r["category"]
+        for r in db.execute(
+            "SELECT DISTINCT category FROM monthly_budgets UNION SELECT DISTINCT category FROM budgets"
+        ).fetchall()
+    ]
     all_categories = list(
-        dict.fromkeys(budget_cat_names + sorted(tx_categories) + DEFAULT_CATEGORIES)
+        dict.fromkeys(all_budget_cats + sorted(tx_categories) + DEFAULT_CATEGORIES)
     )
 
     return jsonify({
@@ -440,6 +506,96 @@ def finance_summary():
         "month_transaction_count": len(month_transactions),
         "total_transaction_count": len(all_transactions),
     })
+
+
+@finance_bp.route("/history", methods=["GET"])
+def finance_history():
+    """
+    Returns month-by-month historical spending & budget breakdown across all months.
+    """
+    db = get_db()
+    current_ym = date.today().strftime("%Y-%m")
+
+    all_txs = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month
+            FROM transactions t
+            ORDER BY t.date DESC
+            """
+        ).fetchall()
+    ]
+
+    months_set = {
+        _shift_year_month(current_ym, -2),
+        _shift_year_month(current_ym, -1),
+        current_ym,
+    }
+    for tx in all_txs:
+        if tx["effective_budget_month"]:
+            months_set.add(tx["effective_budget_month"])
+    for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
+        if mb["budget_month"]:
+            months_set.add(mb["budget_month"])
+
+    sorted_months = sorted(months_set, reverse=True)
+    history_list = []
+
+    for ym in sorted_months:
+        m_budgets = _ensure_monthly_budgets_for_month(db, ym)
+        m_txs = [tx for tx in all_txs if tx["effective_budget_month"] == ym]
+
+        spend_by_cat = {}
+        for tx in m_txs:
+            cat = tx["category"]
+            spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
+
+        total_spent = round(sum(float(tx["amount"]) for tx in m_txs), 2)
+        total_limit = round(sum(float(b["monthly_limit"]) for b in m_budgets), 2)
+
+        cat_breakdown = []
+        seen_cats = set()
+        for b in m_budgets:
+            cat = b["category"]
+            seen_cats.add(cat)
+            spent = round(spend_by_cat.get(cat, 0.0), 2)
+            lim = float(b["monthly_limit"])
+            cat_breakdown.append({
+                "category": cat,
+                "spent": spent,
+                "monthly_limit": lim,
+                "remaining": round(lim - spent, 2),
+                "utilization_pct": round((spent / lim) * 100, 1) if lim > 0 else 0.0,
+                "is_budgeted": True,
+                "is_active": bool(b.get("is_active", 1)),
+            })
+
+        for cat, spent_val in spend_by_cat.items():
+            if cat not in seen_cats:
+                cat_breakdown.append({
+                    "category": cat,
+                    "spent": round(spent_val, 2),
+                    "monthly_limit": 0.0,
+                    "remaining": -round(spent_val, 2),
+                    "utilization_pct": 100.0,
+                    "is_budgeted": False,
+                    "is_active": False,
+                })
+
+        history_list.append({
+            "month": ym,
+            "budget_month": ym,
+            "total_spent": total_spent,
+            "total_budget": total_limit,
+            "net_variance": round(total_limit - total_spent, 2),
+            "utilization_pct": round((total_spent / total_limit) * 100, 1) if total_limit > 0 else 0.0,
+            "transaction_count": len(m_txs),
+            "categories": cat_breakdown,
+        })
+
+    return jsonify({"history": history_list})
 
 
 @finance_bp.route("/accounts", methods=["POST"])
@@ -495,7 +651,6 @@ def create_transaction():
     tx_date = (data.get("date") or date.today().isoformat()).strip()
     date_ym = tx_date[:7]
 
-    # Allow allocating a purchase to the previous month (-1), current date month (0), next month (+1), or explicit YYYY-MM
     explicit_budget_month = (data.get("budget_month") or "").strip()[:7]
     month_offset = int(data.get("month_offset", 0))
     if explicit_budget_month and len(explicit_budget_month) == 7:
@@ -533,10 +688,6 @@ def create_transaction():
 
 @finance_bp.route("/transactions/<int:tx_id>", methods=["PUT"])
 def update_transaction(tx_id: int):
-    """
-    Allows reassigning a transaction's category (including custom categories)
-    and allocating the purchase to the previous month, next month, or any target YYYY-MM budget period.
-    """
     data = request.get_json(silent=True) or {}
     db = get_db()
     existing = db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
@@ -550,7 +701,6 @@ def update_transaction(tx_id: int):
     if not new_category:
         return jsonify({"error": "Category cannot be empty"}), 400
 
-    # Determine target budget_month
     if "allocate_direction" in data:
         direction = data["allocate_direction"]
         if direction == "prev":
@@ -593,6 +743,12 @@ def delete_transaction(tx_id: int):
 
 @finance_bp.route("/budgets", methods=["POST"])
 def upsert_budget():
+    """
+    Creates or updates a monthly category budget for a specific `budget_month`.
+    `apply_scope`:
+      - 'this_and_future' (default): updates `budget_month` and future months (plus base template), leaving past historical months untouched!
+      - 'only_this_month': updates ONLY `budget_month`.
+    """
     data = request.get_json(silent=True) or {}
     category = (data.get("category") or "").strip()
     monthly_limit = float(data.get("monthly_limit", 0))
@@ -600,25 +756,96 @@ def upsert_budget():
         return jsonify({"error": "Category and positive monthly_limit are required"}), 400
 
     color = data.get("color", "#6366f1")
+    target_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
+    apply_scope = data.get("apply_scope", "this_and_future")
+
     db = get_db()
+    # Ensure the target month is initialized before modifying it
+    _ensure_monthly_budgets_for_month(db, target_month)
+
     db.execute(
         """
-        INSERT INTO budgets (category, monthly_limit, color)
-        VALUES (?, ?, ?)
-        ON CONFLICT(category) DO UPDATE SET
+        INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
+        VALUES (?, ?, ?, ?, 1)
+        ON CONFLICT(budget_month, category) DO UPDATE SET
             monthly_limit = excluded.monthly_limit,
-            color = excluded.color
+            color = excluded.color,
+            is_active = 1
         """,
-        (category, monthly_limit, color),
+        (target_month, category, monthly_limit, color),
     )
+
+    if apply_scope == "this_and_future":
+        # Update base template for future uninitialized months
+        db.execute(
+            """
+            INSERT INTO budgets (category, monthly_limit, color)
+            VALUES (?, ?, ?)
+            ON CONFLICT(category) DO UPDATE SET
+                monthly_limit = excluded.monthly_limit,
+                color = excluded.color
+            """,
+            (category, monthly_limit, color),
+        )
+        # Also update any already-initialized future months (> target_month), leaving past months (< target_month) untouched!
+        future_months = db.execute(
+            "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month > ?",
+            (target_month,),
+        ).fetchall()
+        for fm in future_months:
+            db.execute(
+                """
+                INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(budget_month, category) DO UPDATE SET
+                    monthly_limit = excluded.monthly_limit,
+                    color = excluded.color,
+                    is_active = 1
+                """,
+                (fm["budget_month"], category, monthly_limit, color),
+            )
+
     db.commit()
-    row = dict(db.execute("SELECT * FROM budgets WHERE category = ?", (category,)).fetchone())
+    row = dict(
+        db.execute(
+            "SELECT * FROM monthly_budgets WHERE budget_month = ? AND category = ?",
+            (target_month, category),
+        ).fetchone()
+    )
     return jsonify(row), 201
 
 
 @finance_bp.route("/budgets/<int:budget_id>", methods=["DELETE"])
 def delete_budget(budget_id: int):
+    """
+    Removes/cancels a budget category in `month` (e.g. when cancelling Netflix).
+    `apply_scope`:
+      - 'this_and_future' (default): removes from `month` and future months, while keeping it in historical months `< month`!
+      - 'only_this_month': removes from `month` only.
+    """
     db = get_db()
-    db.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
+    apply_scope = request.args.get("apply_scope", "this_and_future")
+
+    mb_row = db.execute("SELECT * FROM monthly_budgets WHERE id = ?", (budget_id,)).fetchone()
+    if mb_row:
+        target_month = mb_row["budget_month"]
+        category = mb_row["category"]
+        db.execute("UPDATE monthly_budgets SET is_active = 0 WHERE id = ?", (budget_id,))
+        if apply_scope == "this_and_future":
+            db.execute("DELETE FROM budgets WHERE category = ?", (category,))
+            db.execute(
+                "UPDATE monthly_budgets SET is_active = 0 WHERE category = ? AND budget_month >= ?",
+                (category, target_month),
+            )
+    else:
+        # Fallback if deleting by base budgets id
+        b_row = db.execute("SELECT * FROM budgets WHERE id = ?", (budget_id,)).fetchone()
+        if b_row:
+            db.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
+            db.execute(
+                "UPDATE monthly_budgets SET is_active = 0 WHERE category = ?",
+                (b_row["category"],),
+            )
+
     db.commit()
     return jsonify({"deleted": True, "id": budget_id})

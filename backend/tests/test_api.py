@@ -310,3 +310,92 @@ def test_monthly_budget_separation_category_reassignment_and_month_allocation(cl
     assert shift_oct_to_nov["budget_month"] == "2026-11"
     assert client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()["total_monthly_spent"] == 120.0
 
+
+def test_per_month_budget_cancellation_history_sync_pulse_and_plaid_dismiss(client):
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    token = p_res.get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Check initial sync-pulse state_version
+    pulse_1 = client.get("/api/sync-pulse", headers=headers).get_json()
+    v1 = pulse_1["state_version"]
+
+    # 2. Add a "Netflix" budget starting in 2026-09 ($22.99/mo) for 2026-09 & future months
+    client.post(
+        "/api/finance/budgets",
+        headers=headers,
+        json={
+            "category": "Netflix",
+            "monthly_limit": 22.99,
+            "budget_month": "2026-09",
+            "apply_scope": "this_and_future",
+        },
+    )
+
+    # Verify state_version incremented for real-time partner reactivity
+    pulse_2 = client.get("/api/sync-pulse", headers=headers).get_json()
+    assert pulse_2["state_version"] > v1
+
+    # Materialize 2026-09, 2026-10, and 2026-11
+    sep_sum = client.get("/api/finance/summary?month=2026-09", headers=headers).get_json()
+    oct_sum = client.get("/api/finance/summary?month=2026-10", headers=headers).get_json()
+    nov_sum = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    assert any(b["category"] == "Netflix" for b in sep_sum["budgets"])
+    assert any(b["category"] == "Netflix" for b in oct_sum["budgets"])
+    nov_netflix = next(b for b in nov_sum["budgets"] if b["category"] == "Netflix")
+
+    # 3. Cancel "Netflix" starting in 2026-11 (this_and_future) -> must disappear in 2026-11 & 2026-12,
+    #    but remain preserved in historical months 2026-09 and 2026-10!
+    del_res = client.delete(
+        f"/api/finance/budgets/{nov_netflix['id']}?month=2026-11&category=Netflix&apply_scope=this_and_future",
+        headers=headers,
+    )
+    assert del_res.status_code == 200
+
+    sep_after = client.get("/api/finance/summary?month=2026-09", headers=headers).get_json()
+    oct_after = client.get("/api/finance/summary?month=2026-10", headers=headers).get_json()
+    nov_after = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    dec_after = client.get("/api/finance/summary?month=2026-12", headers=headers).get_json()
+
+    assert any(b["category"] == "Netflix" for b in sep_after["budgets"])
+    assert any(b["category"] == "Netflix" for b in oct_after["budgets"])
+    assert not any(b["category"] == "Netflix" for b in nov_after["budgets"])
+    assert not any(b["category"] == "Netflix" for b in dec_after["budgets"])
+
+    # 4. Check Historical Months endpoint (/api/finance/history)
+    hist_res = client.get("/api/finance/history", headers=headers)
+    assert hist_res.status_code == 200
+    hist_data = hist_res.get_json()
+    months_map = {m["budget_month"]: m for m in hist_data["history"]}
+    assert "2026-09" in months_map
+    assert "2026-10" in months_map
+    assert "2026-11" in months_map
+    assert any(c["category"] == "Netflix" for c in months_map["2026-09"]["categories"])
+    assert any(c["category"] == "Netflix" for c in months_map["2026-10"]["categories"])
+    assert not any(c["category"] == "Netflix" for c in months_map["2026-11"]["categories"])
+
+    # 5. Test persistent Plaid banner dismissal
+    p_status_before = client.get("/api/finance/plaid/status", headers=headers).get_json()
+    assert p_status_before["banner_dismissed"] is False
+
+    dismiss_res = client.post(
+        "/api/finance/plaid/dismiss-banner",
+        headers=headers,
+        json={"dismissed": True},
+    )
+    assert dismiss_res.status_code == 200
+    assert dismiss_res.get_json()["banner_dismissed"] is True
+
+    p_status_after = client.get("/api/finance/plaid/status", headers=headers).get_json()
+    assert p_status_after["banner_dismissed"] is True
+
+

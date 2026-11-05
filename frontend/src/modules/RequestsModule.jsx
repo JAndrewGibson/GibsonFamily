@@ -25,7 +25,7 @@ const CATEGORIES = [
   'Hobbies & Gear',
 ];
 
-export default function RequestsModule({ activePartner, partners, onDataChanged }) {
+export default function RequestsModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('all');
@@ -52,19 +52,25 @@ export default function RequestsModule({ activePartner, partners, onDataChanged 
   // Comment input map
   const [commentInputs, setCommentInputs] = useState({});
 
-  const loadRequests = async () => {
-    setLoading(true);
+  const loadRequests = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const data = await apiFetch('/api/requests');
       setRequests(data.requests || []);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRequests();
+    loadRequests(false);
   }, []);
+
+  useEffect(() => {
+    if (syncVersion > 1) {
+      loadRequests(true);
+    }
+  }, [syncVersion]);
 
   const otherPartner =
     partners.find((p) => p.id !== activePartner?.id) || partners[0] || { id: 1, name: 'Partner' };
@@ -106,7 +112,7 @@ export default function RequestsModule({ activePartner, partners, onDataChanged 
     setPlanSaved(req.saved_amount || 0);
     setDecisionNotes(
       req.decision_notes ||
-        `Let's budget $${req.proposed_monthly_contribution || Math.ceil(req.amount / 3)}/mo so we can buy this comfortably!`
+      `Let's budget $${req.proposed_monthly_contribution || Math.ceil(req.amount / 3)}/mo so we can buy this comfortably!`
     );
   };
 

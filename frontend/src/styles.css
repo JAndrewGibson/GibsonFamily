@@ -1427,4 +1427,266 @@ body {
   border-radius: 6px;
 }
 
+/* Live Partner Sync Pill */
+.live-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  transition: all 0.25s ease;
+}
+
+.live-sync-pill.pulsing {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: #22d3ee;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.45);
+}
+
+/* Month Navigation Card & Ribbon */
+.month-navigation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.view-mode-segmented {
+  display: inline-flex;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.18rem;
+  gap: 0.2rem;
+}
+
+.segmented-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0.36rem 0.75rem;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.segmented-btn:hover {
+  color: var(--text-main);
+}
+
+.segmented-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.month-ribbon-pills {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.month-ribbon-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.month-ribbon-pill:hover {
+  border-color: var(--primary);
+  color: var(--text-main);
+}
+
+.month-ribbon-pill.active {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.month-now-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+}
+
+/* Category Budgets Sort & Cancel Controls */
+.budget-sort-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.budget-sort-select {
+  width: auto;
+  min-width: 175px;
+  cursor: pointer;
+}
+
+.btn-icon-subtle {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-icon-subtle:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.budget-cancel-drawer {
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+/* Transaction Row Hamburger Menu Popover */
+.tx-hamburger-cell {
+  position: relative;
+}
+
+.tx-hamburger-btn.active {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.tx-hamburger-popover {
+  position: absolute;
+  right: 0.75rem;
+  top: calc(100% - 4px);
+  width: 280px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.65);
+  padding: 0.55rem;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+}
+
+.tx-popover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
+}
+
+.tx-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tx-popover-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tx-popover-danger {
+  color: #fca5a5;
+}
+
+.tx-popover-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.tx-popover-month-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.tx-popover-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+
+/* Historical Months Overview Grid */
+.history-months-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1rem;
+}
+
+.history-month-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  background: var(--bg-panel);
+}
+
+.history-month-card.selected-month-card {
+  border-color: var(--primary);
+}
+
+.history-cat-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+}
+
+.history-cat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #d1d5db;
+}
+
+
 
