@@ -399,3 +399,152 @@ def test_per_month_budget_cancellation_history_sync_pulse_and_plaid_dismiss(clie
     assert p_status_after["banner_dismissed"] is True
 
 
+def test_income_fluctuations_under_review_requests_and_mobile_push(client):
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    p_data = p_res.get_json()
+    alex_id = p_data["partners"][0]["id"]
+    jordan_id = p_data["partners"][1]["id"]
+    alex_headers = {"Authorization": f"Bearer {p_data['token']}"}
+
+    jordan_login = client.post(
+        "/api/auth/login",
+        json={"email": "jordan@gibson.local", "partner_id": jordan_id, "password": "ValidPassword123!"},
+    ).get_json()
+    jordan_headers = {"Authorization": f"Bearer {jordan_login['token']}"}
+
+    # 1. Log October income ($5,000 actual, $5,000 expected) and November income ($5,750 actual, $5,200 expected)
+    inc_oct = client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "partner_id": alex_id,
+            "source_name": "Alex Salary",
+            "amount": 5000.0,
+            "expected_monthly_amount": 5000.0,
+            "income_type": "paycheck",
+            "date": "2026-10-15",
+            "budget_month": "2026-10",
+        },
+    )
+    assert inc_oct.status_code == 201
+
+    inc_nov_1 = client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "partner_id": alex_id,
+            "source_name": "Alex Salary",
+            "amount": 5000.0,
+            "expected_monthly_amount": 5000.0,
+            "income_type": "paycheck",
+            "date": "2026-11-15",
+            "budget_month": "2026-11",
+        },
+    )
+    assert inc_nov_1.status_code == 201
+
+    inc_nov_2 = client.post(
+        "/api/finance/income",
+        headers=jordan_headers,
+        json={
+            "partner_id": jordan_id,
+            "source_name": "Jordan Q4 Commission",
+            "amount": 750.0,
+            "expected_monthly_amount": 200.0,
+            "income_type": "variable",
+            "date": "2026-11-20",
+            "budget_month": "2026-11",
+        },
+    )
+    assert inc_nov_2.status_code == 201
+
+    # Verify November income & fluctuation metrics in /api/finance/summary?month=2026-11
+    nov_summary = client.get("/api/finance/summary?month=2026-11", headers=alex_headers).get_json()
+    assert nov_summary["total_monthly_income"] == 5750.0
+    assert nov_summary["expected_monthly_income"] == 5200.0
+    assert nov_summary["previous_month_income"] == 5000.0
+    assert nov_summary["income_fluctuation_vs_prev"] == 750.0
+    assert nov_summary["income_fluctuation_vs_prev_pct"] == 15.0
+    assert nov_summary["income_fluctuation_vs_expected"] == 550.0
+    assert len(nov_summary["income_entries"]) == 2
+
+    # Verify /api/finance/history includes monthly income & fluctuation fields
+    hist = client.get("/api/finance/history", headers=alex_headers).get_json()
+    nov_hist = next(m for m in hist["history"] if m["budget_month"] == "2026-11")
+    assert nov_hist["total_income"] == 5750.0
+    assert nov_hist["income_fluctuation_delta"] == 750.0
+    assert nov_hist["income_fluctuation_pct"] == 15.0
+
+    # 2. Purchase Request with "Under Review" (under_review) status
+    req_res = client.post(
+        "/api/requests",
+        headers=alex_headers,
+        json={
+            "requester_id": alex_id,
+            "reviewer_id": jordan_id,
+            "title": "Espresso Machine",
+            "amount": 599.0,
+            "category": "Home & Lifestyle",
+        },
+    )
+    assert req_res.status_code == 201
+    req_id = req_res.get_json()["id"]
+
+    # Jordan marks the request as "under_review"
+    ur_res = client.post(
+        f"/api/requests/{req_id}/decision",
+        headers=jordan_headers,
+        json={
+            "partner_id": jordan_id,
+            "status": "under_review",
+            "decision_notes": "Checking how our November commission looks first!",
+        },
+    )
+    assert ur_res.status_code == 200
+    ur_data = ur_res.get_json()
+    assert ur_data["status"] == "under_review"
+    assert any(c["action_type"] == "under_review" for c in ur_data["comments"])
+
+    # Overview counts under_review_requests
+    ov = client.get("/api/overview", headers=alex_headers).get_json()
+    assert ov["under_review_requests"] == 1
+    assert ov["pending_requests"] == 1  # active pending + under_review
+
+    # Alex received a notification about "Under Review"
+    alex_notifs = client.get("/api/notifications", headers=alex_headers).get_json()["notifications"]
+    assert any("Under Review: Espresso Machine" in n["title"] for n in alex_notifs)
+
+    # 3. Mobile Push Notification Registration & Test Alert Endpoints
+    push_init = client.get("/api/notifications/push-status", headers=alex_headers).get_json()
+    assert push_init["subscribed"] is False
+
+    sub_res = client.post(
+        "/api/notifications/push-subscribe",
+        headers=alex_headers,
+        json={
+            "device_label": "iPhone / iOS Device",
+            "subscription": {
+                "endpoint": "https://push.example.com/sub/alex-iphone",
+                "keys": {"p256dh": "test-p256dh-key", "auth": "test-auth-key"},
+            },
+        },
+    )
+    assert sub_res.status_code == 201
+    assert sub_res.get_json()["subscribed"] is True
+
+    test_push = client.post("/api/notifications/push-test", headers=alex_headers)
+    assert test_push.status_code == 201
+    assert test_push.get_json()["sent"] is True
+    assert test_push.get_json()["notification"]["notif_type"] == "push_test"
+
+
+

@@ -97,6 +97,99 @@ def delete_notification(notif_id: int):
     return jsonify({"deleted": True, "id": notif_id})
 
 
+# --- Mobile Push Notifications Registration & Test Endpoints ---
+
+@hub_bp.route("/notifications/push-status", methods=["GET"])
+def get_push_status():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"subscribed": False, "subscriptions": []})
+    db = get_db()
+    rows = [
+        dict(r)
+        for r in db.execute(
+            "SELECT id, partner_id, endpoint, device_label, enabled, created_at, updated_at FROM push_subscriptions WHERE partner_id = ? AND enabled = 1 ORDER BY id DESC",
+            (actor["id"],),
+        ).fetchall()
+    ]
+    return jsonify({
+        "subscribed": len(rows) > 0,
+        "subscriptions": rows,
+    })
+
+
+@hub_bp.route("/notifications/push-subscribe", methods=["POST"])
+def subscribe_push_notifications():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    sub = data.get("subscription") or {}
+    keys = sub.get("keys") or {}
+    endpoint = (
+        sub.get("endpoint")
+        or data.get("endpoint")
+        or f"mobile-sw://{actor['id']}/{ (request.headers.get('User-Agent') or 'device')[:48] }"
+    ).strip()
+    p256dh = (keys.get("p256dh") or data.get("p256dh") or "").strip()
+    auth_key = (keys.get("auth") or data.get("auth") or "").strip()
+    device_label = (data.get("device_label") or "Mobile Device").strip()
+    user_agent = (request.headers.get("User-Agent") or "")[:250]
+    enabled = 0 if data.get("enabled") is False else 1
+
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO push_subscriptions (partner_id, endpoint, p256dh, auth, device_label, user_agent, enabled, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(endpoint) DO UPDATE SET
+            partner_id = excluded.partner_id,
+            p256dh = excluded.p256dh,
+            auth = excluded.auth,
+            device_label = excluded.device_label,
+            user_agent = excluded.user_agent,
+            enabled = excluded.enabled,
+            updated_at = datetime('now')
+        """,
+        (actor["id"], endpoint, p256dh, auth_key, device_label, user_agent, enabled),
+    )
+    db.commit()
+
+    rows = [
+        dict(r)
+        for r in db.execute(
+            "SELECT id, partner_id, endpoint, device_label, enabled, created_at, updated_at FROM push_subscriptions WHERE partner_id = ? AND enabled = 1 ORDER BY id DESC",
+            (actor["id"],),
+        ).fetchall()
+    ]
+    return jsonify({
+        "subscribed": len(rows) > 0,
+        "subscriptions": rows,
+    }), 201
+
+
+@hub_bp.route("/notifications/push-test", methods=["POST"])
+def send_test_push_notification():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+
+    db = get_db()
+    title = "Mobile Push Alerts Active"
+    message = f"Hi {actor['name']}! Push alerts are active for purchase requests, under-review updates, and budget milestones."
+    cur = db.execute(
+        """
+        INSERT INTO notifications (recipient_partner_id, actor_partner_id, notif_type, title, message, link_tab, is_read)
+        VALUES (?, ?, 'push_test', ?, ?, 'overview', 0)
+        """,
+        (actor["id"], actor["id"], title, message),
+    )
+    db.commit()
+    notif = dict(db.execute("SELECT * FROM notifications WHERE id = ?", (cur.lastrowid,)).fetchone())
+    return jsonify({"sent": True, "notification": notif}), 201
+
+
 # --- Couples Admin & Medical Paperwork ---
 
 @hub_bp.route("/hub/admin-records", methods=["GET"])

@@ -202,3 +202,57 @@ export async function authenticateWithPasskey(partnerId) {
   }
   return res;
 }
+
+/**
+ * Registers the Service Worker (/sw.js) for mobile push notifications.
+ */
+export async function registerServiceWorker() {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+    return null;
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    return reg;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Triggers a native notification on mobile (via ServiceWorkerRegistration.showNotification)
+ * with graceful fallback to the desktop Notification constructor.
+ */
+export async function showMobileNativeNotification(title, body, linkTab = 'overview') {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return false;
+  }
+  if (window.Notification.permission !== 'granted') {
+    return false;
+  }
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await registerServiceWorker();
+      const activeReg = reg || (await navigator.serviceWorker.ready);
+      if (activeReg && typeof activeReg.showNotification === 'function') {
+        await activeReg.showNotification(title, {
+          body: body || '',
+          tag: `gibson-alert-${Date.now()}`,
+          renotify: true,
+          vibrate: [180, 90, 180],
+          data: { link_tab: linkTab, url: '/' },
+        });
+        return true;
+      }
+    }
+  } catch {
+    // Fallback below
+  }
+
+  try {
+    new window.Notification(title, { body: body || '' });
+    return true;
+  } catch {
+    return false;
+  }
+}

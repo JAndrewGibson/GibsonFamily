@@ -119,7 +119,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         })
 
     def _build_overview_payload(db, actor):
-        pending_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'pending'").fetchone()["cnt"]
+        pending_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status IN ('pending', 'under_review')").fetchone()["cnt"]
+        under_review_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'under_review'").fetchone()["cnt"]
         planned_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'budget_planned'").fetchone()["cnt"]
         open_todos = db.execute("SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0").fetchone()["cnt"]
         unchecked_groceries = db.execute("SELECT COUNT(*) AS cnt FROM grocery_items WHERE checked = 0").fetchone()["cnt"]
@@ -134,6 +135,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         return {
             "state_version": state_version,
             "pending_requests": pending_reqs,
+            "under_review_requests": under_review_reqs,
             "planned_requests": planned_reqs,
             "open_todos": open_todos,
             "unchecked_groceries": unchecked_groceries,

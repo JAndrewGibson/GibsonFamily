@@ -228,9 +228,37 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
     imported_txs = 0
     for tx in tx_data.get("added", [])[:100]:
         amount = float(tx.get("amount") or 0.0)
-        if amount <= 0:
-            continue
         pfc = (tx.get("personal_finance_category") or {}).get("primary", "")
+        local_acc_id = account_id_map.get(tx.get("account_id"))
+        tx_date = tx.get("date") or date.today().isoformat()
+        tx_budget_month = tx_date[:7]
+
+        # In Plaid, negative amounts or INCOME primary category represent deposits/income
+        if amount < 0 or pfc == "INCOME":
+            inc_amt = round(abs(amount), 2)
+            if inc_amt > 0:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO income_entries
+                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, is_recurring, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'paycheck', 1, 'Synced from Plaid')
+                    """,
+                    (
+                        partner_id,
+                        local_acc_id,
+                        tx.get("transaction_id"),
+                        tx_date,
+                        tx_budget_month,
+                        tx.get("merchant_name") or tx.get("name") or "Plaid Deposit",
+                        inc_amt,
+                        inc_amt,
+                    ),
+                )
+            continue
+
+        if amount == 0:
+            continue
+
         category_map = {
             "FOOD_AND_DRINK": "Groceries & Dining",
             "GENERAL_MERCHANDISE": "Shopping & Tech",
@@ -240,9 +268,6 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
             "TRAVEL": "Travel & Experiences",
         }
         mapped_cat = category_map.get(pfc, "Shopping & Tech")
-        local_acc_id = account_id_map.get(tx.get("account_id"))
-        tx_date = tx.get("date") or date.today().isoformat()
-        tx_budget_month = tx_date[:7]
 
         db.execute(
             """
@@ -443,10 +468,64 @@ def finance_summary():
         if tx.get("category"):
             tx_categories.add(tx["category"])
 
-    # Also include any months from monthly_budgets
+    # Also include any months from monthly_budgets and income_entries
     for mb_row in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
         if mb_row["budget_month"]:
             month_set.add(mb_row["budget_month"])
+
+    all_income_entries = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT i.*,
+                   COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) AS effective_budget_month,
+                   p.name AS partner_name,
+                   p.avatar_color AS partner_color,
+                   a.name AS account_name
+            FROM income_entries i
+            LEFT JOIN partners p ON i.partner_id = p.id
+            LEFT JOIN accounts a ON i.account_id = a.id
+            ORDER BY i.date DESC, i.id DESC
+            """
+        ).fetchall()
+    ]
+
+    income_by_month = {}
+    expected_by_month = {}
+    for inc in all_income_entries:
+        ym = inc["effective_budget_month"]
+        inc["budget_month"] = ym
+        if ym:
+            month_set.add(ym)
+            amt = float(inc["amount"] or 0.0)
+            exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
+            income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
+            expected_by_month[ym] = expected_by_month.get(ym, 0.0) + exp
+
+    month_income_entries = [inc for inc in all_income_entries if inc["budget_month"] == selected_month]
+    prev_ym = _shift_year_month(selected_month, -1)
+
+    total_monthly_income = round(income_by_month.get(selected_month, 0.0), 2)
+    previous_month_income = round(income_by_month.get(prev_ym, 0.0), 2)
+    active_income_months = [v for v in income_by_month.values() if v > 0]
+    average_monthly_income = (
+        round(sum(active_income_months) / len(active_income_months), 2)
+        if active_income_months
+        else 0.0
+    )
+    expected_monthly_income = round(
+        expected_by_month.get(selected_month, average_monthly_income or previous_month_income),
+        2,
+    )
+
+    income_fluctuation_vs_prev = round(total_monthly_income - previous_month_income, 2)
+    income_fluctuation_vs_prev_pct = (
+        round((income_fluctuation_vs_prev / previous_month_income) * 100, 1)
+        if previous_month_income > 0
+        else 0.0
+    )
+    income_fluctuation_vs_expected = round(total_monthly_income - expected_monthly_income, 2)
+    income_fluctuation_vs_avg = round(total_monthly_income - average_monthly_income, 2)
 
     month_transactions = [
         tx for tx in all_transactions if tx["budget_month"] == selected_month
@@ -487,10 +566,14 @@ def finance_summary():
         dict.fromkeys(all_budget_cats + sorted(tx_categories) + DEFAULT_CATEGORIES)
     )
 
+    total_monthly_spent = round(sum(float(t["amount"]) for t in month_transactions), 2)
+    net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
+    unallocated_income = round(total_monthly_income - total_budget_limit, 2)
+
     return jsonify({
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
-        "previous_month": _shift_year_month(selected_month, -1),
+        "previous_month": prev_ym,
         "next_month": _shift_year_month(selected_month, 1),
         "available_months": sorted(month_set, reverse=True),
         "all_categories": all_categories,
@@ -498,8 +581,19 @@ def finance_summary():
         "credit_balance": round(total_credit_used, 2),
         "net_liquid": round(total_cash - total_credit_used, 2),
         "total_monthly_budget": round(total_budget_limit, 2),
-        "total_monthly_spent": round(sum(float(t["amount"]) for t in month_transactions), 2),
+        "total_monthly_spent": total_monthly_spent,
         "budgeted_categories_spent": round(total_budget_spent, 2),
+        "total_monthly_income": total_monthly_income,
+        "expected_monthly_income": expected_monthly_income,
+        "previous_month_income": previous_month_income,
+        "average_monthly_income": average_monthly_income,
+        "income_fluctuation_vs_prev": income_fluctuation_vs_prev,
+        "income_fluctuation_vs_prev_pct": income_fluctuation_vs_prev_pct,
+        "income_fluctuation_vs_expected": income_fluctuation_vs_expected,
+        "income_fluctuation_vs_avg": income_fluctuation_vs_avg,
+        "net_monthly_cashflow": net_monthly_cashflow,
+        "unallocated_income": unallocated_income,
+        "income_entries": all_income_entries if include_all else month_income_entries,
         "accounts": accounts,
         "budgets": enriched_budgets,
         "transactions": all_transactions if include_all else month_transactions,
@@ -528,6 +622,18 @@ def finance_history():
         ).fetchall()
     ]
 
+    all_incomes = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT i.*,
+                   COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) AS effective_budget_month
+            FROM income_entries i
+            ORDER BY i.date DESC
+            """
+        ).fetchall()
+    ]
+
     months_set = {
         _shift_year_month(current_ym, -2),
         _shift_year_month(current_ym, -1),
@@ -536,9 +642,21 @@ def finance_history():
     for tx in all_txs:
         if tx["effective_budget_month"]:
             months_set.add(tx["effective_budget_month"])
+    for inc in all_incomes:
+        if inc["effective_budget_month"]:
+            months_set.add(inc["effective_budget_month"])
     for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
         if mb["budget_month"]:
             months_set.add(mb["budget_month"])
+
+    income_totals_by_month = {}
+    expected_totals_by_month = {}
+    for inc in all_incomes:
+        ym = inc["effective_budget_month"]
+        amt = float(inc["amount"] or 0.0)
+        exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
+        income_totals_by_month[ym] = income_totals_by_month.get(ym, 0.0) + amt
+        expected_totals_by_month[ym] = expected_totals_by_month.get(ym, 0.0) + exp
 
     sorted_months = sorted(months_set, reverse=True)
     history_list = []
@@ -546,6 +664,7 @@ def finance_history():
     for ym in sorted_months:
         m_budgets = _ensure_monthly_budgets_for_month(db, ym)
         m_txs = [tx for tx in all_txs if tx["effective_budget_month"] == ym]
+        m_incomes = [inc for inc in all_incomes if inc["effective_budget_month"] == ym]
 
         spend_by_cat = {}
         for tx in m_txs:
@@ -554,6 +673,12 @@ def finance_history():
 
         total_spent = round(sum(float(tx["amount"]) for tx in m_txs), 2)
         total_limit = round(sum(float(b["monthly_limit"]) for b in m_budgets), 2)
+        total_income = round(income_totals_by_month.get(ym, 0.0), 2)
+        expected_income = round(expected_totals_by_month.get(ym, 0.0), 2)
+        prev_ym = _shift_year_month(ym, -1)
+        prev_income = round(income_totals_by_month.get(prev_ym, 0.0), 2)
+        inc_delta = round(total_income - prev_income, 2)
+        inc_delta_pct = round((inc_delta / prev_income) * 100, 1) if prev_income > 0 else 0.0
 
         cat_breakdown = []
         seen_cats = set()
@@ -589,6 +714,12 @@ def finance_history():
             "budget_month": ym,
             "total_spent": total_spent,
             "total_budget": total_limit,
+            "total_income": total_income,
+            "expected_income": expected_income,
+            "net_cashflow": round(total_income - total_spent, 2),
+            "income_fluctuation_delta": inc_delta,
+            "income_fluctuation_pct": inc_delta_pct,
+            "income_count": len(m_incomes),
             "net_variance": round(total_limit - total_spent, 2),
             "utilization_pct": round((total_spent / total_limit) * 100, 1) if total_limit > 0 else 0.0,
             "transaction_count": len(m_txs),
@@ -596,6 +727,95 @@ def finance_history():
         })
 
     return jsonify({"history": history_list})
+
+
+@finance_bp.route("/income", methods=["POST"])
+def create_income_entry():
+    data = request.get_json(silent=True) or {}
+    source_name = (data.get("source_name") or "").strip()
+    amount = float(data.get("amount", 0))
+    if not source_name or amount <= 0:
+        return jsonify({"error": "Source name and positive income amount are required"}), 400
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = data.get("partner_id") or (actor["id"] if actor else None)
+    account_id = data.get("account_id")
+
+    inc_date = (data.get("date") or date.today().isoformat()).strip()
+    date_ym = inc_date[:7]
+    explicit_bm = (data.get("budget_month") or "").strip()[:7]
+    budget_month = explicit_bm if len(explicit_bm) == 7 else date_ym
+
+    expected_raw = data.get("expected_monthly_amount")
+    expected_amt = (
+        round(float(expected_raw), 2)
+        if expected_raw is not None and str(expected_raw).strip() != ""
+        else round(amount, 2)
+    )
+    income_type = (data.get("income_type") or "paycheck").strip()
+    is_recurring = 1 if data.get("is_recurring", True) else 0
+    notes = (data.get("notes") or "").strip()
+
+    db = get_db()
+    cur = db.execute(
+        """
+        INSERT INTO income_entries
+        (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, is_recurring, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(partner_id) if partner_id else None,
+            int(account_id) if account_id else None,
+            inc_date,
+            budget_month,
+            source_name,
+            round(amount, 2),
+            expected_amt,
+            income_type,
+            is_recurring,
+            notes,
+        ),
+    )
+    db.commit()
+    row = dict(db.execute("SELECT * FROM income_entries WHERE id = ?", (cur.lastrowid,)).fetchone())
+    return jsonify(row), 201
+
+
+@finance_bp.route("/income/<int:income_id>", methods=["PUT"])
+def update_income_entry(income_id: int):
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    existing = db.execute("SELECT * FROM income_entries WHERE id = ?", (income_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Income entry not found"}), 404
+
+    source_name = (data.get("source_name") or existing["source_name"]).strip()
+    amount = round(float(data.get("amount", existing["amount"])), 2)
+    expected_raw = data.get("expected_monthly_amount", existing["expected_monthly_amount"])
+    expected_amt = round(float(expected_raw), 2) if expected_raw is not None and str(expected_raw) != "" else amount
+    income_type = (data.get("income_type") or existing["income_type"]).strip()
+    budget_month = (data.get("budget_month") or existing["budget_month"] or existing["date"][:7]).strip()[:7]
+    notes = data.get("notes", existing["notes"])
+
+    db.execute(
+        """
+        UPDATE income_entries
+        SET source_name = ?, amount = ?, expected_monthly_amount = ?, income_type = ?, budget_month = ?, notes = ?
+        WHERE id = ?
+        """,
+        (source_name, amount, expected_amt, income_type, budget_month, notes, income_id),
+    )
+    db.commit()
+    updated = dict(db.execute("SELECT * FROM income_entries WHERE id = ?", (income_id,)).fetchone())
+    return jsonify(updated)
+
+
+@finance_bp.route("/income/<int:income_id>", methods=["DELETE"])
+def delete_income_entry(income_id: int):
+    db = get_db()
+    db.execute("DELETE FROM income_entries WHERE id = ?", (income_id,))
+    db.commit()
+    return jsonify({"deleted": True, "id": income_id})
 
 
 @finance_bp.route("/accounts", methods=["POST"])

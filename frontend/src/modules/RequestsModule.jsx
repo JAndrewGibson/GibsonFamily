@@ -5,6 +5,7 @@ import {
   Clock,
   DollarSign,
   ExternalLink,
+  Eye,
   Gamepad2,
   MessageSquare,
   PiggyBank,
@@ -175,6 +176,8 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
     switch (status) {
       case 'pending':
         return <span className="pill pill-amber">Awaiting Partner Decision</span>;
+      case 'under_review':
+        return <span className="pill pill-purple">Under Review</span>;
       case 'budget_planned':
         return <span className="pill pill-cyan">Budget & Timeline Active</span>;
       case 'approved':
@@ -326,6 +329,10 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
           {
             id: 'pending',
             label: `Needs Decision (${requests.filter((r) => r.status === 'pending').length})`,
+          },
+          {
+            id: 'under_review',
+            label: `Under Review (${requests.filter((r) => r.status === 'under_review').length})`,
           },
           {
             id: 'budget_planned',
@@ -512,6 +519,19 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
                     >
                       <CheckCircle2 size={16} />
                       Approve Now
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() =>
+                        submitDecision(req.id, 'under_review', {
+                          decision_notes: `${activePartner.name} marked this Under Review while we check the monthly budget.`,
+                        })
+                      }
+                    >
+                      <Eye size={16} />
+                      Under Review
                     </button>
 
                     <button

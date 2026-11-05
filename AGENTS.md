@@ -7,9 +7,11 @@ This document is the authoritative engineering reference for AI coding agents an
 ## 1. Core Product Vision & Mobile-First Mandate (99% Mobile Usage)
 
 **GibsonFamily Hub** is a collaborative couples financial & modular life OS built for two partners to:
-- Submit, review, approve/deny, or build monthly savings timelines for partner purchase requests.
+- Submit, review, mark **"Under Review"** (`under_review`), approve/deny, or build monthly savings timelines for partner purchase requests.
 - Plan future household purchases together.
-- Link live bank accounts via **Plaid Production** and track monthly budgets separated on the **1st of each month**, with per-month budget adjustments/cancellations (e.g., cancelling a subscription like Netflix in a later month without erasing it from earlier historical months) and a **Historical Months View**.
+- Link live bank accounts via **Plaid Production** and track monthly budgets separated on the **1st of each month**, with **Income & Income Fluctuation Tracking** (paychecks, variable/commission income, bonuses, and Plaid income deposits), per-month budget adjustments/cancellations (e.g., cancelling a subscription like Netflix in a later month without erasing it from earlier historical months), and a **Historical Months View**.
+- Receive **Mobile Push Notifications** (backed by a Service Worker `/sw.js`, Web App Manifest `/manifest.json`, and an in-app prompt banner to enable/test alerts on phones).
+- Toggle seamlessly between **Dark Mode and Light Mode** (`data-theme="dark" | "light"`, persisted in `gibson_theme` cookie).
 - Manage shared couples life admin (medical paperwork, shared to-do lists, and grocery lists with live basket estimates).
 - Lock/unlock and sign in using **WebAuthn Passkeys** (Face ID, Touch ID, Windows Hello) or account passwords.
 
@@ -51,22 +53,25 @@ GibsonFamily/
 │   └── tests/
 │       └── test_api.py               # Automated pytest suite
 └── frontend/
-    ├── index.html                    # Viewport meta (viewport-fit=cover), theme-color & Plaid Link SDK
+    ├── index.html                    # Viewport meta (viewport-fit=cover), manifest link & Plaid Link SDK
     ├── package.json
     ├── vite.config.js                # Dev proxy (/api -> http://127.0.0.1:5000)
+    ├── public/
+    │   ├── manifest.json             # Web App Manifest for mobile PWA & push notification support
+    │   └── sw.js                     # Service Worker for mobile native push notifications
     └── src/
-        ├── api.js                    # Fetch wrapper, cookie helpers, BroadcastChannel sync & WebAuthn helpers
-        ├── App.jsx                   # Responsive shell, mobile drawer + bottom nav, live partner sync polling
-        ├── styles.css                # Dark theme & mobile-first responsive breakpoints
+        ├── api.js                    # Fetch wrapper, cookie helpers, SW push helpers & WebAuthn helpers
+        ├── App.jsx                   # Responsive shell, Light/Dark theme toggle, mobile drawer + bottom nav
+        ├── styles.css                # Dark & Light themes + mobile-first responsive breakpoints
         ├── components/
         │   ├── LoginScreen.jsx       # Password & WebAuthn Passkey login screen
-        │   ├── NotificationCenter.jsx# Real-time partner notification bell & dropdown
+        │   ├── NotificationCenter.jsx# Notification bell + MobilePushPromptBanner (enable & test push)
         │   ├── OnboardingWizard.jsx  # 4-step first-time setup flow
         │   └── PasskeyLockScreen.jsx # Screen lock overlay & Passkey enrollment modal
         └── modules/
-            ├── RequestsModule.jsx    # Partner financial requests, approvals & timeline builder
+            ├── RequestsModule.jsx    # Partner financial requests (Pending, Under Review, Approved, Timeline, Denied)
             ├── FuturePurchasesModule.jsx # Shared future purchase savings roadmap
-            ├── FinanceModule.jsx     # Plaid link, monthly budgets, historical months & transaction ledger
+            ├── FinanceModule.jsx     # Plaid link, income & fluctuation tracker, monthly budgets & ledger
             └── CouplesHubModule.jsx  # Medical/admin docs, shared to-dos, groceries & module manager
 ```
 
@@ -82,23 +87,34 @@ GibsonFamily/
 
 ### 3.2 Persistent User Preferences & View State (Cookies)
 - Managed via `getCookie` and `setCookie` in `frontend/src/api.js`:
+  - `gibson_theme`: Persists `'dark'` or `'light'` mode (`html[data-theme="light"]` / `html[data-theme="dark"]`).
   - `gibson_active_tab`: Restores the last active module tab across page refreshes.
   - `gibson_finance_month`: Restores the last selected `YYYY-MM` budget month.
   - `gibson_finance_view`: Restores `'monthly'` vs `'history'` view in the Finance module.
   - `gibson_budget_sort`: Persists the user's preferred Category Budgets sort order (`spent_desc`, `utilization_desc`, `remaining_desc`, `limit_desc`, `alpha_asc`, `spent_asc`).
   - `gibson_plaid_banner_dismissed`: Persists dismissal of the Plaid Banking Integration banner (also backed server-side by `app_settings.plaid_banner_dismissed` via `POST /api/finance/plaid/dismiss-banner`).
+  - `gibson_push_enabled` & `gibson_push_prompt_dismissed`: Tracks mobile push notification enablement and prompt banner dismissal.
 
-### 3.3 Monthly Budget Separation (1st of Month), Per-Month Adjustments & Historical Archive
+### 3.3 Monthly Budget Separation (1st of Month), Income Fluctuations & Historical Archive
 - **Transaction Budget Month (`transactions.budget_month`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.
+- **Income & Fluctuation Tracking (`income_entries` table)**:
+  - Stores monthly income (`source_name`, `amount`, `expected_monthly_amount`, `income_type` [`paycheck`, `variable`, `bonus`, `side_income`, `other`], `date`, `budget_month`). Plaid inflows (`amount < 0` or `personal_finance_category.primary == "INCOME"`) are also automatically synced into `income_entries`.
+  - `GET /api/finance/summary` and `GET /api/finance/history` compute `total_monthly_income`, `expected_monthly_income`, `previous_month_income`, `average_monthly_income`, `income_fluctuation_vs_prev` (`$` and `%`), `income_fluctuation_vs_expected`, `net_monthly_cashflow` (`income - spent`), and `unallocated_income` (`income - budget`).
 - **Per-Month Budgets (`monthly_budgets` table)**:
   - Each `YYYY-MM` month materializes its own rows in `monthly_budgets(budget_month, category, monthly_limit, color, is_active)`.
   - Adding, editing, or cancelling a category supports `apply_scope`:
     - `this_and_future`: Updates or deactivates the category for `selected_month` and all future months (`>= selected_month`), while preserving all historical months (`< selected_month`).
     - `only_this_month`: Applies a one-month adjustment to `selected_month` only.
 - **Historical Months View (`GET /api/finance/history`)**:
-  - Returns month-by-month total spend, total budget, net variance, utilization %, and per-category breakdown across all historical and active months.
+  - Returns month-by-month total income, income fluctuation delta/%, total spend, total budget, net cash flow, net budget variance, utilization %, and per-category breakdown across all historical and active months.
+
+### 3.4 Purchase Request Lifecycle & Mobile Push Notifications
+- **Purchase Request Statuses (`purchase_requests.status`)**:
+  - Supports `pending` → `under_review` ("Under Review") → `approved` / `budget_planned` / `denied` via `POST /api/requests/<id>/decision`.
+- **Mobile Push Notifications (`push_subscriptions` table & `/sw.js`)**:
+  - Mobile browsers require `ServiceWorkerRegistration.showNotification()` rather than `new window.Notification()`. `frontend/public/sw.js` and `showMobileNativeNotification()` in `frontend/src/api.js` handle native mobile notification delivery, while `MobilePushPromptBanner` in `NotificationCenter.jsx` prompts users to enable and test push notifications (`GET /api/notifications/push-status`, `POST /api/notifications/push-subscribe`, `POST /api/notifications/push-test`).
 
 ### 3.4 Security & Plaid Production Architecture
 - **Authentication**: All `/api/*` endpoints (except `/api/health`, `/api/auth/setup-status`, `/api/auth/login`, and WebAuthn assertion endpoints) require a valid `gibson_session` `HttpOnly` cookie or `Bearer` token (`backend/app.py`).

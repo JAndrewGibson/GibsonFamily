@@ -85,10 +85,11 @@ def list_requests():
         ORDER BY
             CASE pr.status
                 WHEN 'pending' THEN 1
-                WHEN 'budget_planned' THEN 2
-                WHEN 'approved' THEN 3
-                WHEN 'denied' THEN 4
-                ELSE 5
+                WHEN 'under_review' THEN 2
+                WHEN 'budget_planned' THEN 3
+                WHEN 'approved' THEN 4
+                WHEN 'denied' THEN 5
+                ELSE 6
             END,
             pr.id DESC
         """
@@ -218,8 +219,10 @@ def delete_request(req_id: int):
 def decide_request(req_id: int):
     data = request.get_json(silent=True) or {}
     action = data.get("status") or data.get("action")
-    if action not in ("approved", "denied", "budget_planned", "pending", "purchased"):
-        return jsonify({"error": "Invalid decision status. Must be approved, denied, budget_planned, or purchased."}), 400
+    if action not in ("approved", "denied", "budget_planned", "under_review", "pending", "purchased"):
+        return jsonify({
+            "error": "Invalid decision status. Must be approved, under_review, denied, budget_planned, pending, or purchased."
+        }), 400
 
     db = get_db()
     existing = db.execute("SELECT * FROM purchase_requests WHERE id = ?", (req_id,)).fetchone()
@@ -261,12 +264,14 @@ def decide_request(req_id: int):
 
     action_type_map = {
         "approved": "approve",
+        "under_review": "under_review",
         "denied": "deny",
         "budget_planned": "propose_plan",
         "purchased": "approve",
     }
     log_text = decision_notes or {
         "approved": "Approved this purchase request!",
+        "under_review": "Marked this purchase request as Under Review.",
         "denied": "Declined this purchase request for now.",
         "budget_planned": f"Set up a budget & timeline: ${monthly_contrib or 0:.0f}/mo targeting {target_date or 'flexible date'}.",
         "purchased": "Marked as purchased!",
@@ -327,6 +332,7 @@ def decide_request(req_id: int):
     if notify_target and notify_target != partner_id:
         status_label = {
             "approved": "Approved",
+            "under_review": "Under Review",
             "denied": "Placed on Hold / Denied",
             "budget_planned": "Budget & Timeline Proposed",
             "purchased": "Marked Purchased",

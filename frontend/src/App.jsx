@@ -10,15 +10,17 @@ import {
   Lock,
   LogOut,
   Menu,
+  Moon,
   Radio,
   ShoppingCart,
+  Sun,
   Wallet,
   X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setAuthToken, setCookie } from './api';
 import OnboardingWizard from './components/OnboardingWizard';
 import LoginScreen from './components/LoginScreen';
-import NotificationCenter from './components/NotificationCenter';
+import NotificationCenter, { MobilePushPromptBanner } from './components/NotificationCenter';
 import PasskeyLockScreen from './components/PasskeyLockScreen';
 import RequestsModule from './modules/RequestsModule';
 import FuturePurchasesModule from './modules/FuturePurchasesModule';
@@ -86,6 +88,39 @@ export default function App() {
   const [showPasskeyModal, setShowPasskeyModal] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [syncVersion, setSyncVersion] = useState(1);
+
+  const [theme, setThemeState] = useState(() => {
+    const saved = getCookie('gibson_theme', '');
+    if (saved === 'light' || saved === 'dark') return saved;
+    try {
+      const local = window.localStorage.getItem('gibson_theme');
+      if (local === 'light' || local === 'dark') return local;
+    } catch {
+      // ignore
+    }
+    return 'dark';
+  });
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', theme);
+      const metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        metaTheme.setAttribute('content', theme === 'light' ? '#f8fafc' : '#0b0f19');
+      }
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setThemeState(next);
+    setCookie('gibson_theme', next, 365);
+    try {
+      window.localStorage.setItem('gibson_theme', next);
+    } catch {
+      // ignore
+    }
+  };
 
   const selectTab = (tab) => {
     setActiveTab(tab);
@@ -355,6 +390,14 @@ export default function App() {
           </button>
           <button
             type="button"
+            className="nav-item"
+            onClick={toggleTheme}
+          >
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            <span>{theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}</span>
+          </button>
+          <button
+            type="button"
             className="nav-item mobile-only-nav-item"
             onClick={() => {
               setMobileDrawerOpen(false);
@@ -422,6 +465,17 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm theme-toggle-btn"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+              <span className="hide-on-mobile">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
+
             <NotificationCenter
               onNavigateTab={(tab) => selectTab(tab)}
               syncVersion={syncVersion}
@@ -458,6 +512,7 @@ export default function App() {
 
         {!isLocked && (
           <main className="content-scroll">
+            <MobilePushPromptBanner currentPartner={activePartner} />
             {activeTab === 'requests' && (
               <RequestsModule
                 activePartner={activePartner}

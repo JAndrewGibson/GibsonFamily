@@ -134,6 +134,38 @@ CREATE TABLE IF NOT EXISTS monthly_budgets (
     UNIQUE(budget_month, category)
 );
 
+CREATE TABLE IF NOT EXISTS income_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER,
+    account_id INTEGER,
+    plaid_transaction_id TEXT UNIQUE,
+    date TEXT NOT NULL,
+    budget_month TEXT NOT NULL DEFAULT '',
+    source_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    expected_monthly_amount REAL,
+    income_type TEXT NOT NULL DEFAULT 'paycheck',
+    is_recurring INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL DEFAULT '',
+    auth TEXT NOT NULL DEFAULT '',
+    device_label TEXT NOT NULL DEFAULT 'Mobile Browser',
+    user_agent TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS purchase_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     requester_id INTEGER NOT NULL,

@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CreditCard,
+  DollarSign,
   Edit3,
   History,
   Link2,
@@ -17,6 +18,8 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  TrendingDown,
+  TrendingUp,
   Wallet,
   X,
 } from 'lucide-react';
@@ -144,6 +147,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
   // Cancel / Remove Budget Category Confirmation Drawer
   const [cancellingBudget, setCancellingBudget] = useState(null);
+
+  // Income & Fluctuation Tracker Form State
+  const [showAddIncome, setShowAddIncome] = useState(false);
+  const [incSource, setIncSource] = useState('');
+  const [incAmount, setIncAmount] = useState('');
+  const [incExpected, setIncExpected] = useState('');
+  const [incType, setIncType] = useState('paycheck');
+  const [incDate, setIncDate] = useState(new Date().toISOString().slice(0, 10));
+  const [incNotes, setIncNotes] = useState('');
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [accName, setAccName] = useState('');
@@ -495,6 +507,38 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
   };
 
+  const handleAddIncome = async (e) => {
+    e.preventDefault();
+    if (!incSource.trim() || !incAmount) return;
+    const actualVal = parseFloat(incAmount);
+    const expectedVal = incExpected !== '' ? parseFloat(incExpected) : actualVal;
+    await apiFetch('/api/finance/income', {
+      method: 'POST',
+      body: JSON.stringify({
+        partner_id: activePartner?.id || null,
+        source_name: incSource.trim(),
+        amount: actualVal,
+        expected_monthly_amount: expectedVal,
+        income_type: incType,
+        date: incDate,
+        budget_month: selectedMonth,
+        notes: incNotes.trim(),
+      }),
+    });
+    setIncSource('');
+    setIncAmount('');
+    setIncExpected('');
+    setIncNotes('');
+    setShowAddIncome(false);
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, false);
+    onDataChanged?.();
+  };
+
+  const handleDeleteIncome = async (incomeId) => {
+    await apiFetch(`/api/finance/income/${incomeId}`, { method: 'DELETE' });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+  };
+
   if (loading && !summary) {
     return <div className="card">Loading financial dashboard...</div>;
   }
@@ -580,6 +624,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             }}
           >
             <PieChart size={16} /> Add / Adjust Month Budget
+          </button>
+          <button
+            type="button"
+            className="btn btn-accent"
+            onClick={() => setShowAddIncome(!showAddIncome)}
+          >
+            <DollarSign size={16} /> Log Income
           </button>
           <button
             type="button"
@@ -793,11 +844,23 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           <small className="kpi-sub">Checking + Savings Accounts</small>
         </div>
         <div className="kpi-card">
-          <span className="kpi-label">Credit Card Balances</span>
-          <strong className="kpi-value text-amber">
-            ${summary.credit_balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <span className="kpi-label">{formatShortMonth(selectedMonth)} Income</span>
+          <strong className="kpi-value text-green">
+            ${Number(summary.total_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </strong>
-          <small className="kpi-sub">Current Credit Utilization</small>
+          <small className="kpi-sub">
+            {summary.income_fluctuation_vs_prev !== 0 ? (
+              <span className={summary.income_fluctuation_vs_prev >= 0 ? 'text-green' : 'text-amber'}>
+                {summary.income_fluctuation_vs_prev >= 0 ? '+' : '-'}$
+                {Math.abs(Number(summary.income_fluctuation_vs_prev || 0)).toLocaleString('en-US', {
+                  minimumFractionDigits: 0,
+                })}{' '}
+                vs {formatShortMonth(summary.previous_month)}
+              </span>
+            ) : (
+              `Expected: $${Number(summary.expected_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+            )}
+          </small>
         </div>
         <div className="kpi-card">
           <span className="kpi-label">{formatShortMonth(selectedMonth)} Spending</span>
@@ -805,17 +868,113 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             ${summary.total_monthly_spent.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </strong>
           <small className="kpi-sub">
-            of ${summary.total_monthly_budget.toLocaleString('en-US', { minimumFractionDigits: 0 })} budget in {formatShortMonth(selectedMonth)} ({summary.month_transaction_count} tx)
+            of ${summary.total_monthly_budget.toLocaleString('en-US', { minimumFractionDigits: 0 })} budget ({summary.month_transaction_count} tx)
           </small>
         </div>
         <div className="kpi-card">
-          <span className="kpi-label">Net Liquid Position</span>
-          <strong className="kpi-value text-cyan">
-            ${summary.net_liquid.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <span className="kpi-label">{formatShortMonth(selectedMonth)} Net Cash Flow</span>
+          <strong
+            className={`kpi-value ${
+              Number(summary.net_monthly_cashflow || 0) >= 0 ? 'text-cyan' : 'text-amber'
+            }`}
+          >
+            {Number(summary.net_monthly_cashflow || 0) >= 0 ? '+' : '-'}$
+            {Math.abs(Number(summary.net_monthly_cashflow || 0)).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+            })}
           </strong>
-          <small className="kpi-sub">Cash minus credit balances</small>
+          <small className="kpi-sub">
+            Income minus {formatShortMonth(selectedMonth)} spending
+          </small>
         </div>
       </div>
+
+      {showAddIncome && (
+        <form className="card form-card" onSubmit={handleAddIncome}>
+          <h3>Log Income or Paycheck for {formatMonthLabel(selectedMonth)}</h3>
+          <p className="text-muted">
+            Track fixed paychecks, variable/commission income, bonuses, or side income to monitor month-over-month income fluctuations.
+          </p>
+          <div className="form-grid-4">
+            <div className="form-group">
+              <label>Income Source / Employer *</label>
+              <input
+                type="text"
+                className="input"
+                placeholder="e.g., Primary Paycheck, Freelance, Bonus"
+                value={incSource}
+                onChange={(e) => setIncSource(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Actual Amount Received ($) *</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                className="input"
+                placeholder="3250.00"
+                value={incAmount}
+                onChange={(e) => setIncAmount(e.target.value)}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Expected / Baseline Amount ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                className="input"
+                placeholder="Defaults to actual if blank"
+                value={incExpected}
+                onChange={(e) => setIncExpected(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Income Type</label>
+              <select
+                className="input"
+                value={incType}
+                onChange={(e) => setIncType(e.target.value)}
+              >
+                <option value="paycheck">Regular Paycheck / Salary</option>
+                <option value="variable">Variable / Commission / Hourly</option>
+                <option value="bonus">Bonus / Commission Payout</option>
+                <option value="side_income">Side Income / Freelance</option>
+                <option value="other">Other Deposit / Reimbursement</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-grid-3">
+            <div className="form-group">
+              <label>Deposit Date</label>
+              <input
+                type="date"
+                className="input"
+                value={incDate}
+                onChange={(e) => setIncDate(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Notes (Optional)</label>
+              <input
+                type="text"
+                className="input"
+                placeholder="e.g., Includes overtime / Q4 commission"
+                value={incNotes}
+                onChange={(e) => setIncNotes(e.target.value)}
+              />
+            </div>
+            <div className="form-group form-group-end">
+              <button type="submit" className="btn btn-primary">
+                Save Income to {formatShortMonth(selectedMonth)}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
 
       {showAccountModal && (
         <form className="card form-card" onSubmit={handleCreateAccount}>
@@ -1125,6 +1284,21 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
                     <div className="plan-numbers-row">
                       <div>
+                        <span className="text-muted">Month Income</span>
+                        <strong className="text-green">
+                          ${Number(mItem.total_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </strong>
+                        {mItem.income_fluctuation_delta !== 0 && (
+                          <small
+                            style={{ display: 'block', fontSize: '0.72rem' }}
+                            className={mItem.income_fluctuation_delta >= 0 ? 'text-green' : 'text-amber'}
+                          >
+                            {mItem.income_fluctuation_delta >= 0 ? '+' : '-'}$
+                            {Math.abs(Number(mItem.income_fluctuation_delta || 0)).toFixed(0)} vs prior mo
+                          </small>
+                        )}
+                      </div>
+                      <div>
                         <span className="text-muted">Total Spent</span>
                         <strong className={isOver ? 'text-danger' : 'text-green'}>
                           ${Number(mItem.total_spent).toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -1137,12 +1311,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         </strong>
                       </div>
                       <div>
-                        <span className="text-muted">
-                          {mItem.net_variance >= 0 ? 'Under Budget' : 'Over Budget'}
-                        </span>
-                        <strong className={mItem.net_variance >= 0 ? 'text-cyan' : 'text-danger'}>
-                          {mItem.net_variance >= 0 ? '+' : '-'}$
-                          {Math.abs(Number(mItem.net_variance)).toLocaleString('en-US', {
+                        <span className="text-muted">Net Cash Flow</span>
+                        <strong className={(mItem.net_cashflow || 0) >= 0 ? 'text-cyan' : 'text-danger'}>
+                          {(mItem.net_cashflow || 0) >= 0 ? '+' : '-'}$
+                          {Math.abs(Number(mItem.net_cashflow || 0)).toLocaleString('en-US', {
                             minimumFractionDigits: 2,
                           })}
                         </strong>
@@ -1183,6 +1355,150 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         </div>
       ) : (
         <>
+          {/* Monthly Income & Fluctuations Tracker Card */}
+          <div className="card income-fluctuation-card">
+            <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
+              <div>
+                <h3>{formatMonthLabel(selectedMonth)} Income & Fluctuation Tracker</h3>
+                <small className="text-muted">
+                  Track paychecks, variable income, and month-over-month income fluctuations alongside your {formatShortMonth(selectedMonth)} budget.
+                </small>
+              </div>
+              <button
+                type="button"
+                className="btn btn-accent btn-sm"
+                onClick={() => setShowAddIncome(!showAddIncome)}
+              >
+                <Plus size={14} /> {showAddIncome ? 'Close Income Form' : 'Log Income / Paycheck'}
+              </button>
+            </div>
+
+            <div className="income-metrics-strip">
+              <div className="income-metric-box">
+                <span className="text-muted">Actual {formatShortMonth(selectedMonth)} Income</span>
+                <strong className="text-green">
+                  ${Number(summary.total_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </strong>
+                <small className="text-muted">
+                  Expected baseline: ${Number(summary.expected_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </small>
+              </div>
+
+              <div className="income-metric-box">
+                <span className="text-muted">Fluctuation vs. {formatShortMonth(summary.previous_month)}</span>
+                <strong
+                  className={
+                    Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? 'text-green' : 'text-amber'
+                  }
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                >
+                  {Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? (
+                    <TrendingUp size={16} />
+                  ) : (
+                    <TrendingDown size={16} />
+                  )}
+                  {Number(summary.income_fluctuation_vs_prev || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.income_fluctuation_vs_prev || 0)).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                  })}
+                  {summary.income_fluctuation_vs_prev_pct !== null &&
+                    summary.income_fluctuation_vs_prev_pct !== undefined && (
+                      <small>
+                        ({summary.income_fluctuation_vs_prev_pct >= 0 ? '+' : ''}
+                        {summary.income_fluctuation_vs_prev_pct}%)
+                      </small>
+                    )}
+                </strong>
+                <small className="text-muted">
+                  Prior month: ${Number(summary.previous_month_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </small>
+              </div>
+
+              <div className="income-metric-box">
+                <span className="text-muted">Actual vs. Expected Baseline</span>
+                <strong
+                  className={
+                    Number(summary.income_fluctuation_vs_expected || 0) >= 0 ? 'text-cyan' : 'text-amber'
+                  }
+                >
+                  {Number(summary.income_fluctuation_vs_expected || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.income_fluctuation_vs_expected || 0)).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                  })}
+                </strong>
+                <small className="text-muted">
+                  Multi-month avg: ${Number(summary.average_monthly_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </small>
+              </div>
+
+              <div className="income-metric-box">
+                <span className="text-muted">Unallocated Income (After Budget)</span>
+                <strong
+                  className={
+                    Number(summary.unallocated_income || 0) >= 0 ? 'text-green' : 'text-amber'
+                  }
+                >
+                  {Number(summary.unallocated_income || 0) >= 0 ? '+' : '-'}$
+                  {Math.abs(Number(summary.unallocated_income || 0)).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                  })}
+                </strong>
+                <small className="text-muted">
+                  Income minus ${Number(summary.total_monthly_budget || 0).toFixed(0)} budgeted
+                </small>
+              </div>
+            </div>
+
+            {(summary.income_entries || []).length > 0 && (
+              <div className="income-entries-list">
+                {summary.income_entries.map((inc) => {
+                  const diff = Number(inc.amount || 0) - Number(inc.expected_monthly_amount || inc.amount || 0);
+                  return (
+                    <div key={inc.id} className="income-entry-row">
+                      <div className="income-entry-left">
+                        <div className="request-badges">
+                          <strong>{inc.source_name}</strong>
+                          <span className="pill pill-outline">{inc.income_type}</span>
+                          {inc.partner_name && (
+                            <span className="pill pill-cyan">{inc.partner_name}</span>
+                          )}
+                        </div>
+                        <small className="text-muted">
+                          {inc.date}
+                          {inc.notes ? ` • ${inc.notes}` : ''}
+                        </small>
+                      </div>
+                      <div className="income-entry-right">
+                        <div style={{ textAlign: 'right' }}>
+                          <strong className="text-green font-mono">
+                            +${Number(inc.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </strong>
+                          {Math.abs(diff) >= 0.01 && (
+                            <small
+                              style={{ display: 'block', fontSize: '0.72rem' }}
+                              className={diff >= 0 ? 'text-cyan' : 'text-amber'}
+                            >
+                              {diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(2)} vs expected ($
+                              {Number(inc.expected_monthly_amount).toFixed(0)})
+                            </small>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-icon-danger"
+                          onClick={() => handleDeleteIncome(inc.id)}
+                          title="Delete income entry"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="finance-two-col">
             {/* Monthly Category Budgets with Persistent Sort Order & Per-Month Scope */}
             <div className="card">

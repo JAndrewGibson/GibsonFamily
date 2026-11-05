@@ -110,12 +110,17 @@ def setup_status():
 def login():
     data = request.get_json(silent=True) or {}
     identifier = (data.get("email") or data.get("identifier") or "").strip().lower()
+    partner_id = data.get("partner_id")
     password = data.get("password") or ""
+
+    db = get_db()
+    if not identifier and partner_id:
+        p_lookup = db.execute("SELECT email, name FROM partners WHERE id = ?", (int(partner_id),)).fetchone()
+        if p_lookup:
+            identifier = (p_lookup["email"] or p_lookup["name"] or "").strip().lower()
 
     if not identifier or not password:
         return jsonify({"error": "Email/username and password are required"}), 400
-
-    db = get_db()
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
     rate_key = f"{client_ip}:{identifier}"
 
@@ -384,13 +389,16 @@ def reset_all_data():
 
     db = get_db()
     for table in [
+        "push_subscriptions",
         "notifications",
         "request_comments",
         "future_purchases",
         "purchase_requests",
+        "income_entries",
         "transactions",
         "accounts",
         "plaid_items",
+        "monthly_budgets",
         "budgets",
         "todos",
         "grocery_items",
