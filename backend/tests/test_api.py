@@ -238,3 +238,75 @@ def test_login_rate_limiting(client):
     # 6th attempt within 15 minutes must be blocked with 429 Too Many Requests
     blocked = client.post("/api/auth/login", json={"email": "alex@gibson.local", "password": "ValidPassword123!"})
     assert blocked.status_code == 429
+
+
+def test_monthly_budget_separation_category_reassignment_and_month_allocation(client):
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    token = p_res.get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create a custom budget category "Pet Care" ($200/mo) and "Groceries & Dining" ($800/mo)
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Pet Care", "monthly_limit": 200})
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Groceries & Dining", "monthly_limit": 800})
+
+    # Add an October transaction (2026-10-28) and a November 1st transaction (2026-11-01)
+    tx_oct = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={"name": "October Grocery Run", "amount": 120.0, "category": "Groceries & Dining", "date": "2026-10-28"},
+    ).get_json()
+    tx_nov = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={"name": "Vet Checkup", "amount": 85.0, "category": "Shopping & Tech", "date": "2026-11-01"},
+    ).get_json()
+
+    # Check November 2026 summary: October's $120 transaction must NOT be in November's budget!
+    nov_sum = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    assert nov_sum["total_monthly_spent"] == 85.0
+    groc_budget_nov = next(b for b in nov_sum["budgets"] if b["category"] == "Groceries & Dining")
+    assert groc_budget_nov["spent"] == 0.0
+
+    # Reassign the November transaction from "Shopping & Tech" to custom category "Pet Care"
+    re_res = client.put(
+        f"/api/finance/transactions/{tx_nov['id']}",
+        headers=headers,
+        json={"category": "Pet Care"},
+    )
+    assert re_res.status_code == 200
+    assert re_res.get_json()["category"] == "Pet Care"
+
+    nov_sum_2 = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    pet_budget_nov = next(b for b in nov_sum_2["budgets"] if b["category"] == "Pet Care")
+    assert pet_budget_nov["spent"] == 85.0
+
+    # Allocate the November transaction to Next Month (2026-12)
+    shift_next = client.put(
+        f"/api/finance/transactions/{tx_nov['id']}",
+        headers=headers,
+        json={"allocate_direction": "next"},
+    ).get_json()
+    assert shift_next["budget_month"] == "2026-12"
+
+    # Now November 2026 spent is $0, and December 2026 spent is $85!
+    assert client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()["total_monthly_spent"] == 0.0
+    assert client.get("/api/finance/summary?month=2026-12", headers=headers).get_json()["total_monthly_spent"] == 85.0
+
+    # Allocate the October transaction to Next Month (so 2026-10 -> 2026-11)
+    shift_oct_to_nov = client.put(
+        f"/api/finance/transactions/{tx_oct['id']}",
+        headers=headers,
+        json={"allocate_direction": "next"},
+    ).get_json()
+    assert shift_oct_to_nov["budget_month"] == "2026-11"
+    assert client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()["total_monthly_spent"] == 120.0
+

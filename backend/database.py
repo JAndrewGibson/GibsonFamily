@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     account_id INTEGER,
     plaid_transaction_id TEXT UNIQUE,
     date TEXT NOT NULL,
+    budget_month TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     merchant_name TEXT,
     amount REAL NOT NULL,
@@ -309,6 +310,13 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     cols = [r["name"] for r in db.execute("PRAGMA table_info(partners)").fetchall()]
     if "password_hash" not in cols:
         db.execute("ALTER TABLE partners ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+
+    tx_cols = [r["name"] for r in db.execute("PRAGMA table_info(transactions)").fetchall()]
+    if "budget_month" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN budget_month TEXT NOT NULL DEFAULT ''")
+    db.execute(
+        "UPDATE transactions SET budget_month = substr(date, 1, 7) WHERE budget_month IS NULL OR budget_month = ''"
+    )
 
 
 def _ensure_module_definitions(db: sqlite3.Connection) -> None:

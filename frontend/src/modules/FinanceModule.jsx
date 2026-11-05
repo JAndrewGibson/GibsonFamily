@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ArrowLeft,
+  ArrowRight,
   Building2,
+  Calendar,
+  Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Link2,
   PieChart,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
   Wallet,
 } from 'lucide-react';
@@ -29,7 +36,25 @@ const SANDBOX_BANKS = [
   { id: 'ins_109511', name: 'Houndstooth Bank (Plaid Sandbox)' },
 ];
 
+function formatMonthLabel(ym) {
+  if (!ym || ym.length < 7) return ym;
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function formatShortMonth(ym) {
+  if (!ym || ym.length < 7) return ym;
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
 export default function FinanceModule({ activePartner, onDataChanged }) {
+  const currentCalendarMonth = new Date().toISOString().slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState(currentCalendarMonth);
+  const [showAllMonthsInLedger, setShowAllMonthsInLedger] = useState(false);
+
   const [summary, setSummary] = useState(null);
   const [plaidStatus, setPlaidStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -37,17 +62,23 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
   const [plaidBanner, setPlaidBanner] = useState(null);
   const [selectedSandboxBank, setSelectedSandboxBank] = useState(SANDBOX_BANKS[0].id);
 
+  // Inline custom category editing on transaction rows
+  const [customCatTxId, setCustomCatTxId] = useState(null);
+  const [customCatInput, setCustomCatInput] = useState('');
+
   // Forms
   const [showAddTx, setShowAddTx] = useState(false);
   const [txName, setTxName] = useState('');
   const [txAmount, setTxAmount] = useState('');
   const [txCategory, setTxCategory] = useState('Groceries & Dining');
+  const [txCustomCategory, setTxCustomCategory] = useState('');
   const [txAccountId, setTxAccountId] = useState('');
   const [txDate, setTxDate] = useState(new Date().toISOString().slice(0, 10));
+  const [txMonthOffset, setTxMonthOffset] = useState('0');
   const [txNotes, setTxNotes] = useState('');
 
   const [showBudgetModal, setShowBudgetModal] = useState(false);
-  const [budgetCat, setBudgetCat] = useState('Groceries & Dining');
+  const [budgetCat, setBudgetCat] = useState('');
   const [budgetLimit, setBudgetLimit] = useState('800');
 
   const [showAccountModal, setShowAccountModal] = useState(false);
@@ -58,11 +89,12 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
   const [accInstitution, setAccInstitution] = useState('');
   const [accMask, setAccMask] = useState('');
 
-  const loadFinanceData = async () => {
+  const loadFinanceData = async (monthOverride = selectedMonth, allMonthsOverride = showAllMonthsInLedger) => {
     setLoading(true);
     try {
+      const query = `?month=${encodeURIComponent(monthOverride)}${allMonthsOverride ? '&include_all_months=true' : ''}`;
       const [sumData, pStatus] = await Promise.all([
-        apiFetch('/api/finance/summary'),
+        apiFetch(`/api/finance/summary${query}`),
         apiFetch('/api/finance/plaid/status'),
       ]);
       setSummary(sumData);
@@ -76,8 +108,8 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
   };
 
   useEffect(() => {
-    loadFinanceData();
-  }, []);
+    loadFinanceData(selectedMonth, showAllMonthsInLedger);
+  }, [selectedMonth, showAllMonthsInLedger]);
 
   // Automatically resume Plaid OAuth redirect when returning from bank with ?oauth_state_id=
   useEffect(() => {
@@ -137,7 +169,7 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
       });
       setPlaidBanner({
         type: 'success',
-        text: `Connected "${res.institution_name}" via Plaid Sandbox! Imported ${res.imported_accounts} accounts and ${res.imported_transactions} transactions.`,
+        text: `Connected "${res.institution_name}" via Plaid! Imported ${res.imported_accounts} accounts and ${res.imported_transactions} transactions.`,
       });
       await loadFinanceData();
       onDataChanged?.();
@@ -241,36 +273,78 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
   const handleAddTransaction = async (e) => {
     e.preventDefault();
     if (!txName || !txAmount) return;
+    const chosenCategory =
+      txCategory === '__custom__' ? txCustomCategory.trim() : txCategory;
+    if (!chosenCategory) return;
+
     await apiFetch('/api/finance/transactions', {
       method: 'POST',
       body: JSON.stringify({
         account_id: txAccountId ? Number(txAccountId) : null,
         name: txName,
         amount: parseFloat(txAmount),
-        category: txCategory,
+        category: chosenCategory,
         date: txDate,
+        month_offset: parseInt(txMonthOffset, 10) || 0,
         partner_id: activePartner?.id || null,
         notes: txNotes,
       }),
     });
     setTxName('');
     setTxAmount('');
+    setTxCustomCategory('');
+    setTxMonthOffset('0');
     setTxNotes('');
     setShowAddTx(false);
     await loadFinanceData();
     onDataChanged?.();
   };
 
+  const handleReassignCategory = async (txId, newCategory) => {
+    if (newCategory === '__custom__') {
+      setCustomCatTxId(txId);
+      setCustomCatInput('');
+      return;
+    }
+    await apiFetch(`/api/finance/transactions/${txId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ category: newCategory }),
+    });
+    setCustomCatTxId(null);
+    await loadFinanceData();
+  };
+
+  const handleSaveCustomCategoryOnTx = async (txId) => {
+    const trimmed = customCatInput.trim();
+    if (!trimmed) return;
+    await apiFetch(`/api/finance/transactions/${txId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ category: trimmed }),
+    });
+    setCustomCatTxId(null);
+    setCustomCatInput('');
+    await loadFinanceData();
+  };
+
+  const handleAllocateMonth = async (txId, direction) => {
+    await apiFetch(`/api/finance/transactions/${txId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ allocate_direction: direction }),
+    });
+    await loadFinanceData();
+  };
+
   const handleSaveBudget = async (e) => {
     e.preventDefault();
-    if (!budgetCat || !budgetLimit) return;
+    if (!budgetCat.trim() || !budgetLimit) return;
     await apiFetch('/api/finance/budgets', {
       method: 'POST',
       body: JSON.stringify({
-        category: budgetCat,
+        category: budgetCat.trim(),
         monthly_limit: parseFloat(budgetLimit),
       }),
     });
+    setBudgetCat('');
     setShowBudgetModal(false);
     await loadFinanceData();
   };
@@ -285,14 +359,17 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
     await loadFinanceData();
   };
 
-  if (loading || !summary) {
+  if (loading && !summary) {
     return <div className="card">Loading financial dashboard...</div>;
   }
 
+  if (!summary) return null;
+
   const availableCategories = Array.from(
     new Set([
-      ...DEFAULT_CATEGORIES,
+      ...(summary.all_categories || []),
       ...(summary.budgets || []).map((b) => b.category),
+      ...DEFAULT_CATEGORIES,
     ])
   );
 
@@ -300,9 +377,9 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
     <div className="module-container">
       <div className="section-header-bar">
         <div>
-          <h2>Family Finances, Budgets & Plaid Banking</h2>
+          <h2>Family Finances, Monthly Budgets & Plaid Banking</h2>
           <p className="text-muted">
-            Link bank accounts via Plaid, manage monthly category budgets, and track shared or individual expenses.
+            Budgets reset on the <strong>1st of every month</strong>. Reassign categories or shift individual purchases to the previous or next month anytime.
           </p>
         </div>
         <div className="header-actions-group">
@@ -327,6 +404,58 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
           >
             <Plus size={16} /> Log Expense
           </button>
+        </div>
+      </div>
+
+      {/* Month Selector Bar (1st of Month Separation) */}
+      <div className="card month-selector-bar">
+        <div className="month-selector-left">
+          <Calendar size={20} className="text-cyan" />
+          <div>
+            <strong>Active Budget Period: {formatMonthLabel(selectedMonth)}</strong>
+            <span className="text-muted" style={{ display: 'block', fontSize: '0.8rem' }}>
+              Includes purchases from {selectedMonth}-01 through end of month (plus any purchases manually allocated to {formatShortMonth(selectedMonth)}).
+            </span>
+          </div>
+        </div>
+        <div className="month-selector-controls">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setSelectedMonth(summary.previous_month)}
+            title={`Go to ${formatMonthLabel(summary.previous_month)}`}
+          >
+            <ChevronLeft size={16} /> {formatShortMonth(summary.previous_month)}
+          </button>
+
+          <input
+            type="month"
+            className="input input-sm"
+            style={{ width: '155px' }}
+            value={selectedMonth}
+            onChange={(e) => {
+              if (e.target.value) setSelectedMonth(e.target.value);
+            }}
+          />
+
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setSelectedMonth(summary.next_month)}
+            title={`Go to ${formatMonthLabel(summary.next_month)}`}
+          >
+            {formatShortMonth(summary.next_month)} <ChevronRight size={16} />
+          </button>
+
+          {selectedMonth !== currentCalendarMonth && (
+            <button
+              type="button"
+              className="btn btn-accent btn-sm"
+              onClick={() => setSelectedMonth(currentCalendarMonth)}
+            >
+              Current Month
+            </button>
+          )}
         </div>
       </div>
 
@@ -423,12 +552,12 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
           <small className="kpi-sub">Current Credit Utilization</small>
         </div>
         <div className="kpi-card">
-          <span className="kpi-label">Monthly Budget Spent</span>
+          <span className="kpi-label">{formatShortMonth(selectedMonth)} Spending</span>
           <strong className="kpi-value">
             ${summary.total_monthly_spent.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </strong>
           <small className="kpi-sub">
-            of ${summary.total_monthly_budget.toLocaleString('en-US', { minimumFractionDigits: 0 })} monthly limit
+            of ${summary.total_monthly_budget.toLocaleString('en-US', { minimumFractionDigits: 0 })} monthly budget ({summary.month_transaction_count} tx)
           </small>
         </div>
         <div className="kpi-card">
@@ -516,26 +645,29 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
       {showBudgetModal && (
         <form className="card form-card" onSubmit={handleSaveBudget}>
           <h3>Add or Update Monthly Category Budget</h3>
+          <p className="text-muted">
+            Create any custom category name here — you can immediately assign or reassign transactions on the ledger to your custom categories.
+          </p>
           <div className="form-grid-3">
             <div className="form-group">
-              <label>Category Name</label>
+              <label>Category Name (Custom or Standard) *</label>
               <input
                 type="text"
                 className="input"
                 list="budget-category-suggestions"
                 value={budgetCat}
                 onChange={(e) => setBudgetCat(e.target.value)}
-                placeholder="e.g., Groceries & Dining"
+                placeholder="e.g., Pet Care, Date Nights, Groceries & Dining"
                 required
               />
               <datalist id="budget-category-suggestions">
-                {DEFAULT_CATEGORIES.map((c) => (
+                {availableCategories.map((c) => (
                   <option key={c} value={c} />
                 ))}
               </datalist>
             </div>
             <div className="form-group">
-              <label>Monthly Limit ($)</label>
+              <label>Monthly Limit ($) *</label>
               <input
                 type="number"
                 step="10"
@@ -547,7 +679,7 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
             </div>
             <div className="form-group form-group-end">
               <button type="submit" className="btn btn-primary">
-                Save Budget Limit
+                Save Budget Category
               </button>
             </div>
           </div>
@@ -582,7 +714,7 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
               />
             </div>
             <div className="form-group">
-              <label>Budget Category</label>
+              <label>Category</label>
               <select
                 className="input"
                 value={txCategory}
@@ -593,10 +725,11 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
                     {cat}
                   </option>
                 ))}
+                <option value="__custom__">+ Enter Custom Category...</option>
               </select>
             </div>
             <div className="form-group">
-              <label>Date</label>
+              <label>Purchase Date</label>
               <input
                 type="date"
                 className="input"
@@ -605,6 +738,45 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
               />
             </div>
           </div>
+
+          <div className="form-grid-3">
+            {txCategory === '__custom__' && (
+              <div className="form-group">
+                <label>Custom Category Name *</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g., Pet Care, Home Decor"
+                  value={txCustomCategory}
+                  onChange={(e) => setTxCustomCategory(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+            <div className="form-group">
+              <label>Allocate to Budget Month</label>
+              <select
+                className="input"
+                value={txMonthOffset}
+                onChange={(e) => setTxMonthOffset(e.target.value)}
+              >
+                <option value="0">Purchase Date's Month ({txDate.slice(0, 7)})</option>
+                <option value="-1">Allocate to Previous Month</option>
+                <option value="1">Allocate to Next Month</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Notes (Optional)</label>
+              <input
+                type="text"
+                className="input"
+                placeholder="Optional note..."
+                value={txNotes}
+                onChange={(e) => setTxNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div className="form-actions">
             <button type="submit" className="btn btn-primary">
               Add Transaction
@@ -617,19 +789,22 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
         {/* Monthly Category Budgets */}
         <div className="card">
           <div className="plan-card-header">
-            <h3>Monthly Category Budgets</h3>
+            <div>
+              <h3>{formatMonthLabel(selectedMonth)} Category Budgets</h3>
+              <small className="text-muted">Only counts purchases allocated to {formatShortMonth(selectedMonth)}</small>
+            </div>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={() => setShowBudgetModal(true)}
             >
-              <Plus size={14} /> Add Category
+              <Plus size={14} /> Add Custom Category
             </button>
           </div>
           {summary.budgets.length === 0 ? (
             <div className="empty-state-box">
               <p className="text-muted">
-                No monthly budgets set up yet. Click <strong>Add Category</strong> to create your first budget limit.
+                No monthly budgets set up yet. Click <strong>Add Custom Category</strong> to create your first budget limit.
               </p>
             </div>
           ) : (
@@ -666,8 +841,8 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
                     </div>
                     <small className="text-muted">
                       {over
-                        ? `Over budget by $${Math.abs(b.remaining).toFixed(2)}`
-                        : `$${b.remaining.toFixed(2)} remaining this month`}
+                        ? `Over budget by $${Math.abs(b.remaining).toFixed(2)} in ${formatShortMonth(selectedMonth)}`
+                        : `$${b.remaining.toFixed(2)} remaining for ${formatShortMonth(selectedMonth)}`}
                     </small>
                   </div>
                 );
@@ -730,22 +905,44 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
         </div>
       </div>
 
-      {/* Recent Transactions */}
+      {/* Transactions Ledger with Category Reassignment & Prev/Next Month Allocation */}
       <div className="card">
-        <div className="plan-card-header">
-          <h3>Transactions Ledger</h3>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowAddTx(true)}
-          >
-            <Plus size={14} /> Log Expense
-          </button>
+        <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <h3>
+              Transactions Ledger —{' '}
+              {showAllMonthsInLedger
+                ? `All Months (${summary.total_transaction_count})`
+                : `${formatMonthLabel(selectedMonth)} (${summary.month_transaction_count})`}
+            </h3>
+            <small className="text-muted">
+              Use the <strong>Category</strong> dropdown to reassign any transaction (or create a custom category), and use <strong>◀ Prev / Next ▶</strong> to allocate a purchase to the previous or next month's budget.
+            </small>
+          </div>
+          <div className="topbar-right">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowAllMonthsInLedger(!showAllMonthsInLedger)}
+            >
+              {showAllMonthsInLedger
+                ? `Filter by ${formatShortMonth(selectedMonth)} Only`
+                : `Show All Months (${summary.total_transaction_count})`}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowAddTx(true)}
+            >
+              <Plus size={14} /> Log Expense
+            </button>
+          </div>
         </div>
+
         {summary.transactions.length === 0 ? (
           <div className="empty-state-box">
             <p className="text-muted">
-              No transactions recorded yet. Connect a Plaid bank account to import transactions automatically, or click <strong>Log Expense</strong>.
+              No transactions allocated to <strong>{formatMonthLabel(selectedMonth)}</strong>. Switch months above, click <strong>Show All Months</strong>, or log a new expense.
             </p>
           </div>
         ) : (
@@ -753,39 +950,138 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
             <table className="tx-table">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Purchase Date</th>
                   <th>Description</th>
-                  <th>Category</th>
-                  <th>Partner</th>
+                  <th>Category (Reassignable)</th>
+                  <th>Budget Month Allocation</th>
                   <th className="text-right">Amount</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {summary.transactions.map((tx) => (
-                  <tr key={tx.id}>
-                    <td>{tx.date}</td>
-                    <td>
-                      <strong>{tx.name}</strong>
-                      {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
-                    </td>
-                    <td>
-                      <span className="pill pill-outline">{tx.category}</span>
-                    </td>
-                    <td>{tx.partner_name || 'Shared'}</td>
-                    <td className="text-right font-mono">${Number(tx.amount).toFixed(2)}</td>
-                    <td className="text-right">
-                      <button
-                        type="button"
-                        className="btn-icon-danger"
-                        onClick={() => handleDeleteTx(tx.id)}
-                        title="Delete transaction"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {summary.transactions.map((tx) => {
+                  const isShifted =
+                    tx.budget_month &&
+                    tx.original_date_month &&
+                    tx.budget_month !== tx.original_date_month;
+                  const isEditingCustomCat = customCatTxId === tx.id;
+
+                  return (
+                    <tr key={tx.id}>
+                      <td>{tx.date}</td>
+                      <td>
+                        <strong>{tx.name}</strong>
+                        {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
+                      </td>
+
+                      {/* Reassignable Category Column */}
+                      <td>
+                        {isEditingCustomCat ? (
+                          <div className="inline-custom-cat-box">
+                            <input
+                              type="text"
+                              className="input input-sm"
+                              placeholder="Type custom category..."
+                              value={customCatInput}
+                              onChange={(e) => setCustomCatInput(e.target.value)}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveCustomCategoryOnTx(tx.id);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={() => handleSaveCustomCategoryOnTx(tx.id)}
+                            >
+                              <Check size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setCustomCatTxId(null)}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <select
+                            className="input input-sm tx-cat-select"
+                            value={tx.category}
+                            onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
+                          >
+                            {availableCategories.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {cat}
+                              </option>
+                            ))}
+                            <option value="__custom__">+ Custom Category...</option>
+                          </select>
+                        )}
+                      </td>
+
+                      {/* Allocate to Previous / Next Month Column */}
+                      <td>
+                        <div className="tx-month-alloc-group">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-xs"
+                            title={`Allocate to previous month (${formatShortMonth(tx.previous_budget_month)})`}
+                            onClick={() => handleAllocateMonth(tx.id, 'prev')}
+                          >
+                            <ChevronLeft size={13} /> Prev
+                          </button>
+
+                          <span
+                            className={`pill ${isShifted ? 'pill-cyan' : 'pill-outline'}`}
+                            title={
+                              isShifted
+                                ? `Shifted from ${tx.original_date_month} to ${tx.budget_month}`
+                                : `Allocated to ${tx.budget_month}`
+                            }
+                          >
+                            {formatShortMonth(tx.budget_month)}
+                          </span>
+
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-xs"
+                            title={`Allocate to next month (${formatShortMonth(tx.next_budget_month)})`}
+                            onClick={() => handleAllocateMonth(tx.id, 'next')}
+                          >
+                            Next <ChevronRight size={13} />
+                          </button>
+
+                          {isShifted && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              title={`Reset back to purchase date month (${tx.original_date_month})`}
+                              onClick={() => handleAllocateMonth(tx.id, 'reset')}
+                            >
+                              <RotateCcw size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="text-right font-mono">${Number(tx.amount).toFixed(2)}</td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          className="btn-icon-danger"
+                          onClick={() => handleDeleteTx(tx.id)}
+                          title="Delete transaction"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

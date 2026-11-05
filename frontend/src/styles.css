@@ -1379,3 +1379,52 @@ body {
   flex-shrink: 0;
 }
 
+/* Month Selector Bar & Transaction Reassignment Controls */
+.month-selector-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.month-selector-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.month-selector-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tx-cat-select {
+  min-width: 190px;
+  max-width: 240px;
+  cursor: pointer;
+}
+
+.inline-custom-cat-box {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 210px;
+}
+
+.tx-month-alloc-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn-xs {
+  padding: 0.22rem 0.5rem;
+  font-size: 0.73rem;
+  border-radius: 6px;
+}
+
+

@@ -1,9 +1,32 @@
+from datetime import date
 import requests
 from flask import Blueprint, current_app, g, jsonify, request
 from backend.database import get_db
 from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 finance_bp = Blueprint("finance", __name__, url_prefix="/api/finance")
+
+DEFAULT_CATEGORIES = [
+    "Groceries & Dining",
+    "Housing & Utilities",
+    "Entertainment & Gaming",
+    "Shopping & Tech",
+    "Health & Medical",
+    "Travel & Experiences",
+    "Future Purchase Savings",
+]
+
+
+def _shift_year_month(ym: str, delta_months: int) -> str:
+    """Shifts a YYYY-MM string by delta_months (e.g., -1 for previous month, +1 for next month)."""
+    try:
+        year, month = int(ym[:4]), int(ym[5:7])
+        total_months = (year * 12 + (month - 1)) + delta_months
+        new_year = total_months // 12
+        new_month = (total_months % 12) + 1
+        return f"{new_year:04d}-{new_month:02d}"
+    except Exception:
+        return date.today().strftime("%Y-%m")
 
 
 def _plaid_headers_and_auth():
@@ -55,8 +78,6 @@ def create_link_token():
     }
 
     configured_uri = (current_app.config.get("PLAID_REDIRECT_URI") or "https://gibsonfamily.onrender.com").strip()
-    # Try without trailing slash first (matches https://gibsonfamily.onrender.com in Plaid Dashboard),
-    # then with trailing slash, then without redirect_uri as final fallback.
     uri_candidates = []
     if configured_uri.startswith("https://"):
         no_slash = configured_uri.rstrip("/")
@@ -79,7 +100,6 @@ def create_link_token():
                 return jsonify(resp_data)
             last_resp = resp
             last_data = resp_data
-            # Only retry next URI candidate if the error was specifically about redirect_uri
             err_msg = (resp_data.get("error_message") or "").lower()
             if "redirect" not in err_msg and "uri" not in err_msg:
                 break
@@ -142,7 +162,7 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
     )
     tx_data = tx_resp.json()
     imported_txs = 0
-    for tx in tx_data.get("added", [])[:50]:
+    for tx in tx_data.get("added", [])[:100]:
         amount = float(tx.get("amount") or 0.0)
         if amount <= 0:
             continue
@@ -157,16 +177,21 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
         }
         mapped_cat = category_map.get(pfc, "Shopping & Tech")
         local_acc_id = account_id_map.get(tx.get("account_id"))
+        tx_date = tx.get("date") or date.today().isoformat()
+        tx_budget_month = tx_date[:7]
+
+        # INSERT OR IGNORE preserves any user-reassigned category or budget_month on existing transactions
         db.execute(
             """
             INSERT OR IGNORE INTO transactions
-            (account_id, plaid_transaction_id, date, name, merchant_name, amount, category, partner_id, is_shared, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid')
+            (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid')
             """,
             (
                 local_acc_id,
                 tx.get("transaction_id"),
-                tx.get("date") or "2026-11-04",
+                tx_date,
+                tx_budget_month,
                 tx.get("name", "Plaid Transaction"),
                 tx.get("merchant_name") or tx.get("name"),
                 round(amount, 2),
@@ -189,8 +214,8 @@ def exchange_public_token():
     data = request.get_json(silent=True) or {}
     public_token = data.get("public_token")
     institution_name = data.get("institution_name", "Plaid Linked Bank")
-    partner_id = data.get("partner_id")
-    partner_id_int = int(partner_id) if partner_id else None
+    actor = getattr(g, "current_partner", None)
+    partner_id_int = actor["id"] if actor else (int(data["partner_id"]) if data.get("partner_id") else None)
 
     if not public_token:
         return jsonify({"error": "public_token is required"}), 400
@@ -229,7 +254,6 @@ def exchange_public_token():
 
 @finance_bp.route("/plaid/sandbox_quick_connect", methods=["POST"])
 def sandbox_quick_connect():
-    """Creates a Plaid Sandbox public_token using the configured credentials, exchanges it, and imports accounts."""
     base_url, client_id, secret = _plaid_headers_and_auth()
     if not client_id or not secret:
         return jsonify({"error": "Plaid credentials missing in .env"}), 400
@@ -237,8 +261,8 @@ def sandbox_quick_connect():
     data = request.get_json(silent=True) or {}
     institution_id = data.get("institution_id", "ins_109508")
     institution_name = data.get("institution_name", "First Platypus Bank (Plaid Sandbox)")
-    partner_id = data.get("partner_id")
-    partner_id_int = int(partner_id) if partner_id else None
+    actor = getattr(g, "current_partner", None)
+    partner_id_int = actor["id"] if actor else (int(data["partner_id"]) if data.get("partner_id") else None)
 
     try:
         pt_resp = requests.post(
@@ -313,14 +337,29 @@ def sync_all_plaid_items():
 
 @finance_bp.route("/summary", methods=["GET"])
 def finance_summary():
+    """
+    Returns financial summary separated strictly on the 1st of the month by `budget_month`.
+    Query params:
+      - month: YYYY-MM (defaults to current calendar month)
+      - include_all_months: 'true' to list all transactions in the ledger while still calculating budget spend strictly for `month`
+    """
+    current_ym = date.today().strftime("%Y-%m")
+    selected_month = (request.args.get("month") or current_ym).strip()[:7]
+    include_all = request.args.get("include_all_months") == "true"
+
     db = get_db()
     accounts = [dict(r) for r in db.execute("SELECT * FROM accounts ORDER BY id").fetchall()]
     budgets = [dict(r) for r in db.execute("SELECT * FROM budgets ORDER BY id").fetchall()]
-    transactions = [
+
+    all_transactions = [
         dict(r)
         for r in db.execute(
             """
-            SELECT t.*, p.name AS partner_name, p.avatar_color AS partner_color, a.name AS account_name
+            SELECT t.*,
+                   COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month,
+                   p.name AS partner_name,
+                   p.avatar_color AS partner_color,
+                   a.name AS account_name
             FROM transactions t
             LEFT JOIN partners p ON t.partner_id = p.id
             LEFT JOIN accounts a ON t.account_id = a.id
@@ -329,11 +368,34 @@ def finance_summary():
         ).fetchall()
     ]
 
+    # Collect available months for month switcher UI (always include prev, current, next, and any month with transactions)
+    month_set = {
+        _shift_year_month(selected_month, -1),
+        selected_month,
+        _shift_year_month(selected_month, 1),
+        current_ym,
+    }
+    tx_categories = set()
+    for tx in all_transactions:
+        tx["budget_month"] = tx["effective_budget_month"]
+        tx["original_date_month"] = (tx["date"] or "")[:7]
+        tx["previous_budget_month"] = _shift_year_month(tx["budget_month"], -1)
+        tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
+        if tx["budget_month"]:
+            month_set.add(tx["budget_month"])
+        if tx.get("category"):
+            tx_categories.add(tx["category"])
+
+    # Strictly filter transactions belonging to `selected_month` (separated on the 1st of the month, plus any manually allocated to `selected_month`)
+    month_transactions = [
+        tx for tx in all_transactions if tx["budget_month"] == selected_month
+    ]
+
     total_cash = sum(a["balance_current"] for a in accounts if a["type"] == "depository")
     total_credit_used = sum(a["balance_current"] for a in accounts if a["type"] == "credit")
 
     spend_by_category = {}
-    for tx in transactions:
+    for tx in month_transactions:
         cat = tx["category"]
         spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
 
@@ -353,15 +415,30 @@ def finance_summary():
             "utilization_pct": pct,
         })
 
+    # Combine custom budget categories, transaction categories, and defaults
+    budget_cat_names = [b["category"] for b in budgets]
+    all_categories = list(
+        dict.fromkeys(budget_cat_names + sorted(tx_categories) + DEFAULT_CATEGORIES)
+    )
+
     return jsonify({
+        "selected_month": selected_month,
+        "current_calendar_month": current_ym,
+        "previous_month": _shift_year_month(selected_month, -1),
+        "next_month": _shift_year_month(selected_month, 1),
+        "available_months": sorted(month_set, reverse=True),
+        "all_categories": all_categories,
         "net_cash": round(total_cash, 2),
         "credit_balance": round(total_credit_used, 2),
         "net_liquid": round(total_cash - total_credit_used, 2),
         "total_monthly_budget": round(total_budget_limit, 2),
-        "total_monthly_spent": round(total_budget_spent, 2),
+        "total_monthly_spent": round(sum(float(t["amount"]) for t in month_transactions), 2),
+        "budgeted_categories_spent": round(total_budget_spent, 2),
         "accounts": accounts,
         "budgets": enriched_budgets,
-        "transactions": transactions,
+        "transactions": all_transactions if include_all else month_transactions,
+        "month_transaction_count": len(month_transactions),
+        "total_transaction_count": len(all_transactions),
     })
 
 
@@ -412,21 +489,38 @@ def create_transaction():
         return jsonify({"error": "Valid transaction name and positive amount are required"}), 400
 
     account_id = data.get("account_id")
-    partner_id = data.get("partner_id")
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else data.get("partner_id")
+
+    tx_date = (data.get("date") or date.today().isoformat()).strip()
+    date_ym = tx_date[:7]
+
+    # Allow allocating a purchase to the previous month (-1), current date month (0), next month (+1), or explicit YYYY-MM
+    explicit_budget_month = (data.get("budget_month") or "").strip()[:7]
+    month_offset = int(data.get("month_offset", 0))
+    if explicit_budget_month and len(explicit_budget_month) == 7:
+        budget_month = explicit_budget_month
+    elif month_offset != 0:
+        budget_month = _shift_year_month(date_ym, month_offset)
+    else:
+        budget_month = date_ym
+
+    category = (data.get("category") or "Groceries & Dining").strip()
 
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO transactions (account_id, date, name, merchant_name, amount, category, partner_id, is_shared, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(account_id) if account_id else None,
-            data.get("date", "2026-11-04"),
+            tx_date,
+            budget_month,
             name,
             data.get("merchant_name") or name,
             round(amount, 2),
-            data.get("category", "Groceries & Dining"),
+            category,
             int(partner_id) if partner_id else None,
             1 if data.get("is_shared", True) else 0,
             data.get("notes", ""),
@@ -435,6 +529,58 @@ def create_transaction():
     db.commit()
     tx = dict(db.execute("SELECT * FROM transactions WHERE id = ?", (cur.lastrowid,)).fetchone())
     return jsonify(tx), 201
+
+
+@finance_bp.route("/transactions/<int:tx_id>", methods=["PUT"])
+def update_transaction(tx_id: int):
+    """
+    Allows reassigning a transaction's category (including custom categories)
+    and allocating the purchase to the previous month, next month, or any target YYYY-MM budget period.
+    """
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    existing = db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Transaction not found"}), 404
+
+    current_budget_month = existing["budget_month"] or existing["date"][:7]
+    date_month = existing["date"][:7]
+
+    new_category = (data.get("category") or existing["category"]).strip()
+    if not new_category:
+        return jsonify({"error": "Category cannot be empty"}), 400
+
+    # Determine target budget_month
+    if "allocate_direction" in data:
+        direction = data["allocate_direction"]
+        if direction == "prev":
+            new_budget_month = _shift_year_month(current_budget_month, -1)
+        elif direction == "next":
+            new_budget_month = _shift_year_month(current_budget_month, 1)
+        elif direction == "reset":
+            new_budget_month = date_month
+        else:
+            new_budget_month = current_budget_month
+    elif "budget_month" in data and str(data["budget_month"]).strip():
+        new_budget_month = str(data["budget_month"]).strip()[:7]
+    else:
+        new_budget_month = current_budget_month
+
+    new_notes = data.get("notes", existing["notes"])
+    new_name = (data.get("name") or existing["name"]).strip()
+
+    db.execute(
+        """
+        UPDATE transactions
+        SET category = ?, budget_month = ?, notes = ?, name = ?
+        WHERE id = ?
+        """,
+        (new_category, new_budget_month, new_notes, new_name, tx_id),
+    )
+    db.commit()
+
+    updated = dict(db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone())
+    return jsonify(updated)
 
 
 @finance_bp.route("/transactions/<int:tx_id>", methods=["DELETE"])
