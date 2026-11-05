@@ -41,9 +41,10 @@ def create_link_token():
         return jsonify({"error": "Plaid credentials (plaid_client_id / plaid_production_secret) are missing in environment"}), 400
 
     data = request.get_json(silent=True) or {}
-    partner_id = str(data.get("partner_id", "1"))
+    actor = getattr(g, "current_partner", None)
+    partner_id = str(actor["id"] if actor else data.get("partner_id", "1"))
 
-    payload = {
+    base_payload = {
         "client_id": client_id,
         "secret": secret,
         "client_name": "GibsonFamily Financial Hub",
@@ -53,16 +54,40 @@ def create_link_token():
         "language": "en",
     }
 
-    redirect_uri = current_app.config.get("PLAID_REDIRECT_URI", "")
-    if redirect_uri:
-        payload["redirect_uri"] = redirect_uri
+    configured_uri = (current_app.config.get("PLAID_REDIRECT_URI") or "https://gibsonfamily.onrender.com").strip()
+    # Try without trailing slash first (matches https://gibsonfamily.onrender.com in Plaid Dashboard),
+    # then with trailing slash, then without redirect_uri as final fallback.
+    uri_candidates = []
+    if configured_uri.startswith("https://"):
+        no_slash = configured_uri.rstrip("/")
+        with_slash = no_slash + "/"
+        uri_candidates = [no_slash, with_slash, None]
+    else:
+        uri_candidates = [None]
 
     try:
-        resp = requests.post(f"{base_url}/link/token/create", json=payload, timeout=15)
-        resp_data = resp.json()
-        if resp.status_code != 200:
-            return jsonify({"error": resp_data.get("error_message", "Plaid link token error"), "details": resp_data}), resp.status_code
-        return jsonify(resp_data)
+        last_resp = None
+        last_data = {}
+        for candidate_uri in uri_candidates:
+            payload = dict(base_payload)
+            if candidate_uri:
+                payload["redirect_uri"] = candidate_uri
+            resp = requests.post(f"{base_url}/link/token/create", json=payload, timeout=15)
+            resp_data = resp.json()
+            if resp.status_code == 200:
+                resp_data["used_redirect_uri"] = candidate_uri
+                return jsonify(resp_data)
+            last_resp = resp
+            last_data = resp_data
+            # Only retry next URI candidate if the error was specifically about redirect_uri
+            err_msg = (resp_data.get("error_message") or "").lower()
+            if "redirect" not in err_msg and "uri" not in err_msg:
+                break
+
+        return jsonify({
+            "error": last_data.get("error_message", "Plaid link token error"),
+            "details": last_data,
+        }), (last_resp.status_code if last_resp is not None else 400)
     except requests.RequestException as exc:
         return jsonify({"error": f"Unable to reach Plaid API: {exc}"}), 502
 

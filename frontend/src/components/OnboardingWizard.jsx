@@ -199,9 +199,11 @@ export default function OnboardingWizard({ onComplete }) {
       });
 
       if (window.Plaid && tokenData.link_token) {
+        localStorage.setItem('gibson_plaid_link_token', tokenData.link_token);
         const handler = window.Plaid.create({
           token: tokenData.link_token,
           onSuccess: async (public_token, metadata) => {
+            localStorage.removeItem('gibson_plaid_link_token');
             const instName = metadata?.institution?.name || 'Plaid Linked Bank';
             const exRes = await apiFetch('/api/finance/plaid/exchange_public_token', {
               method: 'POST',

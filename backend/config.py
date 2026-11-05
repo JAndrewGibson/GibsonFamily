@@ -49,7 +49,9 @@ class Config:
         "sandbox": "https://sandbox.plaid.com",
     }.get(PLAID_ENV, "https://production.plaid.com")
 
-    PLAID_REDIRECT_URI = _get_env_case_insensitive("PLAID_REDIRECT_URI", "")
+    PLAID_REDIRECT_URI = _get_env_case_insensitive(
+        "PLAID_REDIRECT_URI", "https://gibsonfamily.onrender.com"
+    )
 
     DATABASE_PATH = _get_env_case_insensitive(
         "DATABASE_PATH",
@@ -58,4 +60,6 @@ class Config:
 
     WEBAUTHN_RP_ID = _get_env_case_insensitive("WEBAUTHN_RP_ID", "localhost")
     WEBAUTHN_RP_NAME = _get_env_case_insensitive("WEBAUTHN_RP_NAME", "GibsonFamily Hub")
-    WEBAUTHN_ORIGIN = _get_env_case_insensitive("WEBAUTHN_ORIGIN", "http://localhost:5173")
+    WEBAUTHN_ORIGIN = _get_env_case_insensitive(
+        "WEBAUTHN_ORIGIN", "https://gibsonfamily.onrender.com"
+    )

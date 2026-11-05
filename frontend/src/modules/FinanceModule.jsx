@@ -79,6 +79,49 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
     loadFinanceData();
   }, []);
 
+  // Automatically resume Plaid OAuth redirect when returning from bank with ?oauth_state_id=
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      window.location.search.includes('oauth_state_id=') &&
+      window.Plaid
+    ) {
+      const savedToken = localStorage.getItem('gibson_plaid_link_token');
+      if (savedToken) {
+        setPlaidBusy(true);
+        const handler = window.Plaid.create({
+          token: savedToken,
+          receivedRedirectUri: window.location.href,
+          onSuccess: async (public_token, metadata) => {
+            localStorage.removeItem('gibson_plaid_link_token');
+            window.history.replaceState({}, document.title, window.location.pathname);
+            const instName = metadata?.institution?.name || 'Plaid Linked Bank';
+            const exRes = await apiFetch('/api/finance/plaid/exchange_public_token', {
+              method: 'POST',
+              body: JSON.stringify({
+                public_token,
+                institution_name: instName,
+                partner_id: activePartner?.id || 1,
+              }),
+            });
+            setPlaidBanner({
+              type: 'success',
+              text: `Linked ${exRes.institution_name}! Synced ${exRes.imported_accounts} accounts and ${exRes.imported_transactions} transactions.`,
+            });
+            await loadFinanceData();
+            onDataChanged?.();
+            setPlaidBusy(false);
+          },
+          onExit: () => {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            setPlaidBusy(false);
+          },
+        });
+        handler.open();
+      }
+    }
+  }, []);
+
   const handleSandboxQuickConnect = async () => {
     setPlaidBusy(true);
     setPlaidBanner(null);
@@ -115,9 +158,11 @@ export default function FinanceModule({ activePartner, onDataChanged }) {
       });
 
       if (window.Plaid && tokenData.link_token) {
+        localStorage.setItem('gibson_plaid_link_token', tokenData.link_token);
         const handler = window.Plaid.create({
           token: tokenData.link_token,
           onSuccess: async (public_token, metadata) => {
+            localStorage.removeItem('gibson_plaid_link_token');
             const instName = metadata?.institution?.name || 'Plaid Linked Bank';
             const exRes = await apiFetch('/api/finance/plaid/exchange_public_token', {
               method: 'POST',

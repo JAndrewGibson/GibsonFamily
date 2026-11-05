@@ -54,7 +54,11 @@ export default function App() {
     unread_notifications: 0,
   });
 
-  const [activeTab, setActiveTab] = useState('requests');
+  const [activeTab, setActiveTab] = useState(
+    typeof window !== 'undefined' && window.location.search.includes('oauth_state_id=')
+      ? 'finance'
+      : 'requests'
+  );
   const [isLocked, setIsLocked] = useState(false);
   const [showPasskeyModal, setShowPasskeyModal] = useState(false);
 
