@@ -738,8 +738,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
                 <input
                   type="month"
-                  className="input input-sm"
-                  style={{ width: '150px' }}
+                  className="input input-sm month-picker-input"
                   value={selectedMonth}
                   onChange={(e) => {
                     if (e.target.value) setSelectedMonth(e.target.value);
@@ -1450,9 +1449,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       const isMenuOpen = openMenuTxId === tx.id;
 
                       return (
-                        <tr key={tx.id}>
-                          <td>
-                            <div>{tx.date}</div>
+                        <tr key={tx.id} className="tx-row">
+                          <td className="tx-cell-date">
+                            <span className="tx-date-text">{tx.date}</span>
                             {(isShifted || showAllMonthsInLedger) && (
                               <span
                                 className={`pill ${isShifted ? 'pill-cyan' : 'pill-outline'}`}
@@ -1467,13 +1466,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               </span>
                             )}
                           </td>
-                          <td>
+                          <td className="tx-cell-desc">
                             <strong>{tx.name}</strong>
                             {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
                           </td>
 
                           {/* Reassignable Category Column */}
-                          <td>
+                          <td className="tx-cell-cat">
                             {isEditingCustomCat ? (
                               <div className="inline-custom-cat-box">
                                 <input
@@ -1521,7 +1520,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             )}
                           </td>
 
-                          <td className="text-right font-mono">${Number(tx.amount).toFixed(2)}</td>
+                          <td className="text-right font-mono tx-cell-amount">
+                            ${Number(tx.amount).toFixed(2)}
+                          </td>
 
                           {/* Hamburger Menu for Budget Month Allocation & Row Actions */}
                           <td className="text-right tx-hamburger-cell">
@@ -1540,66 +1541,85 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             </button>
 
                             {isMenuOpen && (
-                              <div className="tx-hamburger-popover">
-                                <div className="tx-popover-header">
-                                  <span>Budget Month Allocation</span>
-                                  <strong className="text-cyan">
-                                    {formatMonthLabel(tx.budget_month)}
-                                  </strong>
-                                </div>
+                              <>
+                                <div
+                                  className="tx-popover-backdrop"
+                                  onClick={() => setOpenMenuTxId(null)}
+                                />
+                                <div className="tx-hamburger-popover">
+                                  <div className="tx-popover-header">
+                                    <div>
+                                      <span style={{ display: 'block' }}>{tx.name}</span>
+                                      <small>
+                                        Allocated to:{' '}
+                                        <strong className="text-cyan">
+                                          {formatMonthLabel(tx.budget_month)}
+                                        </strong>
+                                      </small>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="btn-icon-subtle"
+                                      onClick={() => setOpenMenuTxId(null)}
+                                      aria-label="Close menu"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
 
-                                <button
-                                  type="button"
-                                  className="tx-popover-item"
-                                  onClick={() => handleAllocateMonth(tx.id, 'prev')}
-                                >
-                                  <ChevronLeft size={14} />
-                                  Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="tx-popover-item"
-                                  onClick={() => handleAllocateMonth(tx.id, 'next')}
-                                >
-                                  <ChevronRight size={14} />
-                                  Allocate to Next Month ({formatShortMonth(tx.next_budget_month)})
-                                </button>
-
-                                <div className="tx-popover-month-picker">
-                                  <label>Reassign to Specific Month:</label>
-                                  <input
-                                    type="month"
-                                    className="input input-sm"
-                                    value={tx.budget_month}
-                                    onChange={(e) =>
-                                      handleAllocateExactMonth(tx.id, e.target.value)
-                                    }
-                                  />
-                                </div>
-
-                                {isShifted && (
                                   <button
                                     type="button"
                                     className="tx-popover-item"
-                                    onClick={() => handleAllocateMonth(tx.id, 'reset')}
+                                    onClick={() => handleAllocateMonth(tx.id, 'prev')}
                                   >
-                                    <RotateCcw size={13} />
-                                    Reset to Original Month ({formatShortMonth(tx.original_date_month)})
+                                    <ChevronLeft size={14} />
+                                    Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
                                   </button>
-                                )}
 
-                                <div className="tx-popover-divider" />
+                                  <button
+                                    type="button"
+                                    className="tx-popover-item"
+                                    onClick={() => handleAllocateMonth(tx.id, 'next')}
+                                  >
+                                    <ChevronRight size={14} />
+                                    Allocate to Next Month ({formatShortMonth(tx.next_budget_month)})
+                                  </button>
 
-                                <button
-                                  type="button"
-                                  className="tx-popover-item tx-popover-danger"
-                                  onClick={() => handleDeleteTx(tx.id)}
-                                >
-                                  <Trash2 size={14} />
-                                  Delete Transaction
-                                </button>
-                              </div>
+                                  <div className="tx-popover-month-picker">
+                                    <label>Reassign to Specific Month:</label>
+                                    <input
+                                      type="month"
+                                      className="input input-sm"
+                                      value={tx.budget_month}
+                                      onChange={(e) =>
+                                        handleAllocateExactMonth(tx.id, e.target.value)
+                                      }
+                                    />
+                                  </div>
+
+                                  {isShifted && (
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleAllocateMonth(tx.id, 'reset')}
+                                    >
+                                      <RotateCcw size={13} />
+                                      Reset to Original Month ({formatShortMonth(tx.original_date_month)})
+                                    </button>
+                                  )}
+
+                                  <div className="tx-popover-divider" />
+
+                                  <button
+                                    type="button"
+                                    className="tx-popover-item tx-popover-danger"
+                                    onClick={() => handleDeleteTx(tx.id)}
+                                  >
+                                    <Trash2 size={14} />
+                                    Delete Transaction
+                                  </button>
+                                </div>
+                              </>
                             )}
                           </td>
                         </tr>

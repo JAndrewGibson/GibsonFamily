@@ -26,10 +26,15 @@
 - Plan upcoming big-ticket purchases together (vacations, furniture, appliances, or linked partner requests).
 - Real-time calculation of estimated completion dates and required monthly savings pace to hit your target date.
 
-### 3. 💳 Plaid Banking Integration & Monthly Category Budgets
-- Reads `plaid_client_id` and `plaid_sandbox_secret` directly from your `.env` file.
-- Supports both **1-Click Plaid Sandbox Bank Connection** (automatically creates a Sandbox public token, exchanges it for an access token, and syncs accounts & transactions) and **Plaid Link Modal** (`link_token` creation + public token exchange).
-- **Monthly Category Budgets**: Visual progress bars tracking monthly spending against category limits (`Groceries & Dining`, `Entertainment & Gaming`, `Housing & Utilities`, `Health & Medical`, `Shopping & Tech`, `Future Purchase Savings`).
+### 3. 💳 Plaid Banking Integration, Per-Month Budgets & Historical Archive
+- Reads `plaid_client_id` and `plaid_production_secret` (or `plaid_sandbox_secret`) directly from your `.env` file, with Plaid OAuth redirect URI support and AES/HMAC encryption at rest for Plaid access tokens.
+- **1st-of-the-Month Separation & Flexible Allocation**: Budgets automatically separate on the 1st of each month. Reassign any transaction to a standard or custom category inline, or open the row `☰` menu to allocate a purchase to the previous month, next month, or any specific month.
+- **Per-Month Category Adjustments & Historical Months View**: Adjust or cancel a category (such as cancelling Netflix after a few months) for **This & Future Months** or **Only This Month** without erasing it from earlier historical months. Switch to the **Historical Months View** anytime to compare past months' budgets vs. actual spending.
+- **Persistent User Preferences & Real-Time Partner Sync**: Active tab, selected budget month, category budget sort order, and banking banner dismissal persist in cookies, and changes made by either partner sync live across devices within seconds.
+
+### 4. 📱 Mobile-First Responsive Experience (Built for 99% Mobile Usage)
+- **Bottom Navigation Bar + Slide-Over Drawer**: One-thumb bottom navigation bar (`Requests`, `Finances`, `Plans`, `Groceries`, `More`) with safe-area inset support and a slide-out full module drawer.
+- **Mobile Transaction Cards & Bottom Action Sheets**: The transactions ledger automatically transforms into touch-friendly mobile cards on phones, with bottom-sheet action menus that never clip or require horizontal scrolling.
 
 ### 4. 🔐 WebAuthn (Passkeys) Screen Lock — Zero 2FA Friction
 - Built on the W3C **WebAuthn (`navigator.credentials.create` / `navigator.credentials.get`)** standard.
@@ -47,6 +52,7 @@ Built around a pluggable Flask Blueprint + React Module Registry (`module_regist
 
 ```text
 GibsonFamily/
+├── AGENTS.md                   # AI Agent & developer architecture guidelines
 ├── .env                        # Local Plaid credentials (ignored by git)
 ├── .env.example                # Example environment variables template
 ├── .gitignore                  # Ignores .env, .venv, node_modules, *.db

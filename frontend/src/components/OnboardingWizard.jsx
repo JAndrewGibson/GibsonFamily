@@ -824,8 +824,7 @@ export default function OnboardingWizard({ onComplete }) {
                   <input
                     type="number"
                     step="10"
-                    className="input"
-                    style={{ maxWidth: '130px' }}
+                    className="input onboarding-budget-limit-input"
                     placeholder="Limit ($)"
                     value={newBudgetLimit}
                     onChange={(e) => setNewBudgetLimit(e.target.value)}

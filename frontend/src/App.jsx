@@ -9,9 +9,11 @@ import {
   Layers,
   Lock,
   LogOut,
+  Menu,
   Radio,
   ShoppingCart,
   Wallet,
+  X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setAuthToken, setCookie } from './api';
 import OnboardingWizard from './components/OnboardingWizard';
@@ -82,7 +84,13 @@ export default function App() {
 
   const [isLocked, setIsLocked] = useState(false);
   const [showPasskeyModal, setShowPasskeyModal] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [syncVersion, setSyncVersion] = useState(1);
+
+  const selectTab = (tab) => {
+    setActiveTab(tab);
+    setMobileDrawerOpen(false);
+  };
   const [livePartnerPulse, setLivePartnerPulse] = useState(false);
   const lastStateVersionRef = useRef(null);
 
@@ -234,16 +242,61 @@ export default function App() {
 
   const enabledModules = modules.filter((m) => m.enabled);
 
+  const getBadgeForModule = (modId) => {
+    switch (modId) {
+      case 'requests':
+        return overview.pending_requests;
+      case 'future_plans':
+        return overview.future_goals;
+      case 'todos':
+        return overview.open_todos;
+      case 'groceries':
+        return overview.unchecked_groceries;
+      case 'admin_docs':
+        return overview.active_admin_records;
+      default:
+        return 0;
+    }
+  };
+
+  const SHORT_TAB_LABELS = {
+    requests: 'Requests',
+    finance: 'Finances',
+    future_plans: 'Plans',
+    groceries: 'Groceries',
+    todos: 'To-Dos',
+    admin_docs: 'Medical',
+  };
+
+  const bottomNavModules = enabledModules.slice(0, 4);
+
   return (
     <div className="app-shell">
-      {/* Sidebar Navigation */}
-      <aside className="sidebar">
+      {/* Mobile Drawer Backdrop */}
+      {mobileDrawerOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setMobileDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar Navigation (Slide-over Drawer on Mobile, Fixed Left on Desktop) */}
+      <aside className={`sidebar ${mobileDrawerOpen ? 'open' : ''}`}>
         <div className="brand-box">
           <div className="brand-logo">GF</div>
-          <div>
+          <div className="brand-title-col">
             <h1>{householdName}</h1>
             <span>Couples Finance & Life OS</span>
           </div>
+          <button
+            type="button"
+            className="btn-icon-subtle mobile-drawer-close"
+            onClick={() => setMobileDrawerOpen(false)}
+            aria-label="Close navigation menu"
+          >
+            <X size={20} />
+          </button>
         </div>
 
         <div className="sidebar-section-label">FINANCIAL & PLANNING</div>
@@ -252,18 +305,13 @@ export default function App() {
             .filter((m) => m.category === 'Financial')
             .map((mod) => {
               const IconComp = ICON_MAP[mod.icon] || LayoutDashboard;
-              const badgeCount =
-                mod.id === 'requests'
-                  ? overview.pending_requests
-                  : mod.id === 'future_plans'
-                  ? overview.future_goals
-                  : null;
+              const badgeCount = getBadgeForModule(mod.id);
               return (
                 <button
                   key={mod.id}
                   type="button"
                   className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(mod.id)}
+                  onClick={() => selectTab(mod.id)}
                 >
                   <IconComp size={18} />
                   <span>{mod.name}</span>
@@ -279,20 +327,13 @@ export default function App() {
             .filter((m) => m.category !== 'Financial')
             .map((mod) => {
               const IconComp = ICON_MAP[mod.icon] || Layers;
-              const badgeCount =
-                mod.id === 'todos'
-                  ? overview.open_todos
-                  : mod.id === 'groceries'
-                  ? overview.unchecked_groceries
-                  : mod.id === 'admin_docs'
-                  ? overview.active_admin_records
-                  : null;
+              const badgeCount = getBadgeForModule(mod.id);
               return (
                 <button
                   key={mod.id}
                   type="button"
                   className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(mod.id)}
+                  onClick={() => selectTab(mod.id)}
                 >
                   <IconComp size={18} />
                   <span>{mod.name}</span>
@@ -307,10 +348,21 @@ export default function App() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'modules_registry' ? 'active' : ''}`}
-            onClick={() => setActiveTab('modules_registry')}
+            onClick={() => selectTab('modules_registry')}
           >
             <Layers size={18} />
             <span>Modules & Settings</span>
+          </button>
+          <button
+            type="button"
+            className="nav-item mobile-only-nav-item"
+            onClick={() => {
+              setMobileDrawerOpen(false);
+              setShowPasskeyModal(true);
+            }}
+          >
+            <Fingerprint size={18} />
+            <span>Manage Passkeys ({activePartner.passkeys?.length || 0})</span>
           </button>
         </nav>
 
@@ -318,10 +370,21 @@ export default function App() {
           <button
             type="button"
             className="btn btn-lock-full"
-            onClick={handleLockScreen}
+            onClick={() => {
+              setMobileDrawerOpen(false);
+              handleLockScreen();
+            }}
           >
             <Lock size={16} />
             Lock Screen (Passkey)
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger-outline mobile-drawer-signout"
+            onClick={handleSignOut}
+          >
+            <LogOut size={16} />
+            Sign Out ({activePartner.name.split(' ')[0]})
           </button>
         </div>
       </aside>
@@ -330,54 +393,65 @@ export default function App() {
       <div className="main-panel">
         <header className="topbar">
           <div className="topbar-left">
-            <span className="partner-Perspective-label">Signed In As:</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm mobile-menu-trigger"
+              onClick={() => setMobileDrawerOpen(true)}
+              aria-label="Open navigation menu"
+            >
+              <Menu size={18} />
+            </button>
+            <span className="partner-Perspective-label hide-on-mobile">Signed In As:</span>
             <div className="signed-in-badge">
               <span
                 className="partner-dot"
                 style={{ background: activePartner.avatar_color }}
               />
-              <strong>{activePartner.name}</strong>
-              <span className="text-muted">({activePartner.email})</span>
+              <strong className="signed-in-name">{activePartner.name}</strong>
+              <span className="text-muted hide-on-mobile">({activePartner.email})</span>
             </div>
             <span
               className={`live-sync-pill ${livePartnerPulse ? 'pulsing' : ''}`}
               title="Real-time partner sync is active"
             >
               <Radio size={12} />
-              {livePartnerPulse ? 'Synced update!' : 'Live Sync'}
+              <span className="sync-pill-text">
+                {livePartnerPulse ? 'Synced!' : 'Live'}
+              </span>
             </span>
           </div>
 
           <div className="topbar-right">
             <NotificationCenter
-              onNavigateTab={(tab) => setActiveTab(tab)}
+              onNavigateTab={(tab) => selectTab(tab)}
               syncVersion={syncVersion}
             />
 
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary btn-sm hide-on-mobile"
               onClick={() => setShowPasskeyModal(true)}
             >
               <Fingerprint size={16} />
-              Passkeys ({activePartner.passkeys?.length || 0})
+              <span>Passkeys ({activePartner.passkeys?.length || 0})</span>
             </button>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={handleLockScreen}
+              title="Lock screen"
             >
               <Lock size={15} />
-              Lock
+              <span className="hide-on-mobile">Lock</span>
             </button>
             <button
               type="button"
-              className="btn btn-danger-outline btn-sm"
+              className="btn btn-danger-outline btn-sm hide-on-mobile"
               onClick={handleSignOut}
               title="Sign out of your account"
             >
               <LogOut size={15} />
-              Sign Out
+              <span>Sign Out</span>
             </button>
           </div>
         </header>
@@ -437,6 +511,45 @@ export default function App() {
               />
             )}
           </main>
+        )}
+
+        {/* Mobile Bottom Navigation Bar (1-Thumb Navigation for 99% Mobile Usage) */}
+        {!isLocked && (
+          <nav className="mobile-bottom-nav" aria-label="Mobile Primary Navigation">
+            {bottomNavModules.map((mod) => {
+              const IconComp = ICON_MAP[mod.icon] || LayoutDashboard;
+              const badgeCount = getBadgeForModule(mod.id);
+              const isActive = activeTab === mod.id;
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  className={`mobile-bottom-nav-btn ${isActive ? 'active' : ''}`}
+                  onClick={() => selectTab(mod.id)}
+                >
+                  <div className="mobile-nav-icon-wrap">
+                    <IconComp size={20} />
+                    {badgeCount > 0 && (
+                      <span className="mobile-nav-badge">{badgeCount}</span>
+                    )}
+                  </div>
+                  <span>{SHORT_TAB_LABELS[mod.id] || mod.name.split(' ')[0]}</span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className={`mobile-bottom-nav-btn ${
+                !bottomNavModules.some((m) => m.id === activeTab) ? 'active' : ''
+              }`}
+              onClick={() => setMobileDrawerOpen(true)}
+            >
+              <div className="mobile-nav-icon-wrap">
+                <Menu size={20} />
+              </div>
+              <span>More</span>
+            </button>
+          </nav>
         )}
       </div>
 
