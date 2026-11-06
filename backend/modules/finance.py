@@ -377,16 +377,18 @@ def _sync_plaid_accounts_and_transactions(
         avail_bal = float(balances.get("available") if balances.get("available") is not None else current_bal)
         db.execute(
             """
-            INSERT INTO accounts (plaid_account_id, item_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?)
+            INSERT INTO accounts (plaid_account_id, item_id, owner_partner_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?)
             ON CONFLICT(plaid_account_id) DO UPDATE SET
                 item_id = COALESCE(excluded.item_id, accounts.item_id),
+                owner_partner_id = COALESCE(accounts.owner_partner_id, excluded.owner_partner_id),
                 balance_current = excluded.balance_current,
                 balance_available = excluded.balance_available
             """,
             (
                 plaid_acc_id,
                 item_id,
+                partner_id,
                 acc.get("name", "Plaid Account"),
                 acc.get("official_name") or acc.get("name"),
                 acc.get("type", "depository"),
@@ -746,7 +748,25 @@ def finance_summary():
     include_all = request.args.get("include_all_months") == "true"
 
     db = get_db()
-    accounts = [dict(r) for r in db.execute("SELECT * FROM accounts ORDER BY id").fetchall()]
+    accounts = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT a.*,
+                   p.name AS owner_partner_name,
+                   p.avatar_color AS owner_partner_color
+            FROM accounts a
+            LEFT JOIN partners p ON a.owner_partner_id = p.id
+            ORDER BY a.type, a.subtype, a.name
+            """
+        ).fetchall()
+    ]
+    household_partners = [
+        dict(r)
+        for r in db.execute(
+            "SELECT id, name, email, avatar_color, monthly_fun_allowance FROM partners ORDER BY id"
+        ).fetchall()
+    ]
     month_budgets = _ensure_monthly_budgets_for_month(db, selected_month)
 
     all_transactions = [
@@ -1094,6 +1114,7 @@ def finance_summary():
         "unallocated_income": unallocated_income,
         "income_entries": all_income_entries if include_all else month_income_entries,
         "accounts": accounts,
+        "partners": household_partners,
         "budgets": enriched_budgets,
         "transactions": all_transactions if include_all else month_transactions,
         "month_transaction_count": len(month_transactions),
@@ -1441,11 +1462,17 @@ def create_account():
     if not name:
         return jsonify({"error": "Account name is required"}), 400
 
+    raw_pid = data.get("owner_partner_id")
+    if raw_pid is not None and str(raw_pid).isdigit() and int(raw_pid) > 0:
+        owner_partner_id = int(raw_pid)
+    else:
+        owner_partner_id = None
+
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -1455,13 +1482,105 @@ def create_account():
             data.get("mask", "0000"),
             float(data.get("balance_current", 0.0)),
             float(data.get("balance_available", data.get("balance_current", 0.0))),
-            data.get("owner_scope", "shared"),
+            data.get("owner_scope", "individual" if owner_partner_id else "shared"),
+            owner_partner_id,
             data.get("institution_name", "Manual Entry"),
         ),
     )
     db.commit()
-    acc = dict(db.execute("SELECT * FROM accounts WHERE id = ?", (cur.lastrowid,)).fetchone())
+    acc = dict(
+        db.execute(
+            """
+            SELECT a.*, p.name AS owner_partner_name, p.avatar_color AS owner_partner_color
+            FROM accounts a
+            LEFT JOIN partners p ON a.owner_partner_id = p.id
+            WHERE a.id = ?
+            """,
+            (cur.lastrowid,),
+        ).fetchone()
+    )
     return jsonify(acc), 201
+
+
+@finance_bp.route("/accounts/<int:acc_id>", methods=["PUT"])
+def update_account(acc_id: int):
+    db = get_db()
+    acc = db.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,)).fetchone()
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    fields = []
+    params = []
+
+    if "name" in data and str(data["name"]).strip():
+        fields.append("name = ?")
+        params.append(str(data["name"]).strip())
+
+    if "official_name" in data:
+        fields.append("official_name = ?")
+        params.append(str(data["official_name"]).strip() if data["official_name"] else None)
+
+    if "type" in data and str(data["type"]).strip():
+        fields.append("type = ?")
+        params.append(str(data["type"]).strip())
+
+    if "subtype" in data and str(data["subtype"]).strip():
+        fields.append("subtype = ?")
+        params.append(str(data["subtype"]).strip())
+
+    if "mask" in data:
+        fields.append("mask = ?")
+        params.append(str(data["mask"]).strip())
+
+    if "institution_name" in data and str(data["institution_name"]).strip():
+        fields.append("institution_name = ?")
+        params.append(str(data["institution_name"]).strip())
+
+    if "balance_current" in data:
+        fields.append("balance_current = ?")
+        params.append(float(data["balance_current"]))
+
+    if "balance_available" in data:
+        fields.append("balance_available = ?")
+        params.append(float(data["balance_available"]))
+
+    if "owner_partner_id" in data:
+        raw_pid = data["owner_partner_id"]
+        if raw_pid is None or str(raw_pid).strip().lower() in ["", "none", "null", "0", "shared"]:
+            fields.append("owner_partner_id = ?")
+            params.append(None)
+            if "owner_scope" not in data:
+                fields.append("owner_scope = ?")
+                params.append("shared")
+        else:
+            fields.append("owner_partner_id = ?")
+            params.append(int(raw_pid))
+            if "owner_scope" not in data:
+                fields.append("owner_scope = ?")
+                params.append("individual")
+
+    if "owner_scope" in data:
+        fields.append("owner_scope = ?")
+        params.append(str(data["owner_scope"]).strip())
+
+    if fields:
+        params.append(acc_id)
+        db.execute(f"UPDATE accounts SET {', '.join(fields)} WHERE id = ?", params)
+        db.commit()
+
+    updated = dict(
+        db.execute(
+            """
+            SELECT a.*, p.name AS owner_partner_name, p.avatar_color AS owner_partner_color
+            FROM accounts a
+            LEFT JOIN partners p ON a.owner_partner_id = p.id
+            WHERE a.id = ?
+            """,
+            (acc_id,),
+        ).fetchone()
+    )
+    return jsonify(updated)
 
 
 @finance_bp.route("/accounts/<int:acc_id>", methods=["DELETE"])

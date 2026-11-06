@@ -155,6 +155,12 @@ GibsonFamily/
   - Automatically restores true non-overstated balances, cashflow, and spending without leaving orphaned records.
 - **Account Deletion (`DELETE /api/finance/accounts/<id>`)**:
   - Deletes the account and cascades deletion to all transactions and income entries associated with that account. If the deleted account was the only account on a Plaid item, cleans up `plaid_items` so it does not re-sync.
+- **Account Ownership & User Balances Breakdown (`accounts.owner_partner_id`, `PUT /api/finance/accounts/<id>`)**:
+  - Accounts track relational ownership via `owner_partner_id REFERENCES partners(id) ON DELETE SET NULL` (in addition to `owner_scope`).
+  - Plaid accounts default their initial owner to the linking partner (`linked_by_partner_id`), and manual accounts can be created with an assigned partner or shared.
+  - Any account's owner can be assigned, reassigned, or set to Shared via `PUT /api/finance/accounts/<id>` directly from the UI.
+  - Accessible via the **"All Accounts & Balances by User"** modal in the top **Options** dropdown in `FinanceModule.jsx`.
+  - Groups accounts by user (e.g., Alex, Jordan) and Shared/Household, subdividing each into **Checking Accounts**, **Savings Accounts**, **Credit Cards & Debt**, and **Other/Investments** with live balances, available balances, partner subtotals, and household aggregate KPIs.
 
 ---
 

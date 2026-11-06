@@ -928,6 +928,136 @@ def test_unlink_plaid_bank_item_and_account_deletion_cleans_duplicate_transactio
     assert sum_empty["total_monthly_income"] == 0.0
 
 
+def test_account_owner_partner_assignment_and_user_balances(client):
+    # Setup partners
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "partners": [
+                {
+                    "name": "Alex Gibson",
+                    "email": "alex.acc@gibson.local",
+                    "password": "Password123!",
+                    "avatar_color": "#6366f1",
+                    "monthly_fun_allowance": 250,
+                },
+                {
+                    "name": "Jordan Gibson",
+                    "email": "jordan.acc@gibson.local",
+                    "password": "Password123!",
+                    "avatar_color": "#ec4899",
+                    "monthly_fun_allowance": 250,
+                },
+            ],
+        },
+    )
+    assert p_res.status_code == 201
+    auth_data = p_res.get_json()
+    token = auth_data["token"]
+    partners = auth_data["partners"]
+    alex_id = partners[0]["id"]
+    jordan_id = partners[1]["id"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    client.post(
+        "/api/auth/onboarding/complete",
+        headers=headers,
+        json={"household_name": "Gibson Household"},
+    )
+
+    # 1. Create Alex's checking account with owner_partner_id
+    alex_acc_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Alex Primary Checking",
+            "type": "depository",
+            "subtype": "checking",
+            "mask": "1111",
+            "balance_current": 4200.50,
+            "balance_available": 4150.00,
+            "institution_name": "Chase",
+            "owner_partner_id": alex_id,
+        },
+    )
+    assert alex_acc_res.status_code == 201
+    alex_acc = alex_acc_res.get_json()
+    assert alex_acc["owner_partner_id"] == alex_id
+    assert alex_acc["owner_partner_name"] == "Alex Gibson"
+
+    # 2. Create Jordan's savings account
+    jordan_acc_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Jordan High Yield Savings",
+            "type": "depository",
+            "subtype": "savings",
+            "mask": "2222",
+            "balance_current": 15000.00,
+            "institution_name": "Ally",
+            "owner_partner_id": jordan_id,
+        },
+    )
+    assert jordan_acc_res.status_code == 201
+    jordan_acc = jordan_acc_res.get_json()
+    assert jordan_acc["owner_partner_id"] == jordan_id
+    assert jordan_acc["owner_partner_name"] == "Jordan Gibson"
+
+    # 3. Create a Shared Credit Card (owner_partner_id = None)
+    shared_acc_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Household Visa",
+            "type": "credit",
+            "subtype": "credit card",
+            "mask": "3333",
+            "balance_current": 850.00,
+            "institution_name": "Costco Citi",
+            "owner_partner_id": None,
+        },
+    )
+    assert shared_acc_res.status_code == 201
+    shared_acc = shared_acc_res.get_json()
+    assert shared_acc["owner_partner_id"] is None
+
+    # 4. Fetch /api/finance/summary and verify accounts and partners
+    summary_res = client.get("/api/finance/summary", headers=headers)
+    assert summary_res.status_code == 200
+    summary = summary_res.get_json()
+    assert "partners" in summary
+    assert len(summary["partners"]) == 2
+    assert len(summary["accounts"]) == 3
+
+    acc_by_id = {a["id"]: a for a in summary["accounts"]}
+    assert acc_by_id[alex_acc["id"]]["owner_partner_name"] == "Alex Gibson"
+    assert acc_by_id[jordan_acc["id"]]["owner_partner_name"] == "Jordan Gibson"
+    assert acc_by_id[shared_acc["id"]]["owner_partner_name"] is None
+
+    # 5. Reassign the shared card to Alex via PUT /api/finance/accounts/<id>
+    update_res = client.put(
+        f"/api/finance/accounts/{shared_acc['id']}",
+        headers=headers,
+        json={"owner_partner_id": alex_id},
+    )
+    assert update_res.status_code == 200
+    updated_acc = update_res.get_json()
+    assert updated_acc["owner_partner_id"] == alex_id
+    assert updated_acc["owner_partner_name"] == "Alex Gibson"
+
+    # 6. Change it back to Shared (null)
+    unassign_res = client.put(
+        f"/api/finance/accounts/{shared_acc['id']}",
+        headers=headers,
+        json={"owner_partner_id": None},
+    )
+    assert unassign_res.status_code == 200
+    assert unassign_res.get_json()["owner_partner_id"] is None
+
+
+
 
 
 

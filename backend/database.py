@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     plaid_account_id TEXT UNIQUE,
     item_id TEXT,
+    owner_partner_id INTEGER,
     name TEXT NOT NULL,
     official_name TEXT,
     type TEXT NOT NULL DEFAULT 'depository',
@@ -96,7 +97,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     balance_current REAL NOT NULL DEFAULT 0.0,
     balance_available REAL NOT NULL DEFAULT 0.0,
     owner_scope TEXT NOT NULL DEFAULT 'shared',
-    institution_name TEXT NOT NULL DEFAULT 'Bank Account'
+    institution_name TEXT NOT NULL DEFAULT 'Bank Account',
+    FOREIGN KEY (owner_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -386,6 +388,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     acc_cols = [r["name"] for r in db.execute("PRAGMA table_info(accounts)").fetchall()]
     if "item_id" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN item_id TEXT")
+    if "owner_partner_id" not in acc_cols:
+        db.execute("ALTER TABLE accounts ADD COLUMN owner_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
 
     db.execute(
         """

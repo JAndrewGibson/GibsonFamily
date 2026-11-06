@@ -28,6 +28,8 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  User,
+  Users,
   Wallet,
   X,
 } from 'lucide-react';
@@ -151,6 +153,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [showPlaidModal, setShowPlaidModal] = useState(false);
   const [unlinkingPlaidItem, setUnlinkingPlaidItem] = useState(null);
   const [showAccountsModal, setShowAccountsModal] = useState(false);
+  const [showUserBalancesModal, setShowUserBalancesModal] = useState(false);
+  const [selectedUserFilter, setSelectedUserFilter] = useState('all');
+  const [updatingAccountId, setUpdatingAccountId] = useState(null);
   const [showAddAccountForm, setShowAddAccountForm] = useState(false);
 
   const optionsMenuRef = useRef(null);
@@ -229,6 +234,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [accBalance, setAccBalance] = useState('');
   const [accInstitution, setAccInstitution] = useState('');
   const [accMask, setAccMask] = useState('');
+  const [accOwnerPartnerId, setAccOwnerPartnerId] = useState('');
 
   const loadFinanceData = async (
     monthOverride = selectedMonth,
@@ -446,14 +452,39 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         balance_current: parseFloat(accBalance || 0),
         institution_name: accInstitution.trim() || 'Manual Account',
         mask: accMask.trim() || '0000',
+        owner_partner_id: accOwnerPartnerId ? parseInt(accOwnerPartnerId, 10) : null,
       }),
     });
     setAccName('');
     setAccBalance('');
     setAccInstitution('');
     setAccMask('');
+    setAccOwnerPartnerId('');
     setShowAddAccountForm(false);
     await loadFinanceData();
+  };
+
+  const handleUpdateAccountOwner = async (accountId, newOwnerPartnerId) => {
+    setUpdatingAccountId(accountId);
+    try {
+      const parsedPid =
+        newOwnerPartnerId && newOwnerPartnerId !== 'shared' && newOwnerPartnerId !== ''
+          ? parseInt(newOwnerPartnerId, 10)
+          : null;
+      await apiFetch(`/api/finance/accounts/${accountId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          owner_partner_id: parsedPid,
+          owner_scope: parsedPid ? 'individual' : 'shared',
+        }),
+      });
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      console.error('Failed to update account owner:', err);
+    } finally {
+      setUpdatingAccountId(null);
+    }
   };
 
   const handleDeleteAccount = async (acc) => {
@@ -1079,6 +1110,227 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     };
   });
 
+  // -------------------------------------------------------------------------
+  // USER ACCOUNTS & BALANCES BREAKDOWN HELPERS
+  // -------------------------------------------------------------------------
+  const partnersList = summary?.partners || [];
+  const accountsList = summary?.accounts || [];
+
+  const isCheckingAcc = (acc) => {
+    const sub = (acc.subtype || '').toLowerCase();
+    const typ = (acc.type || '').toLowerCase();
+    return (
+      sub.includes('checking') ||
+      sub.includes('cash') ||
+      (typ === 'depository' &&
+        !sub.includes('savings') &&
+        !sub.includes('money market') &&
+        !sub.includes('cd'))
+    );
+  };
+
+  const isSavingsAcc = (acc) => {
+    const sub = (acc.subtype || '').toLowerCase();
+    return sub.includes('savings') || sub.includes('money market') || sub.includes('cd');
+  };
+
+  const isCreditAcc = (acc) => {
+    const typ = (acc.type || '').toLowerCase();
+    const sub = (acc.subtype || '').toLowerCase();
+    return typ === 'credit' || sub.includes('credit') || sub.includes('loan');
+  };
+
+  const isInvestmentAcc = (acc) => {
+    return !isCheckingAcc(acc) && !isSavingsAcc(acc) && !isCreditAcc(acc);
+  };
+
+  // Aggregate household totals
+  const totalHouseholdChecking = accountsList
+    .filter(isCheckingAcc)
+    .reduce((sum, a) => sum + (Number(a.balance_current) || 0), 0);
+
+  const totalHouseholdSavings = accountsList
+    .filter(isSavingsAcc)
+    .reduce((sum, a) => sum + (Number(a.balance_current) || 0), 0);
+
+  const totalHouseholdCredit = accountsList
+    .filter(isCreditAcc)
+    .reduce((sum, a) => sum + (Number(a.balance_current) || 0), 0);
+
+  const totalHouseholdNet = totalHouseholdChecking + totalHouseholdSavings - totalHouseholdCredit;
+
+  // Build user groups: each registered partner + shared/household accounts
+  const userGroups = [
+    ...partnersList.map((p) => {
+      const userAccs = accountsList.filter((a) => a.owner_partner_id === p.id);
+      const chk = userAccs.filter(isCheckingAcc);
+      const sav = userAccs.filter(isSavingsAcc);
+      const crd = userAccs.filter(isCreditAcc);
+      const inv = userAccs.filter(isInvestmentAcc);
+
+      const chkTot = chk.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const savTot = sav.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const crdTot = crd.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const invTot = inv.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const netTot = chkTot + savTot + invTot - crdTot;
+
+      return {
+        id: `partner-${p.id}`,
+        partnerId: p.id,
+        name: p.name,
+        color: p.avatar_color || '#6366f1',
+        isShared: false,
+        accounts: userAccs,
+        checking: chk,
+        savings: sav,
+        credit: crd,
+        other: inv,
+        checkingTotal: chkTot,
+        savingsTotal: savTot,
+        creditTotal: crdTot,
+        otherTotal: invTot,
+        netTotal: netTot,
+      };
+    }),
+    (() => {
+      const sharedAccs = accountsList.filter((a) => !a.owner_partner_id);
+      const chk = sharedAccs.filter(isCheckingAcc);
+      const sav = sharedAccs.filter(isSavingsAcc);
+      const crd = sharedAccs.filter(isCreditAcc);
+      const inv = sharedAccs.filter(isInvestmentAcc);
+
+      const chkTot = chk.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const savTot = sav.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const crdTot = crd.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const invTot = inv.reduce((s, a) => s + (Number(a.balance_current) || 0), 0);
+      const netTot = chkTot + savTot + invTot - crdTot;
+
+      return {
+        id: 'shared',
+        partnerId: null,
+        name: 'Shared / Joint Accounts',
+        color: '#06b6d4',
+        isShared: true,
+        accounts: sharedAccs,
+        checking: chk,
+        savings: sav,
+        credit: crd,
+        other: inv,
+        checkingTotal: chkTot,
+        savingsTotal: savTot,
+        creditTotal: crdTot,
+        otherTotal: invTot,
+        netTotal: netTot,
+      };
+    })(),
+  ];
+
+  const renderUserAccountCard = (acc) => {
+    const isCredit = isCreditAcc(acc);
+    const isSav = isSavingsAcc(acc);
+    const isChk = isCheckingAcc(acc);
+    const clusterClass = isCredit
+      ? 'account-card-credit'
+      : isSav
+      ? 'account-card-savings'
+      : isChk
+      ? 'account-card-checking'
+      : 'account-card-other';
+    const isUpdating = updatingAccountId === acc.id;
+
+    return (
+      <div key={acc.id} className={`user-account-item-card ${clusterClass}`}>
+        <div className="account-card-topbar">
+          <div className="account-card-inst-tag">
+            <span className="account-inst-icon">
+              {isCredit ? (
+                <CreditCard size={14} className="text-amber" />
+              ) : isSav ? (
+                <Building2 size={14} className="text-green" />
+              ) : (
+                <Wallet size={14} className="text-cyan" />
+              )}
+            </span>
+            <strong>{acc.institution_name || 'Bank Account'}</strong>
+            <span className="account-mask-pill">•••• {acc.mask || '0000'}</span>
+          </div>
+          <div className="account-card-badges">
+            {acc.plaid_account_id ? (
+              <span className="pill pill-cyan" style={{ fontSize: '0.62rem' }}>
+                Plaid
+              </span>
+            ) : (
+              <span className="pill pill-outline" style={{ fontSize: '0.62rem' }}>
+                Manual
+              </span>
+            )}
+            <span
+              className="pill pill-subtle"
+              style={{ fontSize: '0.62rem', textTransform: 'capitalize' }}
+            >
+              {acc.subtype || acc.type}
+            </span>
+          </div>
+        </div>
+
+        <div className="account-card-name-row">
+          <div className="account-card-official-name" title={acc.official_name || acc.name}>
+            {acc.name}
+          </div>
+        </div>
+
+        <div className="account-card-balance-block">
+          <div className="account-balance-label">
+            {isCredit ? 'Current Balance (Debt)' : 'Current Balance'}
+          </div>
+          <div
+            className={`account-balance-figure ${
+              isCredit ? 'text-amber' : isSav ? 'text-green' : 'text-cyan'
+            }`}
+          >
+            $
+            {Number(acc.balance_current || 0).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </div>
+          {acc.balance_available != null &&
+            Math.abs(acc.balance_available - acc.balance_current) > 0.01 && (
+              <small className="account-available-note">
+                Available: $
+                {Number(acc.balance_available).toLocaleString('en-US', {
+                  minimumFractionDigits: 2,
+                })}
+              </small>
+            )}
+        </div>
+
+        <div className="account-card-owner-assigner">
+          <label htmlFor={`owner-select-${acc.id}`} className="owner-assign-label">
+            <User size={12} /> Assigned Owner:
+          </label>
+          <div className="owner-assign-select-wrapper">
+            <select
+              id={`owner-select-${acc.id}`}
+              className="owner-assign-select"
+              value={acc.owner_partner_id || 'shared'}
+              disabled={isUpdating}
+              onChange={(e) => handleUpdateAccountOwner(acc.id, e.target.value)}
+            >
+              <option value="shared">👥 Shared / Joint</option>
+              {partnersList.map((p) => (
+                <option key={p.id} value={p.id}>
+                  👤 {p.name}
+                </option>
+              ))}
+            </select>
+            {isUpdating && <span className="assign-spinner">Saving...</span>}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="module-container">
       {/* Compact Header with Active Month Trigger, Primary Actions & Options Menu */}
@@ -1264,6 +1516,28 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         )}
                       </div>
                       <small>Open & scroll to category manager to merge or hide categories</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowUserBalancesModal(true);
+                    }}
+                  >
+                    <Users size={16} className="text-cyan" />
+                    <div className="finance-option-copy">
+                      <div className="request-badges">
+                        <strong>All Accounts & Balances by User</strong>
+                        <span className="pill pill-cyan" style={{ fontSize: '0.68rem' }}>
+                          By Partner
+                        </span>
+                      </div>
+                      <small>
+                        See each user's Checking, Savings, Credit & current balances
+                      </small>
                     </div>
                   </button>
 
@@ -3576,6 +3850,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
                       setShowAccountsModal(false);
+                      setShowUserBalancesModal(true);
+                    }}
+                  >
+                    <Users size={14} /> By User Breakdown
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setShowAccountsModal(false);
                       setShowPlaidModal(true);
                     }}
                   >
@@ -3661,11 +3945,26 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         onChange={(e) => setAccMask(e.target.value)}
                       />
                     </div>
-                    <div className="form-group form-group-end">
-                      <button type="submit" className="btn btn-primary">
-                        Save Account
-                      </button>
+                    <div className="form-group">
+                      <label>Account Owner</label>
+                      <select
+                        className="input"
+                        value={accOwnerPartnerId}
+                        onChange={(e) => setAccOwnerPartnerId(e.target.value)}
+                      >
+                        <option value="">👥 Shared / Household</option>
+                        {summary.partners?.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            👤 {p.name}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.65rem' }}>
+                    <button type="submit" className="btn btn-primary">
+                      Save Account
+                    </button>
                   </div>
                 </form>
               )}
@@ -3701,6 +4000,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           </div>
                           <small>
                             {acc.institution_name} •••• {acc.mask} ({acc.subtype})
+                            {acc.owner_partner_name ? ` • Assigned to ${acc.owner_partner_name}` : ' • Shared'}
                           </small>
                         </div>
                       </div>
@@ -3713,7 +4013,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             })}
                           </strong>
                           <small className="text-muted">
-                            {acc.owner_scope.toUpperCase()}
+                            {acc.owner_partner_name ? acc.owner_partner_name.toUpperCase() : acc.owner_scope.toUpperCase()}
                           </small>
                         </div>
                         <button
@@ -3729,6 +4029,308 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: ALL ACCOUNTS & BALANCES BY USER
+         ===================================================================== */}
+      {showUserBalancesModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowUserBalancesModal(false)}
+        >
+          <div
+            className="finance-modal-card finance-modal-lg user-balances-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Users size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} className="text-cyan" />
+                  All Accounts & Balances by User
+                </h3>
+                <p className="text-muted">
+                  Checking, Savings, and Credit balances broken down by user and shared accounts.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowUserBalancesModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="finance-modal-body">
+              {/* Household Aggregate KPI Strip */}
+              <div className="user-balances-kpi-grid">
+                <div className="kpi-card">
+                  <span className="kpi-label">Total Checking (Cash)</span>
+                  <strong className="kpi-value text-cyan">
+                    ${totalHouseholdChecking.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>
+                  <small className="kpi-sub">Liquid depository cash</small>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Total Savings (Reserve)</span>
+                  <strong className="kpi-value text-green">
+                    ${totalHouseholdSavings.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>
+                  <small className="kpi-sub">Emergency & goal savings</small>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Total Credit Card Debt</span>
+                  <strong className="kpi-value text-amber">
+                    ${totalHouseholdCredit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>
+                  <small className="kpi-sub">Total credit card liability</small>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Net Liquid Position</span>
+                  <strong className={`kpi-value ${totalHouseholdNet >= 0 ? 'text-green' : 'text-danger'}`}>
+                    ${totalHouseholdNet.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>
+                  <small className="kpi-sub">Checking + Savings - Debt</small>
+                </div>
+              </div>
+
+              {/* Quick Actions & Partner Filter Pills */}
+              <div className="user-balances-toolbar">
+                <div className="user-balances-filter-tabs">
+                  <button
+                    type="button"
+                    className={`user-filter-tab-pill ${selectedUserFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setSelectedUserFilter('all')}
+                  >
+                    All Household ({accountsList.length})
+                  </button>
+                  {userGroups.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      className={`user-filter-tab-pill ${selectedUserFilter === g.id ? 'active' : ''}`}
+                      onClick={() => setSelectedUserFilter(g.id)}
+                    >
+                      <span className="user-filter-dot" style={{ backgroundColor: g.color }} />
+                      <span>{g.name}</span>
+                      <small className="filter-tab-badge">({g.accounts.length})</small>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="topbar-right">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setShowUserBalancesModal(false);
+                      setShowAccountsModal(true);
+                      setShowAddAccountForm(true);
+                    }}
+                  >
+                    <Plus size={14} /> Add Manual Account
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setShowUserBalancesModal(false);
+                      setShowPlaidModal(true);
+                    }}
+                  >
+                    <Building2 size={14} /> Link via Plaid
+                  </button>
+                </div>
+              </div>
+
+              {/* Empty state if zero accounts */}
+              {accountsList.length === 0 ? (
+                <div className="empty-state-box" style={{ padding: '2rem 1rem' }}>
+                  <Users size={32} className="text-muted" style={{ marginBottom: '0.6rem' }} />
+                  <h4>No Accounts Found</h4>
+                  <p className="text-muted">
+                    No depository or credit accounts are connected yet. Link a bank via Plaid or create a manual account to see balances by user.
+                  </p>
+                  <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        setShowUserBalancesModal(false);
+                        setShowPlaidModal(true);
+                      }}
+                    >
+                      <Building2 size={15} /> Connect Bank via Plaid
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setShowUserBalancesModal(false);
+                        setShowAccountsModal(true);
+                        setShowAddAccountForm(true);
+                      }}
+                    >
+                      <Plus size={15} /> Add Manual Account
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="partner-groups-container">
+                  {userGroups
+                    .filter((g) => selectedUserFilter === 'all' || g.id === selectedUserFilter)
+                    .map((group) => (
+                      <div key={group.id} className="partner-balance-group">
+                        <div className="partner-balance-group-header">
+                          <div className="partner-balance-identity">
+                            <div
+                              className="partner-avatar-circle"
+                              style={{ backgroundColor: group.color }}
+                            >
+                              {group.isShared ? '👥' : group.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="partner-name-row">
+                                <h4>{group.name}</h4>
+                                <span className="pill pill-outline">
+                                  {group.accounts.length} {group.accounts.length === 1 ? 'Account' : 'Accounts'}
+                                </span>
+                              </div>
+                              <small className="text-muted">
+                                {group.isShared
+                                  ? 'Joint household funds & shared credit lines'
+                                  : `Accounts & cards belonging to ${group.name}`}
+                              </small>
+                            </div>
+                          </div>
+
+                          <div className="partner-group-kpi-chips">
+                            <div className="partner-kpi-chip">
+                              <span className="kpi-chip-label">Checking</span>
+                              <strong className="kpi-chip-val text-cyan">
+                                ${group.checkingTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </strong>
+                            </div>
+                            <div className="partner-kpi-chip">
+                              <span className="kpi-chip-label">Savings</span>
+                              <strong className="kpi-chip-val text-green">
+                                ${group.savingsTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </strong>
+                            </div>
+                            <div className="partner-kpi-chip">
+                              <span className="kpi-chip-label">Credit</span>
+                              <strong className="kpi-chip-val text-amber">
+                                ${group.creditTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </strong>
+                            </div>
+                            <div className="partner-kpi-chip highlight-chip">
+                              <span className="kpi-chip-label">Net Total</span>
+                              <strong className={`kpi-chip-val ${group.netTotal >= 0 ? 'text-green' : 'text-danger'}`}>
+                                ${group.netTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        {group.accounts.length === 0 ? (
+                          <div className="empty-partner-accounts">
+                            <p className="text-muted">
+                              No accounts currently assigned to {group.name}.
+                              {group.isShared
+                                ? ' Any accounts without an assigned partner will show here.'
+                                : ` You can assign any account to ${group.name} using the owner selector.`}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="partner-clusters-wrapper">
+                            {/* 1. Checking Accounts */}
+                            {group.checking.length > 0 && (
+                              <div className="account-cluster-block">
+                                <div className="account-cluster-title">
+                                  <span className="cluster-badge cluster-checking">
+                                    <Wallet size={13} /> Checking Accounts ({group.checking.length})
+                                  </span>
+                                  <span className="cluster-subtotal text-cyan">
+                                    ${group.checkingTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                                <div className="user-account-cards-grid">
+                                  {group.checking.map((acc) => renderUserAccountCard(acc))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 2. Savings Accounts */}
+                            {group.savings.length > 0 && (
+                              <div className="account-cluster-block">
+                                <div className="account-cluster-title">
+                                  <span className="cluster-badge cluster-savings">
+                                    <Building2 size={13} /> Savings Accounts ({group.savings.length})
+                                  </span>
+                                  <span className="cluster-subtotal text-green">
+                                    ${group.savingsTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                                <div className="user-account-cards-grid">
+                                  {group.savings.map((acc) => renderUserAccountCard(acc))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 3. Credit Cards & Loans */}
+                            {group.credit.length > 0 && (
+                              <div className="account-cluster-block">
+                                <div className="account-cluster-title">
+                                  <span className="cluster-badge cluster-credit">
+                                    <CreditCard size={13} /> Credit Cards & Debt ({group.credit.length})
+                                  </span>
+                                  <span className="cluster-subtotal text-amber">
+                                    ${group.creditTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                                <div className="user-account-cards-grid">
+                                  {group.credit.map((acc) => renderUserAccountCard(acc))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 4. Other / Investments */}
+                            {group.other.length > 0 && (
+                              <div className="account-cluster-block">
+                                <div className="account-cluster-title">
+                                  <span className="cluster-badge cluster-other">
+                                    <BarChart3 size={13} /> Other / Investments ({group.other.length})
+                                  </span>
+                                  <span className="cluster-subtotal text-primary">
+                                    ${group.otherTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                                <div className="user-account-cards-grid">
+                                  {group.other.map((acc) => renderUserAccountCard(acc))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            <div className="finance-modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowUserBalancesModal(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

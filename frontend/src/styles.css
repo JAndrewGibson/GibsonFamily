@@ -3938,6 +3938,437 @@ html[data-theme='light'] .marker-tag.tag-max {
   }
 }
 
+/* ==========================================================================
+   ALL ACCOUNTS & BALANCES BY USER MODAL STYLES
+   ========================================================================== */
+
+.user-balances-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.15rem;
+}
+
+.user-balances-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  margin-bottom: 1.15rem;
+  flex-wrap: wrap;
+}
+
+.user-balances-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 0.25rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.user-filter-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 9999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.user-filter-tab-pill:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+  border-color: var(--border-light);
+}
+
+.user-filter-tab-pill.active {
+  background: var(--primary-subtle);
+  border-color: var(--primary);
+  color: var(--primary-contrast);
+  font-weight: 600;
+}
+
+.user-filter-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.filter-tab-badge {
+  opacity: 0.75;
+  font-size: 0.75rem;
+}
+
+.partner-groups-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.partner-balance-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.partner-balance-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.partner-balance-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.partner-avatar-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.partner-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+
+.partner-name-row h4 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.partner-group-kpi-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.partner-kpi-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 0.3rem 0.65rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 80px;
+}
+
+.partner-kpi-chip.highlight-chip {
+  background: var(--primary-subtle);
+  border-color: var(--primary);
+}
+
+.kpi-chip-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.kpi-chip-val {
+  font-size: 0.92rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.empty-partner-accounts {
+  padding: 1.5rem 1.25rem;
+  text-align: center;
+}
+
+.empty-partner-accounts p {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.partner-clusters-wrapper {
+  padding: 1.15rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.account-cluster-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.account-cluster-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cluster-checking {
+  background: rgba(6, 182, 212, 0.15);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.cluster-savings {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.cluster-credit {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.cluster-other {
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.cluster-subtotal {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.user-account-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 0.85rem;
+}
+
+.user-account-item-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  position: relative;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.user-account-item-card:hover {
+  border-color: var(--border-light);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.user-account-item-card.account-card-checking {
+  border-left: 3px solid #06b6d4;
+}
+
+.user-account-item-card.account-card-savings {
+  border-left: 3px solid #10b981;
+}
+
+.user-account-item-card.account-card-credit {
+  border-left: 3px solid #f59e0b;
+}
+
+.user-account-item-card.account-card-other {
+  border-left: 3px solid #6366f1;
+}
+
+.account-card-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.account-card-inst-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.account-inst-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.account-mask-pill {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.account-card-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.account-card-name-row {
+  margin-top: 0.1rem;
+}
+
+.account-card-official-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text-main);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.account-card-balance-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.account-balance-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.account-balance-figure {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.account-available-note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.account-card-owner-assigner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--border);
+}
+
+.owner-assign-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.owner-assign-select-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.owner-assign-select {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  max-width: 170px;
+  cursor: pointer;
+}
+
+.owner-assign-select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.assign-spinner {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .user-balances-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .partner-balance-group-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .partner-group-kpi-chips {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .partner-kpi-chip {
+    align-items: flex-start;
+  }
+
+  .user-account-cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .owner-assign-select {
+    font-size: 16px !important;
+    min-height: 38px;
+    max-width: 100%;
+    flex: 1;
+  }
+}
+
 
 
 
