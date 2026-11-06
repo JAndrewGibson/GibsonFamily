@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeftRight,
   ArrowUpDown,
   BarChart3,
   Building2,
@@ -23,6 +24,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Tags,
+  Target,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -205,9 +207,19 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [incSource, setIncSource] = useState('');
   const [incAmount, setIncAmount] = useState('');
   const [incExpected, setIncExpected] = useState('');
-  const [incType, setIncType] = useState('paycheck');
+  const [incType, setIncType] = useState('payroll');
+  const [incCategory, setIncCategory] = useState('');
   const [incDate, setIncDate] = useState(new Date().toISOString().slice(0, 10));
   const [incNotes, setIncNotes] = useState('');
+
+  // Custom Projected Income Target Modal State
+  const [showProjectionModal, setShowProjectionModal] = useState(false);
+  const [customProjInput, setCustomProjInput] = useState('');
+
+  // Reclassify Inflow / Deposit Modal State
+  const [editingIncomeEntry, setEditingIncomeEntry] = useState(null);
+  const [editIncType, setEditIncType] = useState('payroll');
+  const [editIncCategory, setEditIncCategory] = useState('');
 
   // Manual Account Form State (inside Accounts & Balances Modal)
   const [accName, setAccName] = useState('');
@@ -577,6 +589,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         amount: actualVal,
         expected_monthly_amount: expectedVal,
         income_type: incType,
+        category: incType === 'return' ? incCategory : '',
         date: incDate,
         budget_month: selectedMonth,
         notes: incNotes.trim(),
@@ -586,6 +599,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     setIncAmount('');
     setIncExpected('');
     setIncNotes('');
+    setIncCategory('');
     setShowAddIncome(false);
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, false);
     onDataChanged?.();
@@ -594,6 +608,56 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const handleDeleteIncome = async (incomeId) => {
     await apiFetch(`/api/finance/income/${incomeId}`, { method: 'DELETE' });
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleSaveCustomProjectedIncome = async (e) => {
+    e?.preventDefault();
+    const val = parseFloat(customProjInput);
+    if (!val || isNaN(val) || val <= 0) {
+      alert('Please enter a valid positive projected income amount.');
+      return;
+    }
+    await apiFetch('/api/finance/projected-income', {
+      method: 'POST',
+      body: JSON.stringify({
+        budget_month: selectedMonth,
+        custom_projected_income: val,
+      }),
+    });
+    setShowProjectionModal(false);
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleClearCustomProjectedIncome = async () => {
+    await apiFetch(`/api/finance/projected-income?month=${encodeURIComponent(selectedMonth)}`, {
+      method: 'DELETE',
+    });
+    setShowProjectionModal(false);
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleOpenReclassify = (inc) => {
+    setEditingIncomeEntry(inc);
+    setEditIncType(inc.income_type || 'payroll');
+    setEditIncCategory(inc.category || availableCategories[0] || 'Shopping & Tech');
+  };
+
+  const handleSaveReclassify = async (e) => {
+    e?.preventDefault();
+    if (!editingIncomeEntry) return;
+    await apiFetch(`/api/finance/income/${editingIncomeEntry.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        income_type: editIncType,
+        category: editIncType === 'return' ? editIncCategory : '',
+      }),
+    });
+    setEditingIncomeEntry(null);
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
   };
 
   const handleQuickTrackCategory = (catName) => {
@@ -1096,6 +1160,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     className="finance-option-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
+                      setCustomProjInput(
+                        summary.custom_projected_income
+                          ? String(summary.custom_projected_income)
+                          : summary.projected_monthly_income
+                          ? String(summary.projected_monthly_income)
+                          : ''
+                      );
+                      setShowProjectionModal(true);
+                    }}
+                  >
+                    <Target size={16} className="text-cyan" />
+                    <div className="finance-option-copy">
+                      <div className="request-badges">
+                        <strong>Projected Income Target</strong>
+                        {summary.is_custom_projection ? (
+                          <span className="pill pill-primary" style={{ fontSize: '0.68rem' }}>
+                            Custom Override
+                          </span>
+                        ) : (
+                          <span className="pill pill-outline" style={{ fontSize: '0.68rem' }}>
+                            Auto-Calculated
+                          </span>
+                        )}
+                      </div>
+                      <small>
+                        Target: ${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} • Custom or auto baseline
+                      </small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
                       setBudgetCat('');
                       setBudgetLimit('500');
                       setBudgetScope('this_and_future');
@@ -1258,14 +1357,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
 
           <div className="income-metric-box">
-            <span className="text-muted">Projected Income (Bar Max)</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
+              <span className="text-muted">Projected Income</span>
+              <button
+                type="button"
+                className="btn btn-xs btn-outline"
+                style={{ padding: '0.1rem 0.45rem', fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                onClick={() => {
+                  setCustomProjInput(
+                    summary.custom_projected_income
+                      ? String(summary.custom_projected_income)
+                      : summary.projected_monthly_income
+                      ? String(summary.projected_monthly_income)
+                      : ''
+                  );
+                  setShowProjectionModal(true);
+                }}
+                title="Override automated projection or customize monthly target"
+              >
+                <Edit3 size={11} /> {summary.is_custom_projection ? 'Custom Target' : 'Override'}
+              </button>
+            </div>
             <strong className="text-cyan">
               ${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </strong>
             <small className="text-muted">
-              {summary.projected_income_months_count > 0 ? (
+              {summary.is_custom_projection ? (
                 <>
-                  Based on {summary.projected_income_months_count} prior mo(s) • Recurring $
+                  <span className="pill pill-primary" style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', marginRight: '0.3rem' }}>
+                    Custom
+                  </span>
+                  Auto baseline: ${Number(summary.auto_projected_income || 0).toFixed(0)} ({summary.projected_income_months_count} mo avg)
+                </>
+              ) : summary.projected_income_months_count > 0 ? (
+                <>
+                  Based on {summary.projected_income_months_count} prior mo(s) • Rec $
                   {Number(summary.projected_recurring_income || 0).toFixed(0)} + Var $
                   {Number(summary.projected_variable_income || 0).toFixed(0)}
                 </>
@@ -1513,8 +1639,19 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           <div className="layered-bar-legend">
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-spend-ok" />
-              Actual Spent: <strong>${totalSpent.toFixed(2)}</strong>
+              Actual Net Spent: <strong>${totalSpent.toFixed(2)}</strong>
+              {Number(summary.total_monthly_returns || 0) > 0 && (
+                <small className="text-muted" style={{ marginLeft: '0.3rem' }}>
+                  (Gross: ${Number(summary.total_gross_spent || totalSpent).toFixed(2)})
+                </small>
+              )}
             </span>
+            {Number(summary.total_monthly_returns || 0) > 0 && (
+              <span className="layered-legend-item">
+                <RotateCcw size={12} className="text-primary" style={{ marginRight: '0.25rem' }} />
+                Returns Credited: <strong className="text-primary">+${Number(summary.total_monthly_returns).toFixed(2)}</strong>
+              </span>
+            )}
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-expense-budget" />
               Budgeted Categories: <strong>${expenseBudgetLimit.toFixed(0)}</strong> (Total w/ Savings:{' '}
@@ -1566,48 +1703,124 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <div className="income-entries-toggle-left">
                 {incomeEntriesExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                 <strong>
-                  {incomeEntriesExpanded ? 'Hide' : 'Show'} Income & Refund Entries (
+                  {incomeEntriesExpanded ? 'Hide' : 'Show'} Inflow & Income Entries (
                   {summary.income_entries.length})
                 </strong>
                 <span className="text-muted">
-                  — Paychecks, deposits & returns in {formatShortMonth(selectedMonth)}
+                  — Paychecks, returns, CC payments & transfers in {formatShortMonth(selectedMonth)}
                 </span>
               </div>
-              <span className="pill pill-outline">
-                +${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-              </span>
+              <div className="income-summary-badges">
+                <span className="pill pill-green" title="Real earned payroll income">
+                  Earned: +${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </span>
+                {Number(summary.total_monthly_returns || 0) > 0 && (
+                  <span className="pill pill-primary" title="Returns credited back to category budgets">
+                    Returns: +${Number(summary.total_monthly_returns).toFixed(2)}
+                  </span>
+                )}
+                {(Number(summary.total_cc_payments || 0) > 0 || Number(summary.total_transfers || 0) > 0) && (
+                  <span className="pill pill-outline" title="Non-income inflows (CC payments / transfers)">
+                    Excluded: ${(Number(summary.total_cc_payments || 0) + Number(summary.total_transfers || 0)).toFixed(2)}
+                  </span>
+                )}
+              </div>
             </button>
 
             {incomeEntriesExpanded && (
               <div className="income-entries-list">
                 {summary.income_entries.map((inc) => {
+                  const isReturn = inc.income_type === 'return' || inc.income_type === 'refund';
+                  const isCC = inc.income_type === 'cc_payment' || inc.income_type === 'credit_card_payment';
+                  const isTransfer = inc.income_type === 'transfer' || inc.income_type === 'account_transfer';
+                  const isRealIncome = !isReturn && !isCC && !isTransfer;
+
                   const diff =
                     Number(inc.amount || 0) -
                     Number(inc.expected_monthly_amount || inc.amount || 0);
                   return (
-                    <div key={inc.id} className="income-entry-row">
+                    <div
+                      key={inc.id}
+                      className={`income-entry-row ${
+                        isReturn
+                          ? 'income-entry-return'
+                          : isCC || isTransfer
+                          ? 'income-entry-nonincome'
+                          : ''
+                      }`}
+                    >
                       <div className="income-entry-left">
                         <div className="request-badges">
                           <strong>{inc.source_name}</strong>
-                          <span className="pill pill-outline">{inc.income_type}</span>
+                          {isRealIncome ? (
+                            <span className="pill pill-green">
+                              <CheckCircle2 size={11} style={{ marginRight: '0.2rem' }} />
+                              {inc.income_type === 'paycheck' || inc.income_type === 'payroll'
+                                ? 'Payroll'
+                                : inc.income_type}
+                            </span>
+                          ) : isReturn ? (
+                            <span className="pill pill-primary">
+                              <RotateCcw size={11} style={{ marginRight: '0.2rem' }} />
+                              Return / Refund
+                            </span>
+                          ) : isCC ? (
+                            <span className="pill pill-outline">
+                              <CreditCard size={11} style={{ marginRight: '0.2rem' }} />
+                              CC Payment (Non-Income)
+                            </span>
+                          ) : (
+                            <span className="pill pill-outline">
+                              <ArrowLeftRight size={11} style={{ marginRight: '0.2rem' }} />
+                              Transfer (Non-Income)
+                            </span>
+                          )}
+
+                          {isReturn && inc.category && (
+                            <span className="pill pill-cyan">
+                              Credited to: {inc.category}
+                            </span>
+                          )}
+
                           {inc.partner_name && (
-                            <span className="pill pill-cyan">{inc.partner_name}</span>
+                            <span className="pill pill-outline">{inc.partner_name}</span>
                           )}
                         </div>
                         <small className="text-muted">
                           {inc.date}
                           {inc.notes ? ` • ${inc.notes}` : ''}
+                          {isReturn
+                            ? ` • Offsets ${inc.category || 'spending'} & restores budget (equilibrium)`
+                            : isCC || isTransfer
+                            ? ` • Debt payoff / transfer excluded from monthly income`
+                            : ''}
                         </small>
                       </div>
                       <div className="income-entry-right">
                         <div style={{ textAlign: 'right' }}>
-                          <strong className="text-green font-mono">
-                            +$
+                          <strong
+                            className={`font-mono ${
+                              isRealIncome
+                                ? 'text-green'
+                                : isReturn
+                                ? 'text-primary'
+                                : 'text-muted'
+                            }`}
+                          >
+                            {isRealIncome ? '+$' : isReturn ? '+$' : '$'}
                             {Number(inc.amount).toLocaleString('en-US', {
                               minimumFractionDigits: 2,
                             })}
                           </strong>
-                          {Math.abs(diff) >= 0.01 && (
+                          {isReturn ? (
+                            <small style={{ display: 'block', fontSize: '0.72rem' }} className="text-cyan">
+                              offsets {inc.category || 'spend'}
+                            </small>
+                          ) : isCC || isTransfer ? (
+                            <small style={{ display: 'block', fontSize: '0.72rem' }} className="text-muted">
+                              non-income
+                            </small>
+                          ) : Math.abs(diff) >= 0.01 ? (
                             <small
                               style={{ display: 'block', fontSize: '0.72rem' }}
                               className={diff >= 0 ? 'text-cyan' : 'text-amber'}
@@ -1615,8 +1828,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               {diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(2)} vs expected ($
                               {Number(inc.expected_monthly_amount).toFixed(0)})
                             </small>
-                          )}
+                          ) : null}
                         </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => handleOpenReclassify(inc)}
+                          title="Change classification (Payroll, Return, CC Payment, Transfer)"
+                        >
+                          <SlidersHorizontal size={12} /> Reclassify
+                        </button>
                         <button
                           type="button"
                           className="btn-icon-danger"
@@ -1719,6 +1940,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   Total Budgeted: <strong>${totalBudget.toFixed(2)}</strong> ($
                   {expenseBudgetLimit.toFixed(0)} spending + ${savingsBudgetLimit.toFixed(0)}{' '}
                   savings) vs. Projected Income: <strong>${projectedIncome.toFixed(2)}</strong>
+                  {Number(summary.total_monthly_returns || 0) > 0 && (
+                    <span className="text-cyan" style={{ display: 'block', marginTop: '0.2rem' }}>
+                      ⚖️ <strong>Financial Equilibrium</strong>: +$
+                      {Number(summary.total_monthly_returns).toFixed(2)} in store returns credited back to category budgets (offsets spend without inflating income).
+                    </span>
+                  )}
                 </small>
               </div>
             </div>
@@ -1789,8 +2016,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       </div>
                       <div className="topbar-right">
                         <span>
-                          <strong>${b.spent.toFixed(2)}</strong> / ${b.monthly_limit.toFixed(0)} (
-                          {b.utilization_pct}%)
+                          <strong>${b.spent.toFixed(2)}</strong>
+                          {b.returns_credited > 0 && (
+                            <small className="text-muted" style={{ marginLeft: '0.2rem' }}>
+                              (net)
+                            </small>
+                          )}{' '}
+                          / ${b.monthly_limit.toFixed(0)} ({b.utilization_pct}%)
                         </span>
                         <button
                           type="button"
@@ -1823,6 +2055,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       {over
                         ? `Over budget by $${Math.abs(b.remaining).toFixed(2)} in ${formatShortMonth(selectedMonth)}`
                         : `$${b.remaining.toFixed(2)} remaining for ${formatShortMonth(selectedMonth)}`}
+                      {b.returns_credited > 0 && (
+                        <span className="text-cyan" style={{ marginLeft: '0.45rem', display: 'inline-block' }}>
+                          • +${b.returns_credited.toFixed(2)} return credited ($${b.gross_spent.toFixed(2)} gross)
+                        </span>
+                      )}
                     </small>
                   </div>
                 );
@@ -3509,7 +3746,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       )}
 
       {/* =====================================================================
-          FLOATING MODAL 5: LOG INCOME / PAYCHECK
+          FLOATING MODAL 5: LOG INFLOW / INCOME / RETURN
          ===================================================================== */}
       {showAddIncome && (
         <div
@@ -3524,10 +3761,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <div>
                 <h3>
                   <DollarSign size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
-                  Log Income or Paycheck for {formatMonthLabel(selectedMonth)}
+                  Log Inflow or Income for {formatMonthLabel(selectedMonth)}
                 </h3>
                 <p className="text-muted">
-                  Track fixed paychecks, variable/commission income, bonuses, or side income.
+                  Record payroll salary, store returns, credit card payments, or account transfers. Returns restore your category budget; card payments and transfers are excluded from income.
                 </p>
               </div>
               <button
@@ -3543,11 +3780,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             <form className="finance-modal-body" onSubmit={handleAddIncome}>
               <div className="form-grid-2">
                 <div className="form-group">
-                  <label>Income Source / Employer *</label>
+                  <label>Inflow Source / Merchant / Employer *</label>
                   <input
                     type="text"
                     className="input"
-                    placeholder="e.g., Primary Paycheck, Freelance"
+                    placeholder="e.g., Primary Paycheck, Target Return, Chase Payoff"
                     value={incSource}
                     onChange={(e) => setIncSource(e.target.value)}
                     required
@@ -3555,7 +3792,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   />
                 </div>
                 <div className="form-group">
-                  <label>Actual Amount Received ($) *</label>
+                  <label>Amount ($) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -3571,6 +3808,34 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
               <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
                 <div className="form-group">
+                  <label>Inflow Classification *</label>
+                  <select
+                    className="input"
+                    value={incType}
+                    onChange={(e) => {
+                      setIncType(e.target.value);
+                      if (e.target.value === 'return' && !incCategory) {
+                        setIncCategory(availableCategories[0] || 'Shopping & Tech');
+                      }
+                    }}
+                  >
+                    <optgroup label="Real Earned Income (Counts Toward Monthly Income)">
+                      <option value="payroll">Payroll / Salary (Actual Earned Income)</option>
+                      <option value="variable">Variable / Commission / Hourly</option>
+                      <option value="bonus">Bonus / Commission Payout</option>
+                      <option value="side_income">Side Income / Freelance</option>
+                      <option value="other">Other Earned Deposit</option>
+                    </optgroup>
+                    <optgroup label="Store Returns / Refunds (Offsets Category Spend & Restores Budget)">
+                      <option value="return">Return / Refund (Offsets Category Spend)</option>
+                    </optgroup>
+                    <optgroup label="Non-Income Inflows (Excluded from Income)">
+                      <option value="cc_payment">Credit Card Payment (Debt Payoff - Excluded)</option>
+                      <option value="transfer">Account Transfer (Moving Funds - Excluded)</option>
+                    </optgroup>
+                  </select>
+                </div>
+                <div className="form-group">
                   <label>Expected / Baseline Amount ($)</label>
                   <input
                     type="number"
@@ -3582,21 +3847,37 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     onChange={(e) => setIncExpected(e.target.value)}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Income Type</label>
+              </div>
+
+              {incType === 'return' && (
+                <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                  <label>Category to Credit / Offset *</label>
                   <select
                     className="input"
-                    value={incType}
-                    onChange={(e) => setIncType(e.target.value)}
+                    value={incCategory}
+                    onChange={(e) => setIncCategory(e.target.value)}
+                    required
                   >
-                    <option value="paycheck">Regular Paycheck / Salary</option>
-                    <option value="variable">Variable / Commission / Hourly</option>
-                    <option value="bonus">Bonus / Commission Payout</option>
-                    <option value="side_income">Side Income / Freelance</option>
-                    <option value="other">Other Deposit / Reimbursement</option>
+                    <option value="">-- Select Category to Credit --</option>
+                    {availableCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
+                  <small className="text-muted" style={{ display: 'block', marginTop: '0.35rem' }}>
+                    ⚖️ <strong>Financial Equilibrium</strong>: This return will NOT inflate your income. Instead, it subtracts from your category's net spend and restores your remaining budget, keeping you protected from overspending.
+                  </small>
                 </div>
-              </div>
+              )}
+
+              {(incType === 'cc_payment' || incType === 'transfer') && (
+                <div className="alert alert-info" style={{ marginTop: '0.75rem' }}>
+                  <span>
+                    ℹ️ Marking this entry as <strong>{incType === 'cc_payment' ? 'Credit Card Payment' : 'Account Transfer'}</strong> ensures it will be completely excluded from your monthly earned income, preventing payments from overstating your budget.
+                  </span>
+                </div>
+              )}
 
               <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
                 <div className="form-group">
@@ -3613,7 +3894,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   <input
                     type="text"
                     className="input"
-                    placeholder="e.g., Includes overtime"
+                    placeholder="e.g., Target order return, paycheck #1"
                     value={incNotes}
                     onChange={(e) => setIncNotes(e.target.value)}
                   />
@@ -3629,7 +3910,264 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary">
-                  Save Income to {formatShortMonth(selectedMonth)}
+                  Save Inflow to {formatShortMonth(selectedMonth)}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: CUSTOM PROJECTED INCOME TARGET OVERRIDE
+         ===================================================================== */}
+      {showProjectionModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowProjectionModal(false)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Target size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                  Projected Income Target for {formatMonthLabel(selectedMonth)}
+                </h3>
+                <p className="text-muted">
+                  Set a custom monthly income target to override the automated historical calculation.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowProjectionModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveCustomProjectedIncome}>
+              <div className="projection-status-box">
+                <div className="projection-metric-row">
+                  <span className="text-muted">Auto-Calculated Projection:</span>
+                  <strong>
+                    ${Number(summary.auto_projected_income || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </strong>
+                </div>
+                <small className="text-muted">
+                  {summary.projected_income_months_count > 0
+                    ? `Calculated from ${summary.projected_income_months_count} prior active month(s) (recurring $${Number(summary.projected_recurring_income || 0).toFixed(0)} + var $${Number(summary.projected_variable_income || 0).toFixed(0)})`
+                    : 'No prior months with income found yet; baseline defaults to $0.00'}
+                </small>
+
+                {summary.is_custom_projection && (
+                  <div className="projection-active-override-badge">
+                    <span className="pill pill-primary">
+                      Active Custom Override: ${Number(summary.custom_projected_income).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group" style={{ marginTop: '1rem' }}>
+                <label>Custom Projected Income Target ($) *</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  className="input"
+                  placeholder={String(Number(summary.auto_projected_income || 5000).toFixed(0))}
+                  value={customProjInput}
+                  onChange={(e) => setCustomProjInput(e.target.value)}
+                  required
+                  autoFocus
+                />
+                <small className="text-muted" style={{ display: 'block', marginTop: '0.35rem' }}>
+                  This amount serves as the 100% ceiling for your Layered Balance Bar and Budget Overlap checks for {formatShortMonth(selectedMonth)}.
+                </small>
+              </div>
+
+              <div className="projection-quick-presets">
+                {summary.auto_projected_income > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => setCustomProjInput(String(Math.round(summary.auto_projected_income)))}
+                  >
+                    Use Auto (${Math.round(summary.auto_projected_income)})
+                  </button>
+                )}
+                {summary.expected_monthly_income > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => setCustomProjInput(String(Math.round(summary.expected_monthly_income)))}
+                  >
+                    Use Expected (${Math.round(summary.expected_monthly_income)})
+                  </button>
+                )}
+                {summary.total_monthly_income > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => setCustomProjInput(String(Math.round(summary.total_monthly_income)))}
+                  >
+                    Use Current Actual (${Math.round(summary.total_monthly_income)})
+                  </button>
+                )}
+              </div>
+
+              <div className="form-actions" style={{ marginTop: '1.25rem', justifyContent: 'space-between' }}>
+                <div>
+                  {summary.is_custom_projection && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleClearCustomProjectedIncome}
+                      title="Revert back to auto-calculated historical projection"
+                    >
+                      Revert to Auto Projection
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setShowProjectionModal(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Save Target
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: RECLASSIFY INFLOW / DEPOSIT
+         ===================================================================== */}
+      {editingIncomeEntry && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setEditingIncomeEntry(null)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <SlidersHorizontal size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                  Reclassify Inflow / Deposit
+                </h3>
+                <p className="text-muted">
+                  Choose whether this is true earned income, a return offsetting a category, or an excluded card payment/transfer.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setEditingIncomeEntry(null)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveReclassify}>
+              <div className="reclassify-source-summary">
+                <div>
+                  <strong>{editingIncomeEntry.source_name}</strong>
+                  <div className="text-muted" style={{ fontSize: '0.78rem' }}>
+                    {editingIncomeEntry.date}
+                    {editingIncomeEntry.notes ? ` • ${editingIncomeEntry.notes}` : ''}
+                  </div>
+                </div>
+                <strong className="font-mono text-green" style={{ fontSize: '1.1rem' }}>
+                  ${Number(editingIncomeEntry.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </strong>
+              </div>
+
+              <div className="form-group" style={{ marginTop: '0.9rem' }}>
+                <label>Inflow Classification *</label>
+                <select
+                  className="input"
+                  value={editIncType}
+                  onChange={(e) => {
+                    setEditIncType(e.target.value);
+                    if (e.target.value === 'return' && !editIncCategory) {
+                      setEditIncCategory(availableCategories[0] || 'Shopping & Tech');
+                    }
+                  }}
+                >
+                  <optgroup label="Real Earned Income (Counts Toward Monthly Income)">
+                    <option value="payroll">Payroll / Salary (Actual Earned Income)</option>
+                    <option value="variable">Variable / Commission / Hourly</option>
+                    <option value="bonus">Bonus / Lump Sum Payout</option>
+                    <option value="side_income">Side Income / Freelance</option>
+                    <option value="other">Other Earned Deposit</option>
+                  </optgroup>
+                  <optgroup label="Store Returns / Refunds (Offsets Category Spend & Restores Budget)">
+                    <option value="return">Return / Refund (Offsets Category Spend)</option>
+                  </optgroup>
+                  <optgroup label="Non-Income Inflows (Excluded from Income)">
+                    <option value="cc_payment">Credit Card Payment (Debt Payoff - Excluded)</option>
+                    <option value="transfer">Account Transfer (Moving Funds - Excluded)</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              {editIncType === 'return' && (
+                <div className="form-group" style={{ marginTop: '0.85rem' }}>
+                  <label>Category to Credit & Offset *</label>
+                  <select
+                    className="input"
+                    value={editIncCategory}
+                    onChange={(e) => setEditIncCategory(e.target.value)}
+                    required
+                  >
+                    <option value="">-- Choose Category to Offset --</option>
+                    {availableCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="text-muted" style={{ display: 'block', marginTop: '0.35rem' }}>
+                    ⚖️ <strong>Financial Equilibrium</strong>: Crediting this category subtracts $
+                    {Number(editingIncomeEntry.amount).toFixed(2)} from your category's net spend and restores it to your remaining budget, without inflating your total income ceiling.
+                  </small>
+                </div>
+              )}
+
+              {(editIncType === 'cc_payment' || editIncType === 'transfer') && (
+                <div className="alert alert-info" style={{ marginTop: '0.85rem' }}>
+                  <span>
+                    ℹ️ Marking this entry as <strong>{editIncType === 'cc_payment' ? 'Credit Card Payment' : 'Account Transfer'}</strong> ensures it is completely excluded from your monthly earned income, preventing overstated income.
+                  </span>
+                </div>
+              )}
+
+              <div className="form-actions" style={{ marginTop: '1.2rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEditingIncomeEntry(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Apply Classification
                 </button>
               </div>
             </form>

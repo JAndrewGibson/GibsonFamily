@@ -153,12 +153,20 @@ CREATE TABLE IF NOT EXISTS income_entries (
     source_name TEXT NOT NULL,
     amount REAL NOT NULL,
     expected_monthly_amount REAL,
-    income_type TEXT NOT NULL DEFAULT 'paycheck',
+    income_type TEXT NOT NULL DEFAULT 'payroll',
+    category TEXT NOT NULL DEFAULT '',
     is_recurring INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS monthly_income_projections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_month TEXT NOT NULL UNIQUE,
+    custom_projected_income REAL NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -368,6 +376,21 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE transactions ADD COLUMN budget_month TEXT NOT NULL DEFAULT ''")
     db.execute(
         "UPDATE transactions SET budget_month = substr(date, 1, 7) WHERE budget_month IS NULL OR budget_month = ''"
+    )
+
+    inc_cols = [r["name"] for r in db.execute("PRAGMA table_info(income_entries)").fetchall()]
+    if "category" not in inc_cols:
+        db.execute("ALTER TABLE income_entries ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS monthly_income_projections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            budget_month TEXT NOT NULL UNIQUE,
+            custom_projected_income REAL NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
     )
 
 

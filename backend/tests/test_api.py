@@ -614,5 +614,168 @@ def test_income_fluctuations_under_review_requests_and_mobile_push(client):
     assert fps_entry["is_archived"] is True
 
 
+def test_custom_projected_income_and_inflow_reclassification_equilibrium(client):
+    """
+    Test suite for:
+    1. Custom Projected Income override (POST /api/finance/projected-income and DELETE /api/finance/projected-income).
+    2. Inflow reclassification & financial equilibrium:
+       - 'cc_payment' (Credit Card Payment) and 'transfer' (Account Transfer) excluded from income.
+       - 'return' (Return / Refund) excluded from income and credited to category budget (net spend offset).
+       - Only 'payroll' / earned income counted in total_monthly_income.
+    """
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Family",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    p_data = p_res.get_json()
+    alex_headers = {"Authorization": f"Bearer {p_data['token']}"}
+
+    month = "2026-12"
+
+    # Set up a category budget: "Shopping" $300 limit in 2026-12
+    cat_res = client.post(
+        "/api/finance/budgets",
+        headers=alex_headers,
+        json={"category": "Shopping", "monthly_limit": 300.0, "budget_month": month},
+    )
+    assert cat_res.status_code == 201
+
+    # Log an expense in Shopping for $120.00
+    tx_res = client.post(
+        "/api/finance/transactions",
+        headers=alex_headers,
+        json={
+            "name": "Target Store",
+            "amount": 120.0,
+            "category": "Shopping",
+            "date": "2026-12-05",
+        },
+    )
+    assert tx_res.status_code == 201
+
+    # Log true Payroll income: $4,000.00
+    client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "source_name": "Alex Tech Salary",
+            "amount": 4000.0,
+            "income_type": "payroll",
+            "date": "2026-12-01",
+            "budget_month": month,
+        },
+    )
+
+    # Log Credit Card Payment inflow: $650.00
+    client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "source_name": "Chase Autopay Payment",
+            "amount": 650.0,
+            "income_type": "cc_payment",
+            "date": "2026-12-08",
+            "budget_month": month,
+        },
+    )
+
+    # Log Account Transfer inflow: $200.00
+    client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "source_name": "Transfer from Savings",
+            "amount": 200.0,
+            "income_type": "transfer",
+            "date": "2026-12-10",
+            "budget_month": month,
+        },
+    )
+
+    # Log Return inflow: $45.00 for returned item to Shopping
+    ret_res = client.post(
+        "/api/finance/income",
+        headers=alex_headers,
+        json={
+            "source_name": "Target Return / Refund",
+            "amount": 45.0,
+            "income_type": "return",
+            "category": "Shopping",
+            "date": "2026-12-12",
+            "budget_month": month,
+        },
+    )
+    assert ret_res.status_code == 201
+    return_entry = ret_res.get_json()
+    assert return_entry["income_type"] == "return"
+    assert return_entry["category"] == "Shopping"
+
+    # Query summary for 2026-12
+    sum_res = client.get(f"/api/finance/summary?month={month}", headers=alex_headers)
+    assert sum_res.status_code == 200
+    summary = sum_res.get_json()
+
+    # CRITICAL: Total monthly income must ONLY be the $4,000 payroll income!
+    # CC payment ($650), Transfer ($200), and Return ($45) MUST NOT be in total_monthly_income!
+    assert summary["total_monthly_income"] == 4000.0
+    assert summary["total_monthly_returns"] == 45.0
+    assert summary["total_cc_payments"] == 650.0
+    assert summary["total_transfers"] == 200.0
+
+    # Equilibrium check on Shopping category budget:
+    # Gross spent = $120.00
+    # Returns credited = $45.00
+    # Net spent = $75.00
+    # Remaining = $300 - $75 = $225.00
+    shopping_budget = next(b for b in summary["budgets"] if b["category"] == "Shopping")
+    assert shopping_budget["gross_spent"] == 120.0
+    assert shopping_budget["returns_credited"] == 45.0
+    assert shopping_budget["spent"] == 75.0
+    assert shopping_budget["remaining"] == 225.0
+
+    # Net total spent in month should be $75.00 (gross $120 - returns $45)
+    assert summary["total_gross_spent"] == 120.0
+    assert summary["total_monthly_spent"] == 75.0
+    assert summary["net_monthly_cashflow"] == 3925.0  # 4000 - 75
+
+    # Test Custom Projected Income:
+    # Initially, is_custom_projection is False
+    assert summary["is_custom_projection"] is False
+
+    # Set custom projected income to $5,500.00
+    proj_post = client.post(
+        "/api/finance/projected-income",
+        headers=alex_headers,
+        json={"budget_month": month, "custom_projected_income": 5500.0},
+    )
+    assert proj_post.status_code == 200
+    proj_data = proj_post.get_json()
+    assert proj_data["is_custom_projection"] is True
+    assert proj_data["custom_projected_income"] == 5500.0
+
+    # Verify summary reflects custom projection
+    sum_custom = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
+    assert sum_custom["is_custom_projection"] is True
+    assert sum_custom["projected_monthly_income"] == 5500.0
+    assert sum_custom["custom_projected_income"] == 5500.0
+
+    # Clear custom projected income
+    proj_del = client.delete(
+        f"/api/finance/projected-income?month={month}",
+        headers=alex_headers,
+    )
+    assert proj_del.status_code == 200
+    sum_revert = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
+    assert sum_revert["is_custom_projection"] is False
+    assert sum_revert["custom_projected_income"] is None
+
+
+
 
 

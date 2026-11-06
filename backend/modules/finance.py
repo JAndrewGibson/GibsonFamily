@@ -16,6 +16,36 @@ DEFAULT_CATEGORIES = [
     "Future Purchase Savings",
 ]
 
+# Classification of Inflows:
+# Only REAL_INCOME_TYPES (Payroll / Paycheck / Commission / Bonus / Earned Income) count as Actual Monthly Income.
+# Returns/Refunds are excluded from income and credited back to category budgets to maintain equilibrium.
+# Credit Card Payments and Account Transfers are non-income transfers excluded from income.
+REAL_INCOME_TYPES = {
+    "payroll",
+    "paycheck",
+    "salary",
+    "variable",
+    "commission",
+    "bonus",
+    "side_income",
+    "other",
+    "other_income",
+}
+RETURN_TYPES = {"return", "refund"}
+NON_INCOME_TYPES = {"cc_payment", "credit_card_payment", "transfer", "account_transfer"}
+
+
+def is_real_earned_income(itype: str) -> bool:
+    return (itype or "").strip().lower() in REAL_INCOME_TYPES
+
+
+def is_return_refund(itype: str) -> bool:
+    return (itype or "").strip().lower() in RETURN_TYPES
+
+
+def is_transfer_or_cc_payment(itype: str) -> bool:
+    return (itype or "").strip().lower() in NON_INCOME_TYPES
+
 
 def _shift_year_month(ym: str, delta_months: int) -> str:
     """Shifts a YYYY-MM string by delta_months (e.g., -1 for previous month, +1 for next month)."""
@@ -373,15 +403,44 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
         tx_date = tx.get("date") or date.today().isoformat()
         tx_budget_month = tx_date[:7]
 
-        # In Plaid, negative amounts or INCOME primary category represent deposits/income
+        # In Plaid, negative amounts or INCOME primary category represent inflows/deposits
         if amount < 0 or pfc == "INCOME":
             inc_amt = round(abs(amount), 2)
             if inc_amt > 0:
+                name_str = (tx.get("merchant_name") or tx.get("name") or "Plaid Deposit").strip()
+                name_lower = name_str.lower()
+                acc_row = db.execute("SELECT type, subtype FROM accounts WHERE id = ?", (local_acc_id,)).fetchone()
+                is_credit_acc = bool(acc_row and (acc_row["type"] == "credit" or "credit" in (acc_row["subtype"] or "").lower()))
+
+                category_map = {
+                    "FOOD_AND_DRINK": "Groceries & Dining",
+                    "GENERAL_MERCHANDISE": "Shopping & Tech",
+                    "ENTERTAINMENT": "Entertainment & Gaming",
+                    "MEDICAL": "Health & Medical",
+                    "RENT_AND_UTILITIES": "Housing & Utilities",
+                    "TRAVEL": "Travel & Experiences",
+                }
+                mapped_cat = category_map.get(pfc, "Shopping & Tech")
+
+                # Auto-classify inflow: Credit Card Payment, Return, Account Transfer, or Payroll
+                if is_credit_acc or any(w in name_lower for w in ["payment", "autopay", "thank you", "card payment", "bill pay"]):
+                    auto_income_type = "cc_payment"
+                    ret_cat = ""
+                elif any(w in name_lower for w in ["return", "refund", "reimbursement", "credit for return"]) or pfc in ["GENERAL_MERCHANDISE", "FOOD_AND_DRINK", "ENTERTAINMENT"]:
+                    auto_income_type = "return"
+                    ret_cat = mapped_cat
+                elif any(w in name_lower for w in ["transfer", "zelle", "venmo", "xfer", "wire", "deposit transfer", "internal transfer"]):
+                    auto_income_type = "transfer"
+                    ret_cat = ""
+                else:
+                    auto_income_type = "payroll"
+                    ret_cat = ""
+
                 db.execute(
                     """
                     INSERT OR IGNORE INTO income_entries
-                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, is_recurring, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'paycheck', 1, 'Synced from Plaid')
+                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid')
                     """,
                     (
                         partner_id,
@@ -389,9 +448,12 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
                         tx.get("transaction_id"),
                         tx_date,
                         tx_budget_month,
-                        tx.get("merchant_name") or tx.get("name") or "Plaid Deposit",
+                        name_str,
                         inc_amt,
-                        inc_amt,
+                        inc_amt if auto_income_type == "payroll" else 0.0,
+                        auto_income_type,
+                        ret_cat,
+                        1 if auto_income_type == "payroll" else 0,
                     ),
                 )
             continue
@@ -634,24 +696,53 @@ def finance_summary():
     expected_by_month = {}
     recurring_by_month = {}
     variable_by_month = {}
+    returns_by_month = {}
+    transfers_by_month = {}
+
     for inc in all_income_entries:
         ym = inc["effective_budget_month"]
         inc["budget_month"] = ym
+        itype = (inc.get("income_type") or "payroll").strip().lower()
+        amt = float(inc["amount"] or 0.0)
+        exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
+
+        is_real = is_real_earned_income(itype)
+        is_ret = is_return_refund(itype)
+        is_trans = is_transfer_or_cc_payment(itype)
+        inc["is_real_income"] = is_real
+        inc["is_return"] = is_ret
+        inc["is_transfer_or_cc"] = is_trans
+
         if ym:
             month_set.add(ym)
-            amt = float(inc["amount"] or 0.0)
-            exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
-            income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
-            expected_by_month[ym] = expected_by_month.get(ym, 0.0) + exp
-            if inc.get("income_type") == "paycheck":
-                recurring_by_month[ym] = recurring_by_month.get(ym, 0.0) + amt
-            else:
-                variable_by_month[ym] = variable_by_month.get(ym, 0.0) + amt
+            if is_real:
+                income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
+                expected_by_month[ym] = expected_by_month.get(ym, 0.0) + exp
+                if itype in ["paycheck", "payroll"]:
+                    recurring_by_month[ym] = recurring_by_month.get(ym, 0.0) + amt
+                else:
+                    variable_by_month[ym] = variable_by_month.get(ym, 0.0) + amt
+            elif is_ret:
+                returns_by_month[ym] = returns_by_month.get(ym, 0.0) + amt
+            elif is_trans:
+                transfers_by_month[ym] = transfers_by_month.get(ym, 0.0) + amt
 
     month_income_entries = [inc for inc in all_income_entries if inc["budget_month"] == selected_month]
-    prev_ym = _shift_year_month(selected_month, -1)
+    month_returns = [inc for inc in month_income_entries if inc["is_return"]]
+    month_transfers = [inc for inc in month_income_entries if inc["is_transfer_or_cc"]]
 
     total_monthly_income = round(income_by_month.get(selected_month, 0.0), 2)
+    total_monthly_returns = round(sum(float(inc["amount"] or 0.0) for inc in month_returns), 2)
+    total_cc_payments = round(sum(float(inc["amount"] or 0.0) for inc in month_transfers if "cc" in (inc.get("income_type") or "")), 2)
+    total_transfers = round(sum(float(inc["amount"] or 0.0) for inc in month_transfers if "transfer" in (inc.get("income_type") or "")), 2)
+
+    returns_by_cat = {}
+    for ret in month_returns:
+        rcat = (ret.get("category") or "").strip()
+        if rcat:
+            returns_by_cat[rcat] = returns_by_cat.get(rcat, 0.0) + float(ret["amount"] or 0.0)
+
+    prev_ym = _shift_year_month(selected_month, -1)
     previous_month_income = round(income_by_month.get(prev_ym, 0.0), 2)
     active_income_months = [v for v in income_by_month.values() if v > 0]
     average_monthly_income = (
@@ -664,13 +755,13 @@ def finance_summary():
         2,
     )
 
-    # Compute Projected Monthly Income based on previous months (< selected_month, up to trailing 6 active months)
+    # Compute Auto Projected Monthly Income based on previous months (< selected_month, up to trailing 6 active months)
     prior_active_yms = sorted(
         [ym for ym, tot in income_by_month.items() if ym < selected_month and tot > 0]
     )[-6:]
     if prior_active_yms:
         prior_totals = [round(income_by_month[ym], 2) for ym in prior_active_yms]
-        projected_monthly_income = round(sum(prior_totals) / len(prior_totals), 2)
+        auto_projected_income = round(sum(prior_totals) / len(prior_totals), 2)
         projected_recurring_income = round(
             sum(recurring_by_month.get(ym, 0.0) for ym in prior_active_yms) / len(prior_active_yms),
             2,
@@ -688,12 +779,26 @@ def finance_summary():
     else:
         # Fallback if no prior months have logged income yet: use current expected or multi-month average
         fallback_proj = expected_monthly_income or average_monthly_income or total_monthly_income
-        projected_monthly_income = round(fallback_proj, 2)
+        auto_projected_income = round(fallback_proj, 2)
         projected_recurring_income = round(recurring_by_month.get(selected_month, fallback_proj), 2)
         projected_variable_income = round(variable_by_month.get(selected_month, 0.0), 2)
-        projected_income_min = projected_monthly_income
-        projected_income_max = projected_monthly_income
+        projected_income_min = auto_projected_income
+        projected_income_max = auto_projected_income
         projected_income_months_used = []
+
+    # Check for custom projected income override
+    proj_row = db.execute(
+        "SELECT custom_projected_income FROM monthly_income_projections WHERE budget_month = ?",
+        (selected_month,),
+    ).fetchone()
+    if proj_row and proj_row["custom_projected_income"] is not None and float(proj_row["custom_projected_income"]) > 0:
+        custom_projected_income = round(float(proj_row["custom_projected_income"]), 2)
+        projected_monthly_income = custom_projected_income
+        is_custom_projection = True
+    else:
+        custom_projected_income = None
+        projected_monthly_income = auto_projected_income
+        is_custom_projection = False
 
     income_vs_projected = round(total_monthly_income - projected_monthly_income, 2)
     income_vs_projected_pct = (
@@ -726,17 +831,24 @@ def finance_summary():
     enriched_budgets = []
     total_budget_limit = 0.0
     total_budget_spent = 0.0
+    total_budget_gross_spent = 0.0
     for b in month_budgets:
-        spent = round(spend_by_category.get(b["category"], 0.0), 2)
+        cat_name = b["category"]
+        gross_spent = round(spend_by_category.get(cat_name, 0.0), 2)
+        cat_returns = round(returns_by_cat.get(cat_name, 0.0), 2)
+        net_spent = round(gross_spent - cat_returns, 2)
         limit_val = float(b["monthly_limit"])
         total_budget_limit += limit_val
-        total_budget_spent += spent
-        pct = round((spent / limit_val) * 100, 1) if limit_val > 0 else 0.0
+        total_budget_gross_spent += gross_spent
+        total_budget_spent += net_spent
+        pct = round((net_spent / limit_val) * 100, 1) if limit_val > 0 else 0.0
         enriched_budgets.append({
             **b,
-            "spent": spent,
-            "remaining": round(limit_val - spent, 2),
-            "utilization_pct": pct,
+            "gross_spent": gross_spent,
+            "returns_credited": cat_returns,
+            "spent": net_spent,
+            "remaining": round(limit_val - net_spent, 2),
+            "utilization_pct": max(0.0, pct),
         })
 
     cat_mgmt = _build_category_management_payload(
@@ -749,7 +861,9 @@ def finance_summary():
     for tx in all_transactions:
         tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
 
-    total_monthly_spent = round(sum(float(t["amount"]) for t in month_transactions), 2)
+    total_gross_spent = round(sum(float(t["amount"]) for t in month_transactions), 2)
+    # Net monthly spent subtracts returns so equilibrium is strictly maintained and returns offset spending
+    total_monthly_spent = round(max(0.0, total_gross_spent - total_monthly_returns), 2)
     net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
     unallocated_income = round(total_monthly_income - total_budget_limit, 2)
     projected_net_cashflow = round(projected_monthly_income - total_monthly_spent, 2)
@@ -835,12 +949,19 @@ def finance_summary():
         "spent_dipping_into_savings_amount": spent_dipping_into_savings_amount,
         "is_balanced_budget": is_balanced_budget,
         "total_monthly_spent": total_monthly_spent,
+        "total_gross_spent": total_gross_spent,
+        "total_monthly_returns": total_monthly_returns,
+        "total_cc_payments": total_cc_payments,
+        "total_transfers": total_transfers,
         "budgeted_categories_spent": round(total_budget_spent, 2),
         "total_monthly_income": total_monthly_income,
         "expected_monthly_income": expected_monthly_income,
         "previous_month_income": previous_month_income,
         "average_monthly_income": average_monthly_income,
         "projected_monthly_income": projected_monthly_income,
+        "auto_projected_income": auto_projected_income,
+        "custom_projected_income": custom_projected_income,
+        "is_custom_projection": is_custom_projection,
         "projected_recurring_income": projected_recurring_income,
         "projected_variable_income": projected_variable_income,
         "projected_income_min": projected_income_min,
@@ -915,12 +1036,30 @@ def finance_history():
 
     income_totals_by_month = {}
     expected_totals_by_month = {}
+    returns_by_month = {}
+    transfers_by_month = {}
+
     for inc in all_incomes:
         ym = inc["effective_budget_month"]
+        itype = (inc.get("income_type") or "payroll").strip().lower()
         amt = float(inc["amount"] or 0.0)
         exp = float(inc["expected_monthly_amount"]) if inc.get("expected_monthly_amount") is not None else amt
-        income_totals_by_month[ym] = income_totals_by_month.get(ym, 0.0) + amt
-        expected_totals_by_month[ym] = expected_totals_by_month.get(ym, 0.0) + exp
+        if is_real_earned_income(itype):
+            income_totals_by_month[ym] = income_totals_by_month.get(ym, 0.0) + amt
+            expected_totals_by_month[ym] = expected_totals_by_month.get(ym, 0.0) + exp
+        elif is_return_refund(itype):
+            returns_by_month[ym] = returns_by_month.get(ym, 0.0) + amt
+        elif is_transfer_or_cc_payment(itype):
+            transfers_by_month[ym] = transfers_by_month.get(ym, 0.0) + amt
+
+    custom_proj_rows = db.execute(
+        "SELECT budget_month, custom_projected_income FROM monthly_income_projections"
+    ).fetchall()
+    custom_proj_map = {
+        r["budget_month"]: round(float(r["custom_projected_income"]), 2)
+        for r in custom_proj_rows
+        if r["custom_projected_income"] and float(r["custom_projected_income"]) > 0
+    }
 
     sorted_months = sorted(months_set, reverse=True)
     history_list = []
@@ -935,18 +1074,30 @@ def finance_history():
             cat = tx["category"]
             spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
 
-        total_spent = round(sum(float(tx["amount"]) for tx in m_txs), 2)
+        cat_returns_map = {}
+        for r_inc in m_incomes:
+            if is_return_refund(r_inc.get("income_type")):
+                rc = (r_inc.get("category") or "").strip()
+                if rc:
+                    cat_returns_map[rc] = cat_returns_map.get(rc, 0.0) + float(r_inc.get("amount") or 0.0)
+
+        month_ret = returns_by_month.get(ym, 0.0)
+        gross_spent = round(sum(float(tx["amount"]) for tx in m_txs), 2)
+        total_spent = round(max(0.0, gross_spent - month_ret), 2)
         total_limit = round(sum(float(b["monthly_limit"]) for b in m_budgets), 2)
         total_income = round(income_totals_by_month.get(ym, 0.0), 2)
         expected_income = round(expected_totals_by_month.get(ym, 0.0), 2)
         prev_ym = _shift_year_month(ym, -1)
         prev_income = round(income_totals_by_month.get(prev_ym, 0.0), 2)
         prior_hist_yms = sorted([k for k, v in income_totals_by_month.items() if k < ym and v > 0])[-6:]
-        projected_inc = (
+        auto_proj_inc = (
             round(sum(income_totals_by_month[k] for k in prior_hist_yms) / len(prior_hist_yms), 2)
             if prior_hist_yms
             else round(expected_income or total_income, 2)
         )
+        is_custom_proj = ym in custom_proj_map
+        projected_inc = custom_proj_map[ym] if is_custom_proj else auto_proj_inc
+
         inc_delta = round(total_income - prev_income, 2)
         inc_delta_pct = round((inc_delta / prev_income) * 100, 1) if prev_income > 0 else 0.0
 
@@ -955,10 +1106,14 @@ def finance_history():
         for b in m_budgets:
             cat = b["category"]
             seen_cats.add(cat)
-            spent = round(spend_by_cat.get(cat, 0.0), 2)
+            cat_gross = round(spend_by_cat.get(cat, 0.0), 2)
+            cat_ret = round(cat_returns_map.get(cat, 0.0), 2)
+            spent = round(cat_gross - cat_ret, 2)
             lim = float(b["monthly_limit"])
             cat_breakdown.append({
                 "category": cat,
+                "gross_spent": cat_gross,
+                "returns_credited": cat_ret,
                 "spent": spent,
                 "monthly_limit": lim,
                 "remaining": round(lim - spent, 2),
@@ -969,11 +1124,15 @@ def finance_history():
 
         for cat, spent_val in spend_by_cat.items():
             if cat not in seen_cats:
+                cat_ret = round(cat_returns_map.get(cat, 0.0), 2)
+                spent = round(spent_val - cat_ret, 2)
                 cat_breakdown.append({
                     "category": cat,
-                    "spent": round(spent_val, 2),
+                    "gross_spent": round(spent_val, 2),
+                    "returns_credited": cat_ret,
+                    "spent": spent,
                     "monthly_limit": 0.0,
-                    "remaining": -round(spent_val, 2),
+                    "remaining": -round(spent, 2),
                     "utilization_pct": 100.0,
                     "is_budgeted": False,
                     "is_active": False,
@@ -983,9 +1142,12 @@ def finance_history():
             "month": ym,
             "budget_month": ym,
             "total_spent": total_spent,
+            "total_gross_spent": gross_spent,
+            "total_returns": month_ret,
             "total_budget": total_limit,
             "total_income": total_income,
             "projected_income": projected_inc,
+            "is_custom_projection": is_custom_proj,
             "expected_income": expected_income,
             "net_cashflow": round(total_income - total_spent, 2),
             "income_fluctuation_delta": inc_delta,
@@ -1023,16 +1185,17 @@ def create_income_entry():
         if expected_raw is not None and str(expected_raw).strip() != ""
         else round(amount, 2)
     )
-    income_type = (data.get("income_type") or "paycheck").strip()
-    is_recurring = 1 if data.get("is_recurring", income_type == "paycheck") else 0
+    income_type = (data.get("income_type") or "payroll").strip()
+    category = (data.get("category") or "").strip()
+    is_recurring = 1 if data.get("is_recurring", income_type in ["paycheck", "payroll"]) else 0
     notes = (data.get("notes") or "").strip()
 
     db = get_db()
     cur = db.execute(
         """
         INSERT INTO income_entries
-        (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, is_recurring, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(partner_id) if partner_id else None,
@@ -1043,6 +1206,7 @@ def create_income_entry():
             round(amount, 2),
             expected_amt,
             income_type,
+            category,
             is_recurring,
             notes,
         ),
@@ -1065,16 +1229,17 @@ def update_income_entry(income_id: int):
     expected_raw = data.get("expected_monthly_amount", existing["expected_monthly_amount"])
     expected_amt = round(float(expected_raw), 2) if expected_raw is not None and str(expected_raw) != "" else amount
     income_type = (data.get("income_type") or existing["income_type"]).strip()
+    category = (data.get("category") if "category" in data else (existing.get("category") or "")).strip()
     budget_month = (data.get("budget_month") or existing["budget_month"] or existing["date"][:7]).strip()[:7]
     notes = data.get("notes", existing["notes"])
 
     db.execute(
         """
         UPDATE income_entries
-        SET source_name = ?, amount = ?, expected_monthly_amount = ?, income_type = ?, budget_month = ?, notes = ?
+        SET source_name = ?, amount = ?, expected_monthly_amount = ?, income_type = ?, category = ?, budget_month = ?, notes = ?
         WHERE id = ?
         """,
-        (source_name, amount, expected_amt, income_type, budget_month, notes, income_id),
+        (source_name, amount, expected_amt, income_type, category, budget_month, notes, income_id),
     )
     db.commit()
     updated = dict(db.execute("SELECT * FROM income_entries WHERE id = ?", (income_id,)).fetchone())
@@ -1087,6 +1252,51 @@ def delete_income_entry(income_id: int):
     db.execute("DELETE FROM income_entries WHERE id = ?", (income_id,))
     db.commit()
     return jsonify({"deleted": True, "id": income_id})
+
+
+@finance_bp.route("/projected-income", methods=["POST", "PUT"])
+def set_custom_projected_income():
+    data = request.get_json(silent=True) or {}
+    budget_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
+    raw_amount = data.get("projected_income")
+
+    db = get_db()
+    if raw_amount is None or str(raw_amount).strip() == "" or float(raw_amount) <= 0:
+        db.execute("DELETE FROM monthly_income_projections WHERE budget_month = ?", (budget_month,))
+        db.commit()
+        return jsonify({
+            "budget_month": budget_month,
+            "custom_projected_income": None,
+            "is_custom": False,
+            "reverted_to_auto": True,
+        })
+
+    custom_val = round(float(raw_amount), 2)
+    db.execute(
+        """
+        INSERT INTO monthly_income_projections (budget_month, custom_projected_income, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(budget_month) DO UPDATE SET
+            custom_projected_income = excluded.custom_projected_income,
+            updated_at = datetime('now')
+        """,
+        (budget_month, custom_val),
+    )
+    db.commit()
+    return jsonify({
+        "budget_month": budget_month,
+        "custom_projected_income": custom_val,
+        "is_custom": True,
+    })
+
+
+@finance_bp.route("/projected-income", methods=["DELETE"])
+def delete_custom_projected_income():
+    budget_month = (request.args.get("month") or date.today().strftime("%Y-%m")).strip()[:7]
+    db = get_db()
+    db.execute("DELETE FROM monthly_income_projections WHERE budget_month = ?", (budget_month,))
+    db.commit()
+    return jsonify({"budget_month": budget_month, "reverted_to_auto": True})
 
 
 @finance_bp.route("/accounts", methods=["POST"])

@@ -115,9 +115,18 @@ GibsonFamily/
 - **Transaction Budget Month (`transactions.budget_month`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.
-- **Income, Projected Income & Fluctuation Tracking (`income_entries` table)**:
-  - Stores monthly income (`source_name`, `amount`, `expected_monthly_amount`, `income_type` [`paycheck`, `variable`, `bonus`, `side_income`, `other`], `date`, `budget_month`). Plaid inflows (`amount < 0` or `personal_finance_category.primary == "INCOME"`) are also automatically synced into `income_entries`.
-  - `GET /api/finance/summary` and `GET /api/finance/history` compute `total_monthly_income`, `projected_monthly_income` (calculated from up to 6 prior active months `< selected_month`, broken down into `projected_recurring_income`, `projected_variable_income`, and historical `projected_income_min`/`projected_income_max`), `income_vs_projected` (`$` and `%`), `expected_monthly_income`, `previous_month_income`, `average_monthly_income`, `income_fluctuation_vs_prev` (`$` and `%`), `income_fluctuation_vs_expected`, `net_monthly_cashflow` (`income - spent`), and `unallocated_income` (`income - budget`).
+- **Income, Projected Income & Fluctuation Tracking (`income_entries` & `monthly_income_projections` tables)**:
+  - Stores monthly inflows in `income_entries(source_name, amount, expected_monthly_amount, income_type, category, date, budget_month, notes)`.
+  - **Inflow Classification & Strict Financial Equilibrium**:
+    - **`payroll` / earned income** (`payroll`, `paycheck`, `salary`, `variable`, `commission`, `bonus`, `side_income`, `other`): The **only** inflows that count toward `total_monthly_income`.
+    - **`cc_payment` (Credit Card Payment)** & **`transfer` (Account Transfer)**: Non-income debt payoffs or fund movements; completely excluded from `total_monthly_income` so credit card payments never overstate earned income.
+    - **`return` (Store Returns / Refunds)**: Excluded from income. Instead, credited directly to its designated category (`gross_spent`, `returns_credited`, `spent` net).
+      - *Equilibrium Law*: `Net Spent = Gross Spent - Returns Credited`. `Remaining Budget = Limit - Net Spent = (Limit + Returns Credited) - Gross Spent`. This ensures refunds restore budget room exactly as if the returned item was never purchased, without generating phantom income or encouraging overspending.
+  - **Custom Projected Income Override (`monthly_income_projections` table)**:
+    - Stores per-month overrides `(budget_month, custom_projected_income, updated_at)`.
+    - Managed via `POST /api/finance/projected-income` and `DELETE /api/finance/projected-income`.
+    - When set, overrides the auto-calculated historical projection (calculated from up to 6 prior active months `< selected_month`) across `finance_summary`, `finance_history`, and the Layered Budget Balance Bar ceiling.
+  - `GET /api/finance/summary` computes `total_monthly_income`, `total_monthly_returns`, `total_cc_payments`, `total_transfers`, `total_gross_spent`, `total_monthly_spent` (net), `projected_monthly_income`, `is_custom_projection`, `auto_projected_income`, `custom_projected_income`, `income_vs_projected` (`$` and `%`), `net_monthly_cashflow`, and `unallocated_income`.
 - **Category Catalog, Category Manager Panel & Untracked Category Flagging (`category_catalog` table)**:
   - Stores both pre-loaded (`is_preloaded = 1`) and custom (`is_preloaded = 0`) categories along with `is_archived` status so unwanted pre-loaded or custom categories can be hidden/removed without re-populating in dropdowns.
   - Managed via `GET /api/finance/categories`, `POST /api/finance/categories` (create/restore), `PUT /api/finance/categories` (rename/merge across all transactions, budgets, requests, and future plans), and `DELETE /api/finance/categories` (hide/delete with optional transaction reassignment).
