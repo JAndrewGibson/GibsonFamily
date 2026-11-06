@@ -3461,6 +3461,427 @@ html[data-theme='light'] .finance-modal-card {
   }
 }
 
+/* ==========================================================================
+   LAYERED HORIZONTAL BUDGET BALANCE BAR, GREY SAVINGS & OVERLAP WARNINGS
+   ========================================================================== */
+
+.card-overbudget-alert {
+  border-color: rgba(239, 68, 68, 0.58);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+}
+
+.metric-box-danger {
+  border-color: rgba(239, 68, 68, 0.65) !important;
+  background: rgba(239, 68, 68, 0.08) !important;
+}
+
+.layered-budget-bar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.layered-bar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.layered-bar-header strong {
+  font-size: 0.9rem;
+}
+
+.layered-bar-overflow-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.layered-bar-outer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.35rem 0 1.35rem;
+}
+
+.layered-bar-track {
+  position: relative;
+  flex: 1;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border);
+  overflow: visible;
+}
+
+/* Base Segments inside 0..100% Projected Income Bar */
+.layer-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: all 0.3s ease;
+}
+
+.layer-expense-budget {
+  background: rgba(99, 102, 241, 0.24);
+  border-right: 1px dashed rgba(99, 102, 241, 0.65);
+  border-radius: 9px 0 0 9px;
+}
+
+/* Savings Zone Shown in Grey at the Right End of Projected Income */
+.layer-grey-savings {
+  background: linear-gradient(
+    90deg,
+    rgba(100, 116, 139, 0.48),
+    rgba(148, 163, 184, 0.58)
+  );
+  border-left: 2px solid #94a3b8;
+  border-radius: 0 9px 9px 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 0.55rem;
+  overflow: hidden;
+}
+
+.layer-grey-savings-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  z-index: 2;
+}
+
+/* Diagonal Red/Amber Hatching when Budget Overlaps Into Grey Savings */
+.layer-overlap-budget-savings {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.42),
+    rgba(239, 68, 68, 0.42) 7px,
+    rgba(245, 158, 11, 0.42) 7px,
+    rgba(245, 158, 11, 0.42) 14px
+  );
+  border-left: 2px solid #ef4444;
+  border-right: 2px solid #ef4444;
+  z-index: 3;
+}
+
+/* Foreground Inner Spend Bar */
+.layer-actual-spend-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.layer-spend-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: width 0.35s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.spend-fill-ok {
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+  border-radius: 5px;
+}
+
+.spend-fill-warn {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+  border-radius: 5px;
+}
+
+.spend-fill-dipping-savings {
+  background: repeating-linear-gradient(
+    45deg,
+    #ef4444,
+    #ef4444 6px,
+    #f59e0b 6px,
+    #f59e0b 12px
+  );
+  border-radius: 0 5px 5px 0;
+  border: 1px solid #fff;
+}
+
+/* Vertical Limit Tick Markers (Cat Budget, Actual Income, Projected Max) */
+.layer-limit-marker {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  z-index: 6;
+}
+
+.marker-expense-budget {
+  background: #818cf8;
+}
+
+.marker-actual-income {
+  background: #10b981;
+}
+
+.marker-projected-max {
+  background: #06b6d4;
+  width: 3px;
+}
+
+.marker-tag {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.67rem;
+  font-weight: 700;
+  padding: 0.1rem 0.38rem;
+  border-radius: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+}
+
+.marker-tag.tag-top {
+  bottom: calc(100% + 3px);
+  color: #a5b4fc;
+  border-color: rgba(129, 140, 248, 0.45);
+}
+
+.marker-tag.tag-bottom {
+  top: calc(100% + 3px);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.marker-tag.tag-max {
+  bottom: calc(100% + 3px);
+  transform: translateX(-95%);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.5);
+}
+
+/* Overflow Tail when Budget or Spend Exceeds 100% Projected Income */
+.layered-bar-overflow-tail {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 0.65rem;
+  border-radius: 8px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.85),
+    rgba(239, 68, 68, 0.85) 6px,
+    rgba(185, 28, 28, 0.85) 6px,
+    rgba(185, 28, 28, 0.85) 12px
+  );
+  border: 1px solid #fca5a5;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+/* Legend Strip */
+.layered-bar-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.layered-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.swatch-spend-ok {
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+}
+
+.swatch-expense-budget {
+  background: rgba(99, 102, 241, 0.55);
+  border: 1px solid #818cf8;
+}
+
+.swatch-grey-savings {
+  background: #64748b;
+  border: 1px solid #94a3b8;
+}
+
+.swatch-actual-inc {
+  background: #10b981;
+}
+
+.swatch-proj-max {
+  background: #06b6d4;
+}
+
+/* Explicit Overlap Warning Cards */
+.overlap-warnings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 0.55rem;
+  margin-top: 0.25rem;
+}
+
+.overlap-warning-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 9px;
+  font-size: 0.8rem;
+}
+
+.overlap-warning-card.overlap-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.48);
+}
+
+.overlap-warning-card.overlap-warn {
+  background: rgba(245, 158, 11, 0.11);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.overlap-warn-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.overlap-danger .overlap-warn-icon,
+.overlap-danger strong {
+  color: #f87171;
+}
+
+.overlap-warn .overlap-warn-icon,
+.overlap-warn strong {
+  color: #fbbf24;
+}
+
+.overlap-warn-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.overlap-warn-copy span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Category Budgets Card Balance Strip */
+.category-budgets-balance-strip {
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  margin-bottom: 0.85rem;
+  border: 1px solid var(--border);
+}
+
+.category-budgets-balance-strip.strip-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.category-budgets-balance-strip.strip-warn {
+  background: rgba(245, 158, 11, 0.11);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.category-budgets-balance-strip.strip-balanced {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.balance-strip-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+}
+
+html[data-theme='light'] .layered-bar-track {
+  background: #e2e8f0;
+}
+
+html[data-theme='light'] .layer-grey-savings {
+  background: linear-gradient(90deg, #94a3b8, #64748b);
+}
+
+html[data-theme='light'] .layered-bar-overflow-pill {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+html[data-theme='light'] .overlap-danger .overlap-warn-icon,
+html[data-theme='light'] .overlap-danger strong {
+  color: #b91c1c;
+}
+
+html[data-theme='light'] .overlap-warn .overlap-warn-icon,
+html[data-theme='light'] .overlap-warn strong {
+  color: #b45309;
+}
+
+html[data-theme='light'] .marker-tag.tag-top {
+  color: #4338ca;
+}
+
+html[data-theme='light'] .marker-tag.tag-bottom {
+  color: #047857;
+}
+
+html[data-theme='light'] .marker-tag.tag-max {
+  color: #0e7490;
+}
+
+@media (max-width: 768px) {
+  .layered-bar-outer {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 1.5rem 0 1.4rem;
+  }
+
+  .layered-bar-overflow-tail {
+    width: 100%;
+    height: 30px;
+  }
+
+  .marker-tag {
+    font-size: 0.62rem;
+    padding: 0.08rem 0.28rem;
+  }
+}
+
+
 
 
 

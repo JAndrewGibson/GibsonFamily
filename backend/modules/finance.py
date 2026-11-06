@@ -755,6 +755,56 @@ def finance_summary():
     projected_net_cashflow = round(projected_monthly_income - total_monthly_spent, 2)
     projected_unallocated_income = round(projected_monthly_income - total_budget_limit, 2)
 
+    # Balanced Budget & Overlap Analysis (Projected Income max, Grey Savings at end, Expense Budgets & Actual Spend)
+    savings_budget_limit = round(
+        sum(
+            float(b["monthly_limit"])
+            for b in month_budgets
+            if "saving" in (b.get("category") or "").lower()
+        ),
+        2,
+    )
+    expense_budget_limit = round(max(0.0, total_budget_limit - savings_budget_limit), 2)
+    unallocated_projected_savings = round(max(0.0, projected_monthly_income - total_budget_limit), 2)
+    projected_savings_reserve = round(savings_budget_limit + unallocated_projected_savings, 2)
+    savings_zone_start = round(max(0.0, projected_monthly_income - projected_savings_reserve), 2)
+
+    budget_exceeds_projected_income = bool(
+        projected_monthly_income > 0 and total_budget_limit > projected_monthly_income
+    )
+    budget_over_projected_amount = (
+        round(max(0.0, total_budget_limit - projected_monthly_income), 2)
+        if projected_monthly_income > 0
+        else 0.0
+    )
+    budget_exceeds_actual_income = bool(total_budget_limit > total_monthly_income)
+    budget_over_actual_amount = round(max(0.0, total_budget_limit - total_monthly_income), 2)
+
+    spent_exceeds_projected_income = bool(
+        projected_monthly_income > 0 and total_monthly_spent > projected_monthly_income
+    )
+    spent_over_projected_amount = (
+        round(max(0.0, total_monthly_spent - projected_monthly_income), 2)
+        if projected_monthly_income > 0
+        else 0.0
+    )
+    spent_dipping_into_savings = bool(
+        projected_monthly_income > 0
+        and projected_savings_reserve > 0
+        and total_monthly_spent > savings_zone_start
+    )
+    spent_dipping_into_savings_amount = (
+        round(max(0.0, total_monthly_spent - savings_zone_start), 2)
+        if spent_dipping_into_savings
+        else 0.0
+    )
+    is_balanced_budget = bool(
+        projected_monthly_income > 0
+        and total_budget_limit <= projected_monthly_income
+        and not spent_dipping_into_savings
+        and not spent_exceeds_projected_income
+    )
+
     return jsonify({
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
@@ -771,6 +821,19 @@ def finance_summary():
         "credit_balance": round(total_credit_used, 2),
         "net_liquid": round(total_cash - total_credit_used, 2),
         "total_monthly_budget": round(total_budget_limit, 2),
+        "expense_budget_limit": expense_budget_limit,
+        "savings_budget_limit": savings_budget_limit,
+        "projected_savings_reserve": projected_savings_reserve,
+        "savings_zone_start": savings_zone_start,
+        "budget_exceeds_projected_income": budget_exceeds_projected_income,
+        "budget_over_projected_amount": budget_over_projected_amount,
+        "budget_exceeds_actual_income": budget_exceeds_actual_income,
+        "budget_over_actual_amount": budget_over_actual_amount,
+        "spent_exceeds_projected_income": spent_exceeds_projected_income,
+        "spent_over_projected_amount": spent_over_projected_amount,
+        "spent_dipping_into_savings": spent_dipping_into_savings,
+        "spent_dipping_into_savings_amount": spent_dipping_into_savings_amount,
+        "is_balanced_budget": is_balanced_budget,
         "total_monthly_spent": total_monthly_spent,
         "budgeted_categories_spent": round(total_budget_spent, 2),
         "total_monthly_income": total_monthly_income,

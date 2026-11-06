@@ -104,7 +104,10 @@ GibsonFamily/
     - **Accounts & Balances** (floating modal with connected/manual accounts and "Add Manual Account" form)
     - **Bank Connections / Plaid** (floating modal with Plaid Link, Sandbox Quick Connect, and Re-Sync)
   - Below the header, the primary view immediately surfaces:
-    1. **Monthly Income & Fluctuation Tracker** (with collapsible Income & Refund Entries drawer).
+    1. **Monthly Income, Layered Budget Balance Bar & Fluctuation Tracker**:
+       - Features a **Layered Horizontal Bar Graph** where the 100% maximum ceiling is **Projected Income** (`projected_monthly_income`), **Savings** (`savings_budget_limit + unallocated_projected_savings`) is shown in **grey at the right end**, and **Actual Spending**, **Budgeted Categories Limit**, and **Actual Income Limit** are layered with vertical limit markers.
+       - Automatically surfaces high-visibility flags and warnings whenever parts overlap (`budget_exceeds_projected_income`, `budget_exceeds_actual_income`, `spent_exceeds_projected_income`, `spent_dipping_into_savings`, or spending exceeding category limits), plus a status strip inside the **Category Budgets** card.
+       - Includes the collapsible Income & Refund Entries drawer.
     2. **Two-Column Main Grid (`.finance-two-col`)**:
        - **Left Column**: **Category Budgets** (with persistent sort order and per-month scope adjustments).
        - **Right Column**: **Interactive Financial Visualizations & Graphs Panel** (`income_vs_expenses` vertical bar chart + multi-month clustered bars, `spending_pie` SVG donut/pie chart, `budget_bars` horizontal category utilization bars, and `cashflow_trend` multi-month net cash flow & savings rate).

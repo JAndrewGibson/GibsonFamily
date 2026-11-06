@@ -730,12 +730,152 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   ).sort();
 
   // =========================================================================
-  // DATA VISUALIZATION & GRAPH COMPUTATIONS
+  // DATA VISUALIZATION, LAYERED BALANCE BAR & OVERLAP WARNING COMPUTATIONS
   // =========================================================================
   const actualIncome = Number(summary.total_monthly_income || 0);
   const projectedIncome = Number(summary.projected_monthly_income || 0);
   const totalBudget = Number(summary.total_monthly_budget || 0);
   const totalSpent = Number(summary.total_monthly_spent || 0);
+
+  // Separate explicit savings budgets (e.g. "Future Purchase Savings") from spending category budgets
+  const savingsBudgetLimit = Number(
+    summary.savings_budget_limit ??
+      (summary.budgets || [])
+        .filter((b) => /saving/i.test(b.category || ''))
+        .reduce((acc, b) => acc + Number(b.monthly_limit || 0), 0)
+  );
+  const expenseBudgetLimit = Math.max(0, totalBudget - savingsBudgetLimit);
+  const unallocatedProjectedSavings = Math.max(0, projectedIncome - totalBudget);
+  // Total Savings shown in grey at the right end of Projected Income
+  const totalGreySavings = savingsBudgetLimit + unallocatedProjectedSavings;
+
+  // The maximum of the horizontal layered bar is Projected Income (fallback to max metric if projected is 0)
+  const barMaxProjected =
+    projectedIncome > 0
+      ? projectedIncome
+      : Math.max(actualIncome, totalBudget, totalSpent, 1);
+
+  // Dollar threshold where the Grey Savings Zone begins (at the right end of Projected Income)
+  const savingsZoneStartDollar = Math.max(0, barMaxProjected - totalGreySavings);
+
+  // Percentages relative to Projected Income (0% to 100% of bar)
+  const savingsWidthPct = Math.min(
+    100,
+    Math.max(0, (totalGreySavings / barMaxProjected) * 100)
+  );
+  const savingsStartPct = Math.max(0, 100 - savingsWidthPct);
+  const expenseBudgetPct = Math.min(
+    100,
+    Math.max(0, (expenseBudgetLimit / barMaxProjected) * 100)
+  );
+  const totalBudgetPct = Math.min(
+    100,
+    Math.max(0, (totalBudget / barMaxProjected) * 100)
+  );
+  const actualIncomePct = Math.min(
+    100,
+    Math.max(0, (actualIncome / barMaxProjected) * 100)
+  );
+  const totalSpentPct = Math.min(
+    100,
+    Math.max(0, (totalSpent / barMaxProjected) * 100)
+  );
+
+  // Overlap regions on the 0..100% Projected Income bar
+  const budgetIntoSavingsStartPct = Math.min(savingsStartPct, expenseBudgetPct);
+  const budgetIntoSavingsWidthPct =
+    expenseBudgetPct > savingsStartPct ? expenseBudgetPct - savingsStartPct : 0;
+
+  const safeSpentWidthPct = Math.min(totalSpentPct, savingsStartPct);
+  const spentIntoSavingsWidthPct =
+    totalSpentPct > savingsStartPct ? totalSpentPct - savingsStartPct : 0;
+
+  // Explicit Overlap & Unbalanced Budget Flags
+  const budgetExceedsProjected =
+    projectedIncome > 0 ? totalBudget > projectedIncome : totalBudget > 0;
+  const budgetOverProjectedAmt = Math.max(0, totalBudget - projectedIncome);
+
+  const budgetExceedsActual = totalBudget > actualIncome;
+  const budgetOverActualAmt = Math.max(0, totalBudget - actualIncome);
+
+  const spentExceedsProjected =
+    projectedIncome > 0 ? totalSpent > projectedIncome : totalSpent > 0;
+  const spentOverProjectedAmt = Math.max(0, totalSpent - projectedIncome);
+
+  const spentExceedsActual = totalSpent > actualIncome;
+  const spentOverActualAmt = Math.max(0, totalSpent - actualIncome);
+
+  const spentDippingIntoSavings =
+    projectedIncome > 0 &&
+    totalGreySavings > 0 &&
+    totalSpent > savingsZoneStartDollar;
+  const spentDippingIntoSavingsAmt = spentDippingIntoSavings
+    ? Math.max(0, totalSpent - savingsZoneStartDollar)
+    : 0;
+
+  const spentExceedsExpenseBudget =
+    expenseBudgetLimit > 0 && totalSpent > expenseBudgetLimit;
+  const spentOverExpenseBudgetAmt = Math.max(0, totalSpent - expenseBudgetLimit);
+
+  const overlapFlags = [];
+  if (budgetExceedsProjected) {
+    overlapFlags.push({
+      id: 'budget_over_projected',
+      severity: 'danger',
+      title: `Budget Exceeds Projected Income by +$${budgetOverProjectedAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+      detail:
+        projectedIncome > 0
+          ? `Total budgeted ($${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })}, incl. $${savingsBudgetLimit.toFixed(0)} savings) is ${Math.round((totalBudget / projectedIncome) * 100)}% of your $${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} projected income. Reduce category budgets to balance your budget.`
+          : `You have $${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })} budgeted, but Projected Income is $0.00. Log income to establish your baseline.`,
+    });
+  }
+  if (spentExceedsProjected) {
+    overlapFlags.push({
+      id: 'spent_over_projected',
+      severity: 'danger',
+      title: `More Spent Than Projected Income (+$${spentOverProjectedAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
+      detail: `Actual spending ($${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}) has exceeded 100% of your $${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} projected monthly income.`,
+    });
+  }
+  if (spentDippingIntoSavings) {
+    overlapFlags.push({
+      id: 'spent_into_savings',
+      severity: 'danger',
+      title: `Spent Money Dipping Into Savings ($${spentDippingIntoSavingsAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })} dipped)`,
+      detail: `Spending ($${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}) crossed past your $${savingsZoneStartDollar.toLocaleString('en-US', { minimumFractionDigits: 2 })} spending ceiling and is eating into your grey Savings zone ($${totalGreySavings.toLocaleString('en-US', { minimumFractionDigits: 2 })}).`,
+    });
+  }
+  if (budgetExceedsActual) {
+    overlapFlags.push({
+      id: 'budget_over_actual',
+      severity: 'warning',
+      title: `More Budgeted Than Actual Income (+$${budgetOverActualAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
+      detail: `Your $${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })} budget is higher than the $${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} in actual income logged so far for ${formatShortMonth(selectedMonth)}.`,
+    });
+  }
+  if (spentExceedsActual) {
+    overlapFlags.push({
+      id: 'spent_over_actual',
+      severity: 'warning',
+      title: `More Spent Than Actual Income Received (+$${spentOverActualAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
+      detail: `Actual expenses ($${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}) exceed actual income received so far ($${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}).`,
+    });
+  }
+  if (spentExceedsExpenseBudget && !spentDippingIntoSavings) {
+    overlapFlags.push({
+      id: 'spent_over_expense_budget',
+      severity: 'warning',
+      title: `Spending Exceeds Category Budget Limit (+$${spentOverExpenseBudgetAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
+      detail: `You have spent $${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })} against your $${expenseBudgetLimit.toLocaleString('en-US', { minimumFractionDigits: 2 })} non-savings category budget.`,
+    });
+  }
+
+  const isBalancedBudget =
+    projectedIncome > 0 &&
+    !budgetExceedsProjected &&
+    !spentExceedsProjected &&
+    !spentDippingIntoSavings &&
+    totalGreySavings > 0;
 
   // 1. Selected Month Bar Comparison (Projected Income, Actual Income, Monthly Budget, Actual Spend)
   const currentMonthBars = [
@@ -1051,14 +1191,38 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       )}
 
       {/* =====================================================================
-          1. TOP OF PAGE: MONTHLY INCOME & FLUCTUATION TRACKER
+          1. TOP OF PAGE: MONTHLY INCOME, LAYERED BALANCE BAR & FLUCTUATION TRACKER
          ===================================================================== */}
-      <div className="card income-fluctuation-card">
+      <div
+        className={`card income-fluctuation-card ${
+          budgetExceedsProjected || spentExceedsProjected
+            ? 'card-overbudget-alert'
+            : ''
+        }`}
+      >
         <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
           <div>
-            <h3>{formatMonthLabel(selectedMonth)} Income & Fluctuation Tracker</h3>
+            <div className="request-badges">
+              <h3>{formatMonthLabel(selectedMonth)} Income & Fluctuation Tracker</h3>
+              {isBalancedBudget ? (
+                <span className="pill pill-green">
+                  <CheckCircle2 size={12} /> Balanced Budget (${totalGreySavings.toFixed(0)} Savings)
+                </span>
+              ) : budgetExceedsProjected ? (
+                <span className="pill pill-red">
+                  <AlertTriangle size={12} /> Budget Exceeds Projected Income (+$
+                  {budgetOverProjectedAmt.toFixed(0)})
+                </span>
+              ) : overlapFlags.length > 0 ? (
+                <span className="pill pill-amber">
+                  <AlertTriangle size={12} /> {overlapFlags.length} Budget Overlap Warning
+                  {overlapFlags.length === 1 ? '' : 's'}
+                </span>
+              ) : null}
+            </div>
             <small className="text-muted">
-              Track paychecks, variable income, and projected income alongside your {formatShortMonth(selectedMonth)} budget.
+              Goal: Keep budgeted categories + grey savings within your{' '}
+              <strong>Projected Income</strong> ceiling without overlapping.
             </small>
           </div>
           <div className="topbar-right">
@@ -1094,7 +1258,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
 
           <div className="income-metric-box">
-            <span className="text-muted">Projected Income (Prior Months)</span>
+            <span className="text-muted">Projected Income (Bar Max)</span>
             <strong className="text-cyan">
               ${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </strong>
@@ -1144,24 +1308,251 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             </small>
           </div>
 
-          <div className="income-metric-box">
-            <span className="text-muted">Net Cash Flow & Unallocated</span>
+          <div
+            className={`income-metric-box ${
+              budgetExceedsProjected ? 'metric-box-danger' : ''
+            }`}
+          >
+            <span className="text-muted">
+              {budgetExceedsProjected
+                ? '⚠️ Budget Exceeds Projected!'
+                : 'Budget vs. Projected Income'}
+            </span>
             <strong
               className={
-                Number(summary.net_monthly_cashflow || 0) >= 0 ? 'text-green' : 'text-amber'
+                budgetExceedsProjected
+                  ? 'text-danger'
+                  : Number(summary.projected_unallocated_income || 0) >= 0
+                  ? 'text-green'
+                  : 'text-amber'
               }
             >
-              {Number(summary.net_monthly_cashflow || 0) >= 0 ? '+' : '-'}$
-              {Math.abs(Number(summary.net_monthly_cashflow || 0)).toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-              })}
+              {budgetExceedsProjected
+                ? `Over by +$${budgetOverProjectedAmt.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                  })}`
+                : `+$${totalGreySavings.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                  })} Savings`}
             </strong>
             <small className="text-muted">
-              After ${totalBudget.toFixed(0)} budget:{' '}
-              {Number(summary.unallocated_income || 0) >= 0 ? '+' : '-'}$
-              {Math.abs(Number(summary.unallocated_income || 0)).toFixed(0)} unallocated
+              Budgeted: ${totalBudget.toFixed(0)} / Projected: ${projectedIncome.toFixed(0)}
             </small>
           </div>
+        </div>
+
+        {/* ===================================================================
+            LAYERED HORIZONTAL BAR: PROJECTED INCOME MAX + GREY SAVINGS AT END
+           =================================================================== */}
+        <div className="layered-budget-bar-section">
+          <div className="layered-bar-header">
+            <div>
+              <strong>
+                Layered Budget & Savings vs. Projected Income (Max: $
+                {projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })})
+              </strong>
+              <small className="text-muted" style={{ display: 'block' }}>
+                Spending Categories: <strong>${expenseBudgetLimit.toFixed(0)}</strong> • Grey Savings at End:{' '}
+                <strong>${totalGreySavings.toFixed(0)}</strong> (
+                {savingsBudgetLimit > 0
+                  ? `$${savingsBudgetLimit.toFixed(0)} budgeted + $${unallocatedProjectedSavings.toFixed(0)} unallocated`
+                  : `$${unallocatedProjectedSavings.toFixed(0)} unallocated`}
+                ) • Actual Spent: <strong>${totalSpent.toFixed(2)}</strong>
+              </small>
+            </div>
+
+            {(budgetExceedsProjected || spentExceedsProjected) && (
+              <div className="layered-bar-overflow-pill">
+                <AlertTriangle size={14} />
+                <span>
+                  {budgetExceedsProjected && spentExceedsProjected
+                    ? `Budget +$${budgetOverProjectedAmt.toFixed(0)} & Spend +$${spentOverProjectedAmt.toFixed(0)} Over Projected Max!`
+                    : budgetExceedsProjected
+                    ? `Budget Exceeds Projected Max by +$${budgetOverProjectedAmt.toFixed(2)}`
+                    : `Spending Exceeds Projected Max by +$${spentOverProjectedAmt.toFixed(2)}`}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Horizontal Layered Bar Track (0% to 100% = Projected Income) */}
+          <div className="layered-bar-outer">
+            <div className="layered-bar-track">
+              {/* Layer 1A: Planned Non-Savings Expense Budget Zone (from left 0%) */}
+              {expenseBudgetPct > 0 && (
+                <div
+                  className="layer-segment layer-expense-budget"
+                  style={{
+                    left: '0%',
+                    width: `${Math.min(expenseBudgetPct, savingsStartPct)}%`,
+                  }}
+                  title={`Planned Spending Categories Budget: $${expenseBudgetLimit.toFixed(2)}`}
+                />
+              )}
+
+              {/* Layer 1B: Grey Savings Zone Anchored at the Right End of Projected Income */}
+              {savingsWidthPct > 0 && (
+                <div
+                  className="layer-segment layer-grey-savings"
+                  style={{
+                    left: `${savingsStartPct}%`,
+                    width: `${savingsWidthPct}%`,
+                  }}
+                  title={`Savings Reserve at End of Projected Income: $${totalGreySavings.toFixed(2)}`}
+                >
+                  {savingsWidthPct >= 11 && (
+                    <span className="layer-grey-savings-label">
+                      Savings ${totalGreySavings.toFixed(0)}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Layer 2: Overlap Hatching when Expense Budget Encroaches into Grey Savings or Exceeds Projected */}
+              {budgetIntoSavingsWidthPct > 0 && (
+                <div
+                  className="layer-segment layer-overlap-budget-savings"
+                  style={{
+                    left: `${budgetIntoSavingsStartPct}%`,
+                    width: `${budgetIntoSavingsWidthPct}%`,
+                  }}
+                  title={`Overlap Warning: Category Budgets overlap into Savings / Projected limit!`}
+                />
+              )}
+
+              {/* Layer 3: Foreground Inner Bar — Actual Spending ($totalSpent) */}
+              <div className="layer-actual-spend-rail">
+                {/* Safe Spending Portion (Before Grey Savings Zone) */}
+                {safeSpentWidthPct > 0 && (
+                  <div
+                    className={`layer-spend-fill ${
+                      spentExceedsActual || spentExceedsExpenseBudget
+                        ? 'spend-fill-warn'
+                        : 'spend-fill-ok'
+                    }`}
+                    style={{
+                      left: '0%',
+                      width: `${safeSpentWidthPct}%`,
+                    }}
+                    title={`Actual Spending within budget zone: $${Math.min(
+                      totalSpent,
+                      savingsZoneStartDollar
+                    ).toFixed(2)}`}
+                  />
+                )}
+
+                {/* Overlap Portion: Actual Spending Dipping Into Grey Savings Zone */}
+                {spentIntoSavingsWidthPct > 0 && (
+                  <div
+                    className="layer-spend-fill spend-fill-dipping-savings"
+                    style={{
+                      left: `${savingsStartPct}%`,
+                      width: `${spentIntoSavingsWidthPct}%`,
+                    }}
+                    title={`WARNING: $${spentDippingIntoSavingsAmt.toFixed(
+                      2
+                    )} of Actual Spending is dipping into your Grey Savings Zone!`}
+                  />
+                )}
+              </div>
+
+              {/* Layer 4: Vertical Limit Markers for Expense Budget, Total Budget, Actual Income & Projected Max */}
+              {expenseBudgetLimit > 0 && (
+                <div
+                  className="layer-limit-marker marker-expense-budget"
+                  style={{ left: `${ Math.min(99.5, expenseBudgetPct) }%` }}
+                  title={`Spending Categories Limit: $${expenseBudgetLimit.toFixed(2)}`}
+                >
+                  <span className="marker-tag tag-top">
+                    Cat. Budget ${expenseBudgetLimit.toFixed(0)}
+                  </span>
+                </div>
+              )}
+
+              {actualIncome > 0 && (
+                <div
+                  className="layer-limit-marker marker-actual-income"
+                  style={{ left: `${ Math.min(99.5, actualIncomePct) }%` }}
+                  title={`Actual Income Received: $${actualIncome.toFixed(2)}`}
+                >
+                  <span className="marker-tag tag-bottom">
+                    Actual Inc. ${actualIncome.toFixed(0)}
+                  </span>
+                </div>
+              )}
+
+              <div
+                className="layer-limit-marker marker-projected-max"
+                style={{ left: '100%' }}
+                title={`Projected Income Maximum: $${projectedIncome.toFixed(2)}`}
+              >
+                <span className="marker-tag tag-max">
+                  Max (Proj): ${projectedIncome.toFixed(0)}
+                </span>
+              </div>
+            </div>
+
+            {/* Overflow Tail Bar if Budget or Spend Exceeds 100% Projected Income */}
+            {(budgetExceedsProjected || spentExceedsProjected) && (
+              <div
+                className="layered-bar-overflow-tail"
+                title={`Exceeds 100% Projected Income by +$${Math.max(
+                  budgetOverProjectedAmt,
+                  spentOverProjectedAmt
+                ).toFixed(2)}`}
+              >
+                <span>
+                  OVERFLOW +$
+                  {Math.max(budgetOverProjectedAmt, spentOverProjectedAmt).toFixed(0)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Legend Strip for Layered Horizontal Bar */}
+          <div className="layered-bar-legend">
+            <span className="layered-legend-item">
+              <i className="legend-swatch swatch-spend-ok" />
+              Actual Spent: <strong>${totalSpent.toFixed(2)}</strong>
+            </span>
+            <span className="layered-legend-item">
+              <i className="legend-swatch swatch-expense-budget" />
+              Budgeted Categories: <strong>${expenseBudgetLimit.toFixed(0)}</strong> (Total w/ Savings:{' '}
+              <strong>${totalBudget.toFixed(0)}</strong>)
+            </span>
+            <span className="layered-legend-item">
+              <i className="legend-swatch swatch-grey-savings" />
+              Savings at End (Grey): <strong>${totalGreySavings.toFixed(0)}</strong>
+            </span>
+            <span className="layered-legend-item">
+              <i className="legend-swatch swatch-actual-inc" />
+              Actual Income Limit: <strong>${actualIncome.toFixed(0)}</strong>
+            </span>
+            <span className="layered-legend-item">
+              <i className="legend-swatch swatch-proj-max" />
+              Projected Income Max: <strong>${projectedIncome.toFixed(0)}</strong>
+            </span>
+          </div>
+
+          {/* Explicit Overlap & Unbalanced Budget Flags */}
+          {overlapFlags.length > 0 && (
+            <div className="overlap-warnings-grid">
+              {overlapFlags.map((flag) => (
+                <div
+                  key={flag.id}
+                  className={`overlap-warning-card ${
+                    flag.severity === 'danger' ? 'overlap-danger' : 'overlap-warn'
+                  }`}
+                >
+                  <AlertTriangle size={17} className="overlap-warn-icon" />
+                  <div className="overlap-warn-copy">
+                    <strong>{flag.title}</strong>
+                    <span>{flag.detail}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {(summary.income_entries || []).length > 0 && (
@@ -1293,6 +1684,43 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               >
                 <Plus size={14} /> Add / Adjust
               </button>
+            </div>
+          </div>
+
+          {/* Obvious Budgeted vs. Projected Income Status Bar inside Category Budgets Card */}
+          <div
+            className={`category-budgets-balance-strip ${
+              budgetExceedsProjected
+                ? 'strip-danger'
+                : budgetExceedsActual || spentDippingIntoSavings
+                ? 'strip-warn'
+                : 'strip-balanced'
+            }`}
+          >
+            <div className="balance-strip-left">
+              {budgetExceedsProjected ? (
+                <AlertTriangle size={16} className="text-danger" />
+              ) : budgetExceedsActual || spentDippingIntoSavings ? (
+                <AlertTriangle size={16} className="text-amber" />
+              ) : (
+                <CheckCircle2 size={16} className="text-green" />
+              )}
+              <div>
+                <strong>
+                  {budgetExceedsProjected
+                    ? `Over-Budgeted! Categories Exceed Projected Income by +$${budgetOverProjectedAmt.toFixed(2)}`
+                    : budgetExceedsActual
+                    ? `Budget ($${totalBudget.toFixed(0)}) Exceeds Actual Income ($${actualIncome.toFixed(0)}) by +$${budgetOverActualAmt.toFixed(2)}`
+                    : spentDippingIntoSavings
+                    ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
+                    : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
+                </strong>
+                <small className="text-muted" style={{ display: 'block' }}>
+                  Total Budgeted: <strong>${totalBudget.toFixed(2)}</strong> ($
+                  {expenseBudgetLimit.toFixed(0)} spending + ${savingsBudgetLimit.toFixed(0)}{' '}
+                  savings) vs. Projected Income: <strong>${projectedIncome.toFixed(2)}</strong>
+                </small>
+              </div>
             </div>
           </div>
 
