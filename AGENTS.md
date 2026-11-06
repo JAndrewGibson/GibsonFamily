@@ -90,12 +90,25 @@ GibsonFamily/
   - `gibson_theme`: Persists `'dark'` or `'light'` mode (`html[data-theme="light"]` / `html[data-theme="dark"]`).
   - `gibson_active_tab`: Restores the last active module tab across page refreshes.
   - `gibson_finance_month`: Restores the last selected `YYYY-MM` budget month.
-  - `gibson_finance_view`: Restores `'monthly'` vs `'history'` view in the Finance module.
+  - `gibson_finance_chart`: Restores the selected Financial Visualizations graph tab (`income_vs_expenses`, `spending_pie`, `budget_bars`, `cashflow_trend`).
+  - `gibson_income_entries_open`: Persists whether the collapsible Income & Refund Entries list is expanded or collapsed.
   - `gibson_budget_sort`: Persists the user's preferred Category Budgets sort order (`spent_desc`, `utilization_desc`, `remaining_desc`, `limit_desc`, `alpha_asc`, `spent_asc`).
-  - `gibson_plaid_banner_dismissed`: Persists dismissal of the Plaid Banking Integration banner (also backed server-side by `app_settings.plaid_banner_dismissed` via `POST /api/finance/plaid/dismiss-banner`).
   - `gibson_push_enabled` & `gibson_push_prompt_dismissed`: Tracks mobile push notification enablement and prompt banner dismissal.
 
-### 3.3 Monthly Budget Separation (1st of Month), Income Fluctuations & Historical Archive
+### 3.3 Finances & Budgeting Layout, Modals, Visualizations & Monthly Separation (1st of Month)
+- **Top-of-Page Hierarchy & Decluttered Mobile Header (`FinanceModule.jsx`)**:
+  - Top header features the active month trigger pill (`Calendar` icon + `{formatMonthLabel(selectedMonth)}`), primary quick buttons (`+ Log Expense`, `+ Log Income`), and a generic **`Options`** button (`SlidersHorizontal` icon, rendered as a bottom sheet on mobile) that houses secondary tools so mobile headers never clutter:
+    - **Budget Period & Historical Months** (floating modal)
+    - **Add / Adjust Month Budget** (floating modal)
+    - **Manage Categories Panel** (in-page panel; clicking opens it and smoothly scrolls the viewport directly to `categoryManagerRef` with a highlight pulse)
+    - **Accounts & Balances** (floating modal with connected/manual accounts and "Add Manual Account" form)
+    - **Bank Connections / Plaid** (floating modal with Plaid Link, Sandbox Quick Connect, and Re-Sync)
+  - Below the header, the primary view immediately surfaces:
+    1. **Monthly Income & Fluctuation Tracker** (with collapsible Income & Refund Entries drawer).
+    2. **Two-Column Main Grid (`.finance-two-col`)**:
+       - **Left Column**: **Category Budgets** (with persistent sort order and per-month scope adjustments).
+       - **Right Column**: **Interactive Financial Visualizations & Graphs Panel** (`income_vs_expenses` vertical bar chart + multi-month clustered bars, `spending_pie` SVG donut/pie chart, `budget_bars` horizontal category utilization bars, and `cashflow_trend` multi-month net cash flow & savings rate).
+    3. **Untracked Categories Flag Banner**, **Category Manager Panel** (smooth-scrolled when opened), and **Transactions Ledger**.
 - **Transaction Budget Month (`transactions.budget_month`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.

@@ -2815,6 +2815,653 @@ html[data-theme='light'] .history-cat-row {
   }
 }
 
+/* ==========================================================================
+   FINANCE OVERHAUL: COMPACT HEADER, OPTIONS MENU, FLOATING MODALS & GRAPHS
+   ========================================================================== */
+
+.finance-header-bar {
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.finance-header-title-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.finance-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.finance-header-subtitle {
+  font-size: 0.84rem;
+}
+
+.active-period-trigger-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(6, 182, 212, 0.14);
+  border: 1px solid rgba(6, 182, 212, 0.45);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.active-period-trigger-pill:hover {
+  background: rgba(6, 182, 212, 0.24);
+  transform: translateY(-1px);
+}
+
+.finance-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.finance-options-wrapper {
+  position: relative;
+}
+
+.finance-options-trigger {
+  position: relative;
+}
+
+.finance-options-trigger.active {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.16);
+}
+
+.options-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--amber);
+  display: inline-block;
+}
+
+.finance-options-backdrop {
+  display: none;
+}
+
+.finance-options-dropdown {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  width: 340px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0.65rem;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+  z-index: 860;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.finance-options-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
+  font-size: 0.84rem;
+}
+
+.finance-option-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.6rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.finance-option-item:hover {
+  background: rgba(99, 102, 241, 0.11);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.finance-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.14rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.finance-option-copy strong {
+  font-size: 0.86rem;
+}
+
+.finance-option-copy small {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Smooth Scroll Highlight Animation for Category Manager Panel */
+@keyframes categoryPanelHighlightPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.65);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(99, 102, 241, 0.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+}
+
+.panel-scroll-highlight {
+  animation: categoryPanelHighlightPulse 1.4s ease-out;
+  scroll-margin-top: 72px;
+}
+
+.category-manager-panel {
+  scroll-margin-top: 72px;
+}
+
+/* Floating Modals (Budget Period & History, Bank Connections, Accounts, Add Budget, Log Income/Expense) */
+.finance-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 16, 0.76);
+  backdrop-filter: blur(5px);
+  z-index: 960;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  overflow-y: auto;
+}
+
+.finance-modal-card {
+  width: min(100%, 580px);
+  max-height: 88vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.finance-modal-card.finance-modal-lg {
+  width: min(100%, 880px);
+}
+
+.finance-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.finance-modal-header h3 {
+  font-size: 1.05rem;
+  margin-bottom: 0.2rem;
+}
+
+.finance-modal-header p {
+  font-size: 0.82rem;
+}
+
+.finance-modal-body {
+  padding: 1.15rem 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.period-modal-selector-box,
+.plaid-modal-status-box,
+.sandbox-connect-box {
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.plaid-modal-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
+}
+
+.plaid-modal-actions-stack > .btn {
+  justify-content: center;
+  width: 100%;
+}
+
+.sandbox-connect-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.sandbox-controls-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sandbox-controls-row .input {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* Interactive Financial Visualizations & Graphs Panel */
+.finance-graphs-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.chart-selector-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.3rem;
+  border-radius: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.chart-tab-btn {
+  padding: 0.45rem 0.5rem;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.chart-tab-btn.active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.chart-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  flex: 1;
+}
+
+.chart-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.84rem;
+}
+
+/* Vertical Bar Graph: Projected Income vs Actual Income vs Budget vs Expenses */
+.vertical-bars-stage {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.85rem 0.75rem;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.vbar-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.vbar-top-val {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.vbar-track {
+  width: 100%;
+  max-width: 54px;
+  height: 132px;
+  background: rgba(148, 163, 184, 0.11);
+  border-radius: 8px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  padding: 2px;
+}
+
+.vbar-fill {
+  width: 100%;
+  border-radius: 6px;
+  transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vbar-label {
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.vbar-sub {
+  font-size: 0.68rem;
+}
+
+/* Multi-Month Clustered Bar Comparison */
+.multi-month-chart-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.chart-legend-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: 0.25rem;
+}
+
+.multi-month-bars-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.multi-month-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.25rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.multi-month-col.selected,
+.multi-month-col:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.multi-month-Cluster {
+  height: 76px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+}
+
+.mm-bar {
+  width: 9px;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.3s ease;
+}
+
+.mm-label {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Donut / Pie Chart Layout */
+.pie-chart-container {
+  display: grid;
+  grid-template-columns: 165px 1fr;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.donut-svg-wrap {
+  position: relative;
+  width: 155px;
+  height: 155px;
+  margin: 0 auto;
+}
+
+.donut-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.donut-center-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.donut-center-label strong {
+  font-size: 1rem;
+}
+
+.pie-legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 215px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.pie-legend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+}
+
+.pie-legend-left {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.pie-color-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.pie-cat-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pie-legend-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* Horizontal Budget Utilization Bars */
+.hbar-utilization-list,
+.cashflow-trend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 310px;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.hbar-item,
+.cashflow-trend-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.cashflow-trend-row {
+  cursor: pointer;
+}
+
+.cashflow-trend-row.active {
+  border-color: var(--primary);
+}
+
+.hbar-top,
+.cashflow-trend-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.hbar-dual-track {
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.15);
+  overflow: hidden;
+}
+
+.hbar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+html[data-theme='light'] .chart-tab-btn.active {
+  color: var(--primary);
+  background: rgba(79, 70, 229, 0.14);
+}
+
+html[data-theme='light'] .finance-options-dropdown,
+html[data-theme='light'] .finance-modal-card {
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+@media (max-width: 768px) {
+  .finance-top-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 0.45rem;
+  }
+
+  .finance-top-actions > .btn {
+    justify-content: center;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+  }
+
+  .finance-options-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 16, 0.68);
+    backdrop-filter: blur(3px);
+    z-index: 940;
+  }
+
+  .finance-options-dropdown {
+    position: fixed;
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: calc(0.85rem + env(safe-area-inset-bottom, 0px));
+    top: auto;
+    width: auto;
+    z-index: 950;
+    padding: 0.85rem;
+    border-radius: 16px;
+  }
+
+  .finance-modal-backdrop {
+    padding: 0.65rem;
+    align-items: flex-end;
+  }
+
+  .finance-modal-card,
+  .finance-modal-card.finance-modal-lg {
+    width: 100%;
+    max-height: 90vh;
+    border-radius: 16px 16px 12px 12px;
+  }
+
+  .chart-selector-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pie-chart-container {
+    grid-template-columns: 1fr;
+  }
+
+  .vertical-bars-stage {
+    gap: 0.45rem;
+    padding: 0.7rem 0.45rem;
+  }
+}
+
+
 
 
 
