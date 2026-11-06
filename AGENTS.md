@@ -145,10 +145,16 @@ GibsonFamily/
 - **Mobile Push Notifications (`push_subscriptions` table & `/sw.js`)**:
   - Mobile browsers require `ServiceWorkerRegistration.showNotification()` rather than `new window.Notification()`. `frontend/public/sw.js` and `showMobileNativeNotification()` in `frontend/src/api.js` handle native mobile notification delivery, while `MobilePushPromptBanner` in `NotificationCenter.jsx` prompts users to enable and test push notifications (`GET /api/notifications/push-status`, `POST /api/notifications/push-subscribe`, `POST /api/notifications/push-test`).
 
-### 3.4 Security & Plaid Production Architecture
+### 3.5 Security & Plaid Production Architecture
 - **Authentication**: All `/api/*` endpoints (except `/api/health`, `/api/auth/setup-status`, `/api/auth/login`, and WebAuthn assertion endpoints) require a valid `gibson_session` `HttpOnly` cookie or `Bearer` token (`backend/app.py`).
 - **Encryption at Rest**: Plaid `access_token` values are encrypted with a key derived from `FLASK_SECRET_KEY` (`encrypt_plaid_token` / `decrypt_plaid_token` in `backend/security.py`, `enc:v1:...`) before being stored in `plaid_items`.
 - **Plaid Redirect URI**: Normalized without a trailing slash (`https://gibsonfamily.onrender.com`) in `backend/config.py` and `backend/modules/finance.py` to match the Plaid Dashboard registration. Never log or expose secret values from `.env`.
+- **Plaid Bank Unlinking & Deduplication (`DELETE /api/finance/plaid/items/<item_identifier>`)**:
+  - Allows partners to unlink any connected bank or remove accidentally duplicated connections.
+  - De-registers the item via Plaid's `/item/remove` API, deletes the entry from `plaid_items`, removes its synced `accounts`, and purges all imported `transactions` and `income_entries` tied to that connection.
+  - Automatically restores true non-overstated balances, cashflow, and spending without leaving orphaned records.
+- **Account Deletion (`DELETE /api/finance/accounts/<id>`)**:
+  - Deletes the account and cascades deletion to all transactions and income entries associated with that account. If the deleted account was the only account on a Plaid item, cleans up `plaid_items` so it does not re-sync.
 
 ---
 

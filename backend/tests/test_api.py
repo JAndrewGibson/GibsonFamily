@@ -776,6 +776,159 @@ def test_custom_projected_income_and_inflow_reclassification_equilibrium(client)
     assert sum_revert["custom_projected_income"] is None
 
 
+def test_unlink_plaid_bank_item_and_account_deletion_cleans_duplicate_transactions(app_instance, client):
+    """
+    Test suite for unlinking Plaid bank accounts:
+    - User accidentally links the same bank twice, causing duplicate accounts, transactions & income.
+    - DELETE /api/finance/plaid/items/<item_id> unlinks the bank and purges duplicate accounts,
+      transactions, and income entries, perfectly restoring accurate balances and totals.
+    - DELETE /api/finance/accounts/<acc_id> deletes the account and its associated transactions.
+    """
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "partners": [
+                {"name": "Alex", "email": "alex@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    p_data = p_res.get_json()
+    alex_headers = {"Authorization": f"Bearer {p_data['token']}"}
+    month = "2026-11"
+
+    # Set up category budget
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_headers,
+        json={"category": "Groceries & Dining", "monthly_limit": 800.0, "budget_month": month},
+    )
+
+    with app_instance.app_context():
+        from backend.database import get_db
+        from backend.security import encrypt_plaid_token
+
+        db = get_db()
+
+        # Simulate Bank linked twice: Item 1 and Item 2 (duplicate connection to Chase Bank)
+        db.execute(
+            "INSERT INTO plaid_items (item_id, access_token, institution_name) VALUES (?, ?, ?)",
+            ("item_chase_111", encrypt_plaid_token("access-111"), "Chase Bank"),
+        )
+        db.execute(
+            "INSERT INTO plaid_items (item_id, access_token, institution_name) VALUES (?, ?, ?)",
+            ("item_chase_222", encrypt_plaid_token("access-222"), "Chase Bank"),
+        )
+
+        # Account 1 from Item 1
+        cur1 = db.execute(
+            """
+            INSERT INTO accounts (plaid_account_id, item_id, name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
+            VALUES ('plaid_acc_1', 'item_chase_111', 'Chase Total Checking', 'depository', 'checking', '4411', 2000.0, 2000.0, 'shared', 'Chase Bank')
+            """
+        )
+        acc1_id = cur1.lastrowid
+
+        # Account 2 from Item 2 (DUPLICATE)
+        cur2 = db.execute(
+            """
+            INSERT INTO accounts (plaid_account_id, item_id, name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
+            VALUES ('plaid_acc_2', 'item_chase_222', 'Chase Total Checking', 'depository', 'checking', '4411', 2000.0, 2000.0, 'shared', 'Chase Bank')
+            """
+        )
+        acc2_id = cur2.lastrowid
+
+        # Transactions: 1 under Account 1, 1 under Account 2 (duplicate purchase)
+        db.execute(
+            """
+            INSERT INTO transactions (account_id, plaid_transaction_id, date, budget_month, name, amount, category)
+            VALUES (?, 'plaid_tx_1', '2026-11-04', '2026-11', 'Safeway', 65.0, 'Groceries & Dining')
+            """,
+            (acc1_id,),
+        )
+        db.execute(
+            """
+            INSERT INTO transactions (account_id, plaid_transaction_id, date, budget_month, name, amount, category)
+            VALUES (?, 'plaid_tx_2', '2026-11-04', '2026-11', 'Safeway', 65.0, 'Groceries & Dining')
+            """,
+            (acc2_id,),
+        )
+
+        # Income: 1 under Account 1, 1 under Account 2 (duplicate paycheck)
+        db.execute(
+            """
+            INSERT INTO income_entries (account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type)
+            VALUES (?, 'plaid_inc_1', '2026-11-01', '2026-11', 'Direct Deposit', 2500.0, 2500.0, 'payroll')
+            """,
+            (acc1_id,),
+        )
+        db.execute(
+            """
+            INSERT INTO income_entries (account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type)
+            VALUES (?, 'plaid_inc_2', '2026-11-01', '2026-11', 'Direct Deposit', 2500.0, 2500.0, 'payroll')
+            """,
+            (acc2_id,),
+        )
+        db.commit()
+
+    # 1. Verify before unlink: everything is overstated by double!
+    sum_before = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
+    assert len(sum_before["accounts"]) == 2
+    assert sum_before["net_cash"] == 4000.0  # $2000 x 2
+    assert sum_before["total_monthly_income"] == 5000.0  # $2500 x 2
+    assert sum_before["total_monthly_spent"] == 130.0  # $65 x 2
+
+    # Check Plaid status endpoint: shows 2 linked items with account counts
+    p_status = client.get("/api/finance/plaid/status", headers=alex_headers).get_json()
+    assert len(p_status["linked_items"]) == 2
+    assert all(it["account_count"] == 1 for it in p_status["linked_items"])
+
+    # 2. Unlink the duplicate Plaid connection (item_chase_222) via DELETE /api/finance/plaid/items/<item_id>
+    unlink_res = client.delete(
+        "/api/finance/plaid/items/item_chase_222",
+        headers=alex_headers,
+    )
+    assert unlink_res.status_code == 200
+    unlink_data = unlink_res.get_json()
+    assert unlink_data["unlinked"] is True
+    assert unlink_data["item_id"] == "item_chase_222"
+    assert unlink_data["deleted_accounts"] == 1
+    assert unlink_data["deleted_transactions"] == 1
+    assert unlink_data["deleted_income_entries"] == 1
+
+    # 3. Verify after unlink: duplicate accounts, transactions and income are GONE!
+    sum_after = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
+    assert len(sum_after["accounts"]) == 1
+    assert sum_after["accounts"][0]["id"] == acc1_id
+    assert sum_after["net_cash"] == 2000.0  # Accurately restored to $2,000!
+    assert sum_after["total_monthly_income"] == 2500.0  # Accurately restored to $2,500!
+    assert sum_after["total_monthly_spent"] == 65.0  # Accurately restored to $65!
+
+    # Plaid status shows only 1 linked connection remaining
+    p_status_after = client.get("/api/finance/plaid/status", headers=alex_headers).get_json()
+    assert len(p_status_after["linked_items"]) == 1
+    assert p_status_after["linked_items"][0]["item_id"] == "item_chase_111"
+
+    # 4. Verify deleting an account via DELETE /api/finance/accounts/<id> cleans up its transactions
+    del_acc_res = client.delete(
+        f"/api/finance/accounts/{acc1_id}",
+        headers=alex_headers,
+    )
+    assert del_acc_res.status_code == 200
+    del_data = del_acc_res.get_json()
+    assert del_data["deleted"] is True
+    assert del_data["deleted_transactions"] == 1
+    assert del_data["deleted_income_entries"] == 1
+
+    # Now all accounts and transactions are cleared
+    sum_empty = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
+    assert len(sum_empty["accounts"]) == 0
+    assert sum_empty["total_monthly_spent"] == 0.0
+    assert sum_empty["total_monthly_income"] == 0.0
+
+
+
 
 
 

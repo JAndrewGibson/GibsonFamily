@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS plaid_items (
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     plaid_account_id TEXT UNIQUE,
+    item_id TEXT,
     name TEXT NOT NULL,
     official_name TEXT,
     type TEXT NOT NULL DEFAULT 'depository',
@@ -381,6 +382,10 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     inc_cols = [r["name"] for r in db.execute("PRAGMA table_info(income_entries)").fetchall()]
     if "category" not in inc_cols:
         db.execute("ALTER TABLE income_entries ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+
+    acc_cols = [r["name"] for r in db.execute("PRAGMA table_info(accounts)").fetchall()]
+    if "item_id" not in acc_cols:
+        db.execute("ALTER TABLE accounts ADD COLUMN item_id TEXT")
 
     db.execute(
         """

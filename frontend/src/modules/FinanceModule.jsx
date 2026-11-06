@@ -149,6 +149,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(false);
   const [showPlaidModal, setShowPlaidModal] = useState(false);
+  const [unlinkingPlaidItem, setUnlinkingPlaidItem] = useState(null);
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const [showAddAccountForm, setShowAddAccountForm] = useState(false);
 
@@ -455,9 +456,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     await loadFinanceData();
   };
 
-  const handleDeleteAccount = async (accId) => {
+  const handleDeleteAccount = async (acc) => {
+    const accId = typeof acc === 'object' ? acc.id : acc;
+    const accName = typeof acc === 'object' ? acc.name : 'this account';
+    const isPlaid = typeof acc === 'object' && Boolean(acc.plaid_account_id);
+    const confirmMsg = isPlaid
+      ? `Remove "${accName}"? This will delete this Plaid-synced account and purge its imported transactions and income entries so your balances and spending are no longer overstated.`
+      : `Remove manual account "${accName}"?`;
+    if (!window.confirm(confirmMsg)) return;
+
     await apiFetch(`/api/finance/accounts/${accId}`, { method: 'DELETE' });
-    await loadFinanceData();
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleUnlinkPlaidItem = async (item) => {
+    setPlaidBusy(true);
+    try {
+      const resp = await apiFetch(`/api/finance/plaid/items/${item.id || item.item_id}`, {
+        method: 'DELETE',
+      });
+      setUnlinkingPlaidItem(null);
+      setPlaidBanner({
+        type: 'success',
+        text: `Successfully unlinked ${item.institution_name || 'Bank'}! Removed ${resp.deleted_accounts || 0} duplicate account(s), ${resp.deleted_transactions || 0} transaction(s), and ${resp.deleted_income_entries || 0} deposit(s).`,
+      });
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      setPlaidBanner({
+        type: 'error',
+        text: `Failed to unlink bank: ${err.message}`,
+      });
+    } finally {
+      setPlaidBusy(false);
+    }
   };
 
   const handleAddTransaction = async (e) => {
@@ -3406,7 +3439,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               {(plaidStatus?.linked_items || []).length > 0 && (
                 <div style={{ marginTop: '1rem' }}>
                   <h4 style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                    Linked Institutions
+                    Linked Institutions ({plaidStatus.linked_items.length})
                   </h4>
                   <div className="accounts-stack">
                     {plaidStatus.linked_items.map((item) => (
@@ -3414,16 +3447,63 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <div className="account-meta">
                           <Building2 size={18} className="text-cyan" />
                           <div>
-                            <strong>{item.institution_name || 'Linked Bank'}</strong>
+                            <div className="request-badges">
+                              <strong>{item.institution_name || 'Linked Bank'}</strong>
+                              <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>Connected</span>
+                              {item.account_count > 0 && (
+                                <span className="pill pill-outline" style={{ fontSize: '0.68rem' }}>
+                                  {item.account_count} Account{item.account_count === 1 ? '' : 's'}
+                                </span>
+                              )}
+                            </div>
                             <small className="text-muted" style={{ display: 'block' }}>
-                              Status: {item.status || 'active'}
+                              Linked: {item.created_at ? item.created_at.slice(0, 10) : 'Active'} • ID: <code style={{ fontSize: '0.72rem' }}>{item.item_id ? item.item_id.slice(0, 12) : item.id}...</code>
                             </small>
                           </div>
                         </div>
-                        <span className="pill pill-green">Connected</span>
+                        <div className="topbar-right">
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-xs"
+                            disabled={plaidBusy}
+                            onClick={() => setUnlinkingPlaidItem(item)}
+                            title="Unlink and remove this bank connection"
+                          >
+                            <Trash2 size={13} /> Unlink
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
+
+                  {unlinkingPlaidItem && (
+                    <div className="budget-cancel-drawer" style={{ marginTop: '0.85rem' }}>
+                      <div className="request-badges">
+                        <AlertTriangle size={16} className="text-danger" />
+                        <strong>Unlink {unlinkingPlaidItem.institution_name || 'Bank'}?</strong>
+                      </div>
+                      <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '0.35rem' }}>
+                        This will remove this Plaid connection, delete its accounts, and purge all duplicate transactions and income entries imported from this connection so your budget and balances are no longer overstated.
+                      </p>
+                      <div className="topbar-right" style={{ marginTop: '0.65rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => setUnlinkingPlaidItem(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          disabled={plaidBusy}
+                          onClick={() => handleUnlinkPlaidItem(unlinkingPlaidItem)}
+                        >
+                          {plaidBusy ? 'Unlinking...' : 'Confirm Unlink & Purge Duplicates'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3607,7 +3687,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           <Wallet size={20} />
                         )}
                         <div>
-                          <strong>{acc.name}</strong>
+                          <div className="request-badges">
+                            <strong>{acc.name}</strong>
+                            {acc.plaid_account_id ? (
+                              <span className="pill pill-cyan" style={{ fontSize: '0.65rem' }}>
+                                Plaid Synced
+                              </span>
+                            ) : (
+                              <span className="pill pill-outline" style={{ fontSize: '0.65rem' }}>
+                                Manual
+                              </span>
+                            )}
+                          </div>
                           <small>
                             {acc.institution_name} •••• {acc.mask} ({acc.subtype})
                           </small>
@@ -3628,8 +3719,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <button
                           type="button"
                           className="btn-icon-danger"
-                          onClick={() => handleDeleteAccount(acc.id)}
-                          title="Remove account"
+                          onClick={() => handleDeleteAccount(acc)}
+                          title="Remove account and delete its synced transactions"
                         >
                           <Trash2 size={14} />
                         </button>

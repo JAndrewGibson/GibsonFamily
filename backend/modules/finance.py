@@ -256,12 +256,18 @@ def plaid_status():
     base_url, client_id, secret = _plaid_headers_and_auth()
     env_name = current_app.config.get("PLAID_ENV", "production")
     db = get_db()
-    items = [
-        dict(r)
-        for r in db.execute(
-            "SELECT id, item_id, institution_name, linked_by_partner_id, created_at FROM plaid_items ORDER BY id DESC"
-        ).fetchall()
-    ]
+    items = []
+    for r in db.execute(
+        "SELECT id, item_id, institution_name, linked_by_partner_id, created_at FROM plaid_items ORDER BY id DESC"
+    ).fetchall():
+        item_dict = dict(r)
+        acc_cnt = db.execute(
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE item_id = ? OR (item_id IS NULL AND institution_name = ?)",
+            (item_dict["item_id"], item_dict["institution_name"]),
+        ).fetchone()["cnt"]
+        item_dict["account_count"] = acc_cnt
+        items.append(item_dict)
+
     dismissed_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'plaid_banner_dismissed'"
     ).fetchone()
@@ -346,7 +352,9 @@ def create_link_token():
         return jsonify({"error": f"Unable to reach Plaid API: {exc}"}), 502
 
 
-def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: str, partner_id: int | None):
+def _sync_plaid_accounts_and_transactions(
+    access_token: str, institution_name: str, partner_id: int | None, item_id: str | None = None
+):
     base_url, client_id, secret = _plaid_headers_and_auth()
     db = get_db()
 
@@ -356,6 +364,9 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
         timeout=15,
     )
     acc_data = acc_resp.json()
+    if not item_id and "item" in acc_data and "item_id" in acc_data["item"]:
+        item_id = acc_data["item"]["item_id"]
+
     imported_accounts = 0
     account_id_map = {}
 
@@ -366,14 +377,16 @@ def _sync_plaid_accounts_and_transactions(access_token: str, institution_name: s
         avail_bal = float(balances.get("available") if balances.get("available") is not None else current_bal)
         db.execute(
             """
-            INSERT INTO accounts (plaid_account_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?)
+            INSERT INTO accounts (plaid_account_id, item_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?)
             ON CONFLICT(plaid_account_id) DO UPDATE SET
+                item_id = COALESCE(excluded.item_id, accounts.item_id),
                 balance_current = excluded.balance_current,
                 balance_available = excluded.balance_available
             """,
             (
                 plaid_acc_id,
+                item_id,
                 acc.get("name", "Plaid Account"),
                 acc.get("official_name") or acc.get("name"),
                 acc.get("type", "depository"),
@@ -530,7 +543,7 @@ def exchange_public_token():
         )
         db.commit()
 
-        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int)
+        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
         return jsonify({
             "linked": True,
             "item_id": item_id,
@@ -589,7 +602,7 @@ def sandbox_quick_connect():
         )
         db.commit()
 
-        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int)
+        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
         return jsonify({
             "linked": True,
             "item_id": item_id,
@@ -613,7 +626,7 @@ def sync_all_plaid_items():
     for item in items:
         raw_access_token = decrypt_plaid_token(item["access_token"])
         acc_cnt, tx_cnt = _sync_plaid_accounts_and_transactions(
-            raw_access_token, item["institution_name"], item["linked_by_partner_id"]
+            raw_access_token, item["institution_name"], item["linked_by_partner_id"], item["item_id"]
         )
         total_acc += acc_cnt
         total_tx += tx_cnt
@@ -622,6 +635,107 @@ def sync_all_plaid_items():
         "synced": True,
         "updated_accounts": total_acc,
         "imported_transactions": total_tx,
+    })
+
+
+@finance_bp.route("/plaid/items/<item_identifier>", methods=["DELETE"])
+def delete_plaid_item(item_identifier: str):
+    """
+    Unlinks and removes a Plaid linked bank item.
+    Deletes the item from plaid_items, removes its synced accounts, and purges
+    all duplicate transactions and income entries imported for those accounts.
+    """
+    db = get_db()
+    item = db.execute(
+        "SELECT * FROM plaid_items WHERE id = ? OR item_id = ?",
+        (item_identifier, item_identifier),
+    ).fetchone()
+    if not item:
+        return jsonify({"error": "Plaid bank connection not found"}), 404
+
+    base_url, client_id, secret = _plaid_headers_and_auth()
+    # Attempt to de-register from Plaid API servers (best-effort)
+    if client_id and secret and item["access_token"]:
+        try:
+            raw_access_token = decrypt_plaid_token(item["access_token"])
+            requests.post(
+                f"{base_url}/item/remove",
+                json={"client_id": client_id, "secret": secret, "access_token": raw_access_token},
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+    # 1. First find accounts where item_id matches this item
+    matched_acc_rows = db.execute(
+        "SELECT id FROM accounts WHERE item_id = ?", (item["item_id"],)
+    ).fetchall()
+    matched_acc_ids = [r["id"] for r in matched_acc_rows]
+
+    # 2. If no accounts have item_id, try fetching account IDs from Plaid using decrypted token
+    if not matched_acc_ids and item["access_token"]:
+        try:
+            raw_access_token = decrypt_plaid_token(item["access_token"])
+            acc_resp = requests.post(
+                f"{base_url}/accounts/get",
+                json={"client_id": client_id, "secret": secret, "access_token": raw_access_token},
+                timeout=10,
+            )
+            if acc_resp.status_code == 200:
+                p_acc_ids = [a["account_id"] for a in acc_resp.json().get("accounts", [])]
+                if p_acc_ids:
+                    ph = ",".join("?" * len(p_acc_ids))
+                    matched_acc_ids = [
+                        r["id"]
+                        for r in db.execute(
+                            f"SELECT id FROM accounts WHERE plaid_account_id IN ({ph})",
+                            p_acc_ids,
+                        ).fetchall()
+                    ]
+        except Exception:
+            pass
+
+    # 3. Fallback: if still no match and there are accounts matching this institution_name
+    if not matched_acc_ids:
+        other_items = db.execute(
+            "SELECT COUNT(*) AS cnt FROM plaid_items WHERE institution_name = ? AND id != ?",
+            (item["institution_name"], item["id"]),
+        ).fetchone()["cnt"]
+        if other_items == 0:
+            matched_acc_ids = [
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM accounts WHERE institution_name = ?",
+                    (item["institution_name"],),
+                ).fetchall()
+            ]
+
+    # Delete transactions, income_entries, and accounts belonging to this connection
+    deleted_tx_cnt = 0
+    deleted_inc_cnt = 0
+    deleted_acc_cnt = len(matched_acc_ids)
+
+    if matched_acc_ids:
+        ph = ",".join("?" * len(matched_acc_ids))
+        deleted_tx_cnt = db.execute(
+            f"DELETE FROM transactions WHERE account_id IN ({ph})", matched_acc_ids
+        ).rowcount
+        deleted_inc_cnt = db.execute(
+            f"DELETE FROM income_entries WHERE account_id IN ({ph})", matched_acc_ids
+        ).rowcount
+        db.execute(f"DELETE FROM accounts WHERE id IN ({ph})", matched_acc_ids)
+
+    # Finally delete from plaid_items
+    db.execute("DELETE FROM plaid_items WHERE id = ?", (item["id"],))
+    db.commit()
+
+    return jsonify({
+        "unlinked": True,
+        "item_id": item["item_id"],
+        "institution_name": item["institution_name"],
+        "deleted_accounts": deleted_acc_cnt,
+        "deleted_transactions": deleted_tx_cnt,
+        "deleted_income_entries": deleted_inc_cnt,
     })
 
 
@@ -1353,9 +1467,30 @@ def create_account():
 @finance_bp.route("/accounts/<int:acc_id>", methods=["DELETE"])
 def delete_account(acc_id: int):
     db = get_db()
+    acc = db.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,)).fetchone()
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+
+    # Delete transactions and income entries belonging to this deleted account
+    deleted_tx = db.execute("DELETE FROM transactions WHERE account_id = ?", (acc_id,)).rowcount
+    deleted_inc = db.execute("DELETE FROM income_entries WHERE account_id = ?", (acc_id,)).rowcount
     db.execute("DELETE FROM accounts WHERE id = ?", (acc_id,))
+
+    # If this account was linked to a Plaid item and no other accounts remain for it, clean up plaid_items
+    if acc["item_id"]:
+        remaining = db.execute(
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE item_id = ?", (acc["item_id"],)
+        ).fetchone()["cnt"]
+        if remaining == 0:
+            db.execute("DELETE FROM plaid_items WHERE item_id = ?", (acc["item_id"],))
+
     db.commit()
-    return jsonify({"deleted": True, "id": acc_id})
+    return jsonify({
+        "deleted": True,
+        "id": acc_id,
+        "deleted_transactions": deleted_tx,
+        "deleted_income_entries": deleted_inc,
+    })
 
 
 @finance_bp.route("/transactions", methods=["POST"])
