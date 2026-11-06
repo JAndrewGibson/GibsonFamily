@@ -611,18 +611,32 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     onDataChanged?.();
   };
 
+  const handleOpenProjectionModal = () => {
+    const initialVal =
+      summary?.custom_projected_income != null
+        ? Number(summary.custom_projected_income).toFixed(2)
+        : summary?.projected_monthly_income != null
+        ? Number(summary.projected_monthly_income).toFixed(2)
+        : '';
+    setCustomProjInput(initialVal);
+    setShowProjectionModal(true);
+  };
+
   const handleSaveCustomProjectedIncome = async (e) => {
     e?.preventDefault();
-    const val = parseFloat(customProjInput);
-    if (!val || isNaN(val) || val <= 0) {
+    const cleanStr = String(customProjInput).trim();
+    const val = parseFloat(cleanStr);
+    if (isNaN(val) || val <= 0) {
       alert('Please enter a valid positive projected income amount.');
       return;
     }
+    const rounded = Math.round(val * 100) / 100;
     await apiFetch('/api/finance/projected-income', {
       method: 'POST',
       body: JSON.stringify({
         budget_month: selectedMonth,
-        custom_projected_income: val,
+        custom_projected_income: rounded,
+        projected_income: rounded,
       }),
     });
     setShowProjectionModal(false);
@@ -1160,14 +1174,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     className="finance-option-item"
                     onClick={() => {
                       setShowOptionsMenu(false);
-                      setCustomProjInput(
-                        summary.custom_projected_income
-                          ? String(summary.custom_projected_income)
-                          : summary.projected_monthly_income
-                          ? String(summary.projected_monthly_income)
-                          : ''
-                      );
-                      setShowProjectionModal(true);
+                      handleOpenProjectionModal();
                     }}
                   >
                     <Target size={16} className="text-cyan" />
@@ -1363,16 +1370,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 type="button"
                 className="btn btn-xs btn-outline"
                 style={{ padding: '0.1rem 0.45rem', fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
-                onClick={() => {
-                  setCustomProjInput(
-                    summary.custom_projected_income
-                      ? String(summary.custom_projected_income)
-                      : summary.projected_monthly_income
-                      ? String(summary.projected_monthly_income)
-                      : ''
-                  );
-                  setShowProjectionModal(true);
-                }}
+                onClick={handleOpenProjectionModal}
                 title="Override automated projection or customize monthly target"
               >
                 <Edit3 size={11} /> {summary.is_custom_projection ? 'Custom Target' : 'Override'}
@@ -3977,10 +3975,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 <label>Custom Projected Income Target ($) *</label>
                 <input
                   type="number"
-                  step="1"
-                  min="1"
+                  step="0.01"
+                  min="0.01"
                   className="input"
-                  placeholder={String(Number(summary.auto_projected_income || 5000).toFixed(0))}
+                  placeholder={Number(summary.auto_projected_income || 5000).toFixed(2)}
                   value={customProjInput}
                   onChange={(e) => setCustomProjInput(e.target.value)}
                   required
@@ -3996,27 +3994,27 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   <button
                     type="button"
                     className="btn btn-secondary btn-xs"
-                    onClick={() => setCustomProjInput(String(Math.round(summary.auto_projected_income)))}
+                    onClick={() => setCustomProjInput(Number(summary.auto_projected_income).toFixed(2))}
                   >
-                    Use Auto (${Math.round(summary.auto_projected_income)})
+                    Use Auto (${Number(summary.auto_projected_income).toFixed(2)})
                   </button>
                 )}
                 {summary.expected_monthly_income > 0 && (
                   <button
                     type="button"
                     className="btn btn-secondary btn-xs"
-                    onClick={() => setCustomProjInput(String(Math.round(summary.expected_monthly_income)))}
+                    onClick={() => setCustomProjInput(Number(summary.expected_monthly_income).toFixed(2))}
                   >
-                    Use Expected (${Math.round(summary.expected_monthly_income)})
+                    Use Expected (${Number(summary.expected_monthly_income).toFixed(2)})
                   </button>
                 )}
                 {summary.total_monthly_income > 0 && (
                   <button
                     type="button"
                     className="btn btn-secondary btn-xs"
-                    onClick={() => setCustomProjInput(String(Math.round(summary.total_monthly_income)))}
+                    onClick={() => setCustomProjInput(Number(summary.total_monthly_income).toFixed(2))}
                   >
-                    Use Current Actual (${Math.round(summary.total_monthly_income)})
+                    Use Current Actual (${Number(summary.total_monthly_income).toFixed(2)})
                   </button>
                 )}
               </div>

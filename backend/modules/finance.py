@@ -1258,20 +1258,40 @@ def delete_income_entry(income_id: int):
 def set_custom_projected_income():
     data = request.get_json(silent=True) or {}
     budget_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
-    raw_amount = data.get("projected_income")
+    raw_amount = (
+        data.get("custom_projected_income")
+        if "custom_projected_income" in data
+        else data.get("projected_income")
+    )
 
     db = get_db()
-    if raw_amount is None or str(raw_amount).strip() == "" or float(raw_amount) <= 0:
+    if raw_amount is None or str(raw_amount).strip() == "":
         db.execute("DELETE FROM monthly_income_projections WHERE budget_month = ?", (budget_month,))
         db.commit()
         return jsonify({
             "budget_month": budget_month,
             "custom_projected_income": None,
             "is_custom": False,
+            "is_custom_projection": False,
             "reverted_to_auto": True,
         })
 
-    custom_val = round(float(raw_amount), 2)
+    try:
+        custom_val = round(float(raw_amount), 2)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid projected income amount"}), 400
+
+    if custom_val <= 0:
+        db.execute("DELETE FROM monthly_income_projections WHERE budget_month = ?", (budget_month,))
+        db.commit()
+        return jsonify({
+            "budget_month": budget_month,
+            "custom_projected_income": None,
+            "is_custom": False,
+            "is_custom_projection": False,
+            "reverted_to_auto": True,
+        })
+
     db.execute(
         """
         INSERT INTO monthly_income_projections (budget_month, custom_projected_income, updated_at)
@@ -1287,6 +1307,7 @@ def set_custom_projected_income():
         "budget_month": budget_month,
         "custom_projected_income": custom_val,
         "is_custom": True,
+        "is_custom_projection": True,
     })
 
 

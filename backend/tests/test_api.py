@@ -748,22 +748,22 @@ def test_custom_projected_income_and_inflow_reclassification_equilibrium(client)
     # Initially, is_custom_projection is False
     assert summary["is_custom_projection"] is False
 
-    # Set custom projected income to $5,500.00
+    # Set custom projected income with cents: $5,500.75
     proj_post = client.post(
         "/api/finance/projected-income",
         headers=alex_headers,
-        json={"budget_month": month, "custom_projected_income": 5500.0},
+        json={"budget_month": month, "custom_projected_income": 5500.75},
     )
     assert proj_post.status_code == 200
     proj_data = proj_post.get_json()
     assert proj_data["is_custom_projection"] is True
-    assert proj_data["custom_projected_income"] == 5500.0
+    assert proj_data["custom_projected_income"] == 5500.75
 
-    # Verify summary reflects custom projection
+    # Verify summary reflects custom projection with cents
     sum_custom = client.get(f"/api/finance/summary?month={month}", headers=alex_headers).get_json()
     assert sum_custom["is_custom_projection"] is True
-    assert sum_custom["projected_monthly_income"] == 5500.0
-    assert sum_custom["custom_projected_income"] == 5500.0
+    assert sum_custom["projected_monthly_income"] == 5500.75
+    assert sum_custom["custom_projected_income"] == 5500.75
 
     # Clear custom projected income
     proj_del = client.delete(
