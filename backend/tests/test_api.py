@@ -329,14 +329,14 @@ def test_per_month_budget_cancellation_history_sync_pulse_and_plaid_dismiss(clie
     pulse_1 = client.get("/api/sync-pulse", headers=headers).get_json()
     v1 = pulse_1["state_version"]
 
-    # 2. Add a "Netflix" budget starting in 2026-09 ($22.99/mo) for 2026-09 & future months
+    # 2. Add a "Netflix" budget starting in 2026-11 ($22.99/mo) for 2026-11 & future months
     client.post(
         "/api/finance/budgets",
         headers=headers,
         json={
             "category": "Netflix",
             "monthly_limit": 22.99,
-            "budget_month": "2026-09",
+            "budget_month": "2026-11",
             "apply_scope": "this_and_future",
         },
     )
@@ -345,43 +345,43 @@ def test_per_month_budget_cancellation_history_sync_pulse_and_plaid_dismiss(clie
     pulse_2 = client.get("/api/sync-pulse", headers=headers).get_json()
     assert pulse_2["state_version"] > v1
 
-    # Materialize 2026-09, 2026-10, and 2026-11
-    sep_sum = client.get("/api/finance/summary?month=2026-09", headers=headers).get_json()
-    oct_sum = client.get("/api/finance/summary?month=2026-10", headers=headers).get_json()
+    # Materialize 2026-11, 2026-12, and 2027-01
     nov_sum = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
-    assert any(b["category"] == "Netflix" for b in sep_sum["budgets"])
-    assert any(b["category"] == "Netflix" for b in oct_sum["budgets"])
-    nov_netflix = next(b for b in nov_sum["budgets"] if b["category"] == "Netflix")
+    dec_sum = client.get("/api/finance/summary?month=2026-12", headers=headers).get_json()
+    jan_sum = client.get("/api/finance/summary?month=2027-01", headers=headers).get_json()
+    assert any(b["category"] == "Netflix" for b in nov_sum["budgets"])
+    assert any(b["category"] == "Netflix" for b in dec_sum["budgets"])
+    jan_netflix = next(b for b in jan_sum["budgets"] if b["category"] == "Netflix")
 
-    # 3. Cancel "Netflix" starting in 2026-11 (this_and_future) -> must disappear in 2026-11 & 2026-12,
-    #    but remain preserved in historical months 2026-09 and 2026-10!
+    # 3. Cancel "Netflix" starting in 2027-01 (this_and_future) -> must disappear in 2027-01 & 2027-02,
+    #    but remain preserved in historical months 2026-11 and 2026-12!
     del_res = client.delete(
-        f"/api/finance/budgets/{nov_netflix['id']}?month=2026-11&category=Netflix&apply_scope=this_and_future",
+        f"/api/finance/budgets/{jan_netflix['id']}?month=2027-01&category=Netflix&apply_scope=this_and_future",
         headers=headers,
     )
     assert del_res.status_code == 200
 
-    sep_after = client.get("/api/finance/summary?month=2026-09", headers=headers).get_json()
-    oct_after = client.get("/api/finance/summary?month=2026-10", headers=headers).get_json()
     nov_after = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
     dec_after = client.get("/api/finance/summary?month=2026-12", headers=headers).get_json()
+    jan_after = client.get("/api/finance/summary?month=2027-01", headers=headers).get_json()
+    feb_after = client.get("/api/finance/summary?month=2027-02", headers=headers).get_json()
 
-    assert any(b["category"] == "Netflix" for b in sep_after["budgets"])
-    assert any(b["category"] == "Netflix" for b in oct_after["budgets"])
-    assert not any(b["category"] == "Netflix" for b in nov_after["budgets"])
-    assert not any(b["category"] == "Netflix" for b in dec_after["budgets"])
+    assert any(b["category"] == "Netflix" for b in nov_after["budgets"])
+    assert any(b["category"] == "Netflix" for b in dec_after["budgets"])
+    assert not any(b["category"] == "Netflix" for b in jan_after["budgets"])
+    assert not any(b["category"] == "Netflix" for b in feb_after["budgets"])
 
     # 4. Check Historical Months endpoint (/api/finance/history)
     hist_res = client.get("/api/finance/history", headers=headers)
     assert hist_res.status_code == 200
     hist_data = hist_res.get_json()
     months_map = {m["budget_month"]: m for m in hist_data["history"]}
-    assert "2026-09" in months_map
-    assert "2026-10" in months_map
     assert "2026-11" in months_map
-    assert any(c["category"] == "Netflix" for c in months_map["2026-09"]["categories"])
-    assert any(c["category"] == "Netflix" for c in months_map["2026-10"]["categories"])
-    assert not any(c["category"] == "Netflix" for c in months_map["2026-11"]["categories"])
+    assert "2026-12" in months_map
+    assert "2027-01" in months_map
+    assert any(c["category"] == "Netflix" for c in months_map["2026-11"]["categories"])
+    assert any(c["category"] == "Netflix" for c in months_map["2026-12"]["categories"])
+    assert not any(c["category"] == "Netflix" for c in months_map["2027-01"]["categories"])
 
     # 5. Test persistent Plaid banner dismissal
     p_status_before = client.get("/api/finance/plaid/status", headers=headers).get_json()
@@ -1055,6 +1055,110 @@ def test_account_owner_partner_assignment_and_user_balances(client):
     )
     assert unassign_res.status_code == 200
     assert unassign_res.get_json()["owner_partner_id"] is None
+
+
+def test_account_color_coding_deleted_account_blocklist_and_12h_autosync(app_instance, client):
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "partners": [
+                {"name": "Alex Gibson", "email": "alex.color@gibson.local", "password": "Password123!"},
+                {"name": "Jordan Gibson", "email": "jordan.color@gibson.local", "password": "Password123!"},
+            ],
+        },
+    )
+    token = p_res.get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Create an account with a custom color (#ec4899)
+    acc_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Sapphire Reserve",
+            "type": "credit",
+            "subtype": "credit card",
+            "mask": "8899",
+            "balance_current": 450.0,
+            "institution_name": "Chase",
+            "color": "#ec4899",
+        },
+    )
+    assert acc_res.status_code == 201
+    acc = acc_res.get_json()
+    assert acc["color"] == "#ec4899"
+
+    # 2. Log a transaction linked to this account and verify account_color in summary
+    tx_res = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "account_id": acc["id"],
+            "name": "Trader Joe's",
+            "amount": 92.40,
+            "category": "Groceries & Dining",
+            "date": "2026-11-08",
+        },
+    )
+    assert tx_res.status_code == 201
+    assert tx_res.get_json()["account_color"] == "#ec4899"
+
+    # Update account color to #10b981 and verify transaction reflects updated color in summary
+    upd_res = client.put(
+        f"/api/finance/accounts/{acc['id']}",
+        headers=headers,
+        json={"color": "#10b981"},
+    )
+    assert upd_res.status_code == 200
+    assert upd_res.get_json()["color"] == "#10b981"
+
+    sum_data = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    tx_in_sum = next(t for t in sum_data["transactions"] if t["name"] == "Trader Joe's")
+    assert tx_in_sum["account_color"] == "#10b981"
+
+    # 3. Verify deleting a Plaid account adds it to deleted_accounts_blocklist and removes duplicates
+    with app_instance.app_context():
+        from backend.database import get_db
+
+        db = get_db()
+        db.execute(
+            "INSERT INTO plaid_items (item_id, access_token, institution_name) VALUES ('item_dup_1', 'tok1', 'Wells Fargo')"
+        )
+        cur_a = db.execute(
+            """
+            INSERT INTO accounts (plaid_account_id, item_id, name, type, subtype, mask, balance_current, institution_name)
+            VALUES ('plaid_wf_1', 'item_dup_1', 'WF Active Cash', 'credit', 'credit card', '7766', 300.0, 'Wells Fargo')
+            """
+        )
+        wf_acc1 = cur_a.lastrowid
+        # Duplicate row with same signature (institution, mask, subtype, name)
+        db.execute(
+            """
+            INSERT INTO accounts (plaid_account_id, item_id, name, type, subtype, mask, balance_current, institution_name)
+            VALUES ('plaid_wf_2', 'item_dup_1', 'WF Active Cash', 'credit', 'credit card', '7766', 300.0, 'Wells Fargo')
+            """
+        )
+        db.commit()
+
+    del_wf = client.delete(f"/api/finance/accounts/{wf_acc1}", headers=headers)
+    assert del_wf.status_code == 200
+    # Both duplicate accounts should be removed and blocklisted
+    assert del_wf.get_json()["deleted_accounts_count"] == 2
+
+    with app_instance.app_context():
+        from backend.database import get_db
+
+        db = get_db()
+        bl = db.execute("SELECT * FROM deleted_accounts_blocklist").fetchall()
+        assert len(bl) >= 2
+
+    # 4. Verify 12-hour auto-sync endpoint behavior
+    # With no remaining Plaid items, auto-sync returns no_linked_items
+    auto_res = client.post("/api/finance/plaid/auto-sync", headers=headers, json={"background": False})
+    assert auto_res.status_code == 200
+    assert auto_res.get_json()["reason"] == "no_linked_items"
+
 
 
 

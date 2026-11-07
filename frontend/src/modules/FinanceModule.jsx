@@ -81,6 +81,21 @@ const PIE_PALETTE = [
   '#ef4444',
 ];
 
+const ACCOUNT_COLOR_PALETTE = [
+  '#06b6d4',
+  '#10b981',
+  '#6366f1',
+  '#f59e0b',
+  '#ec4899',
+  '#8b5cf6',
+  '#3b82f6',
+  '#14b8a6',
+  '#f97316',
+  '#ef4444',
+];
+
+const STARTING_MONTH = '2026-11';
+
 function formatMonthLabel(ym) {
   if (!ym || ym.length < 7) return ym;
   const [y, m] = ym.split('-').map(Number);
@@ -105,12 +120,15 @@ function shiftMonthString(ym, delta) {
 }
 
 export default function FinanceModule({ activePartner, onDataChanged, syncVersion }) {
-  const currentCalendarMonth = new Date().toISOString().slice(0, 7);
+  const rawCalendarMonth = new Date().toISOString().slice(0, 7);
+  const currentCalendarMonth =
+    rawCalendarMonth < STARTING_MONTH ? STARTING_MONTH : rawCalendarMonth;
 
-  // Persisted Month & Chart Selection
-  const [selectedMonth, setSelectedMonthState] = useState(() =>
-    getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth
-  );
+  // Persisted Month & Chart Selection (Clamped to November 2026 starting point)
+  const [selectedMonth, setSelectedMonthState] = useState(() => {
+    const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
+    return saved < STARTING_MONTH ? STARTING_MONTH : saved;
+  });
   const [showAllMonthsInLedger, setShowAllMonthsInLedger] = useState(false);
 
   // Persisted Category Budget Sort Order (Cookie)
@@ -125,8 +143,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
   const setSelectedMonth = (ym) => {
     if (!ym) return;
-    setSelectedMonthState(ym);
-    setCookie('gibson_finance_month', ym, 365);
+    const clamped = ym < STARTING_MONTH ? STARTING_MONTH : ym;
+    setSelectedMonthState(clamped);
+    setCookie('gibson_finance_month', clamped, 365);
   };
 
   const handleSortOrderChange = (order) => {
@@ -156,6 +175,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [showUserBalancesModal, setShowUserBalancesModal] = useState(false);
   const [selectedUserFilter, setSelectedUserFilter] = useState('all');
   const [updatingAccountId, setUpdatingAccountId] = useState(null);
+  const [confirmDeleteAccId, setConfirmDeleteAccId] = useState(null);
   const [showAddAccountForm, setShowAddAccountForm] = useState(false);
 
   const optionsMenuRef = useRef(null);
@@ -187,10 +207,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [budgetLimit, setBudgetLimit] = useState('800');
   const [budgetScope, setBudgetScope] = useState('this_and_future');
 
-  // Cancel / Remove Budget Category Confirmation Drawer
+  // Cancel / Remove Budget Category Confirmation Modal
   const [cancellingBudget, setCancellingBudget] = useState(null);
 
-  // Category Manager In-Page Panel State (scrolls into view when clicked)
+  // Category Manager Floating Modal State
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [catFilter, setCatFilter] = useState('all');
   const [newCatName, setNewCatName] = useState('');
@@ -200,16 +220,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [deletingCatObj, setDeletingCatObj] = useState(null);
   const [reassignCatTarget, setReassignCatTarget] = useState('');
 
-  // Income & Fluctuation Tracker Form & Collapsible Entries State
+  // Income & Fluctuation Tracker Form & Inflow Entries Modal State
   const [showAddIncome, setShowAddIncome] = useState(false);
-  const [incomeEntriesExpanded, setIncomeEntriesExpanded] = useState(
-    () => getCookie('gibson_income_entries_open', '0') === '1'
-  );
-  const toggleIncomeEntriesExpanded = () => {
-    const next = !incomeEntriesExpanded;
-    setIncomeEntriesExpanded(next);
-    setCookie('gibson_income_entries_open', next ? '1' : '0', 365);
-  };
+  const [showIncomeEntriesModal, setShowIncomeEntriesModal] = useState(false);
   const [incSource, setIncSource] = useState('');
   const [incAmount, setIncAmount] = useState('');
   const [incExpected, setIncExpected] = useState('');
@@ -227,7 +240,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [editIncType, setEditIncType] = useState('payroll');
   const [editIncCategory, setEditIncCategory] = useState('');
 
-  // Manual Account Form State (inside Accounts & Balances Modal)
+  // Manual Account Form State (Floating Modal)
   const [accName, setAccName] = useState('');
   const [accType, setAccType] = useState('depository');
   const [accSubtype, setAccSubtype] = useState('checking');
@@ -235,6 +248,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [accInstitution, setAccInstitution] = useState('');
   const [accMask, setAccMask] = useState('');
   const [accOwnerPartnerId, setAccOwnerPartnerId] = useState('');
+  const [accColor, setAccColor] = useState('#06b6d4');
 
   const loadFinanceData = async (
     monthOverride = selectedMonth,
@@ -267,6 +281,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     loadFinanceData(selectedMonth, showAllMonthsInLedger, false);
   }, [selectedMonth, showAllMonthsInLedger]);
 
+  // Background server action on page load: if Plaid accounts haven't synced in >= 12 hours, auto-sync
+  useEffect(() => {
+    apiFetch('/api/finance/plaid/auto-sync', {
+      method: 'POST',
+      body: JSON.stringify({ background: true }),
+    }).catch(() => {});
+  }, []);
+
   // Real-time partner reactivity
   useEffect(() => {
     if (syncVersion > 1) {
@@ -288,23 +310,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Helper to open the Category Manager panel and smoothly scroll right to it
+  // Open the Category Manager Floating Modal
   const handleOpenAndScrollToCategoryManager = (filterOverride = null) => {
     setShowOptionsMenu(false);
     if (filterOverride) {
       setCatFilter(filterOverride);
     }
     setShowCategoryManager(true);
-    setHighlightCatManager(true);
-    setTimeout(() => {
-      categoryManagerRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    }, 80);
-    setTimeout(() => {
-      setHighlightCatManager(false);
-    }, 1800);
   };
 
   // Automatically resume Plaid OAuth redirect when returning from bank with ?oauth_state_id=
@@ -453,6 +465,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         institution_name: accInstitution.trim() || 'Manual Account',
         mask: accMask.trim() || '0000',
         owner_partner_id: accOwnerPartnerId ? parseInt(accOwnerPartnerId, 10) : null,
+        color: accColor || '#06b6d4',
       }),
     });
     setAccName('');
@@ -460,6 +473,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     setAccInstitution('');
     setAccMask('');
     setAccOwnerPartnerId('');
+    setAccColor('#06b6d4');
     setShowAddAccountForm(false);
     await loadFinanceData();
   };
@@ -487,18 +501,40 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
   };
 
+  const handleUpdateAccountColor = async (accountId, newColor) => {
+    if (!newColor) return;
+    setUpdatingAccountId(accountId);
+    try {
+      await apiFetch(`/api/finance/accounts/${accountId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ color: newColor }),
+      });
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      console.error('Failed to update account color:', err);
+    } finally {
+      setUpdatingAccountId(null);
+    }
+  };
+
   const handleDeleteAccount = async (acc) => {
     const accId = typeof acc === 'object' ? acc.id : acc;
-    const accName = typeof acc === 'object' ? acc.name : 'this account';
-    const isPlaid = typeof acc === 'object' && Boolean(acc.plaid_account_id);
-    const confirmMsg = isPlaid
-      ? `Remove "${accName}"? This will delete this Plaid-synced account and purge its imported transactions and income entries so your balances and spending are no longer overstated.`
-      : `Remove manual account "${accName}"?`;
-    if (!window.confirm(confirmMsg)) return;
-
     await apiFetch(`/api/finance/accounts/${accId}`, { method: 'DELETE' });
+    setConfirmDeleteAccId(null);
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
     onDataChanged?.();
+  };
+
+  const handleReassignAccount = async (txId, newAccountId) => {
+    await apiFetch(`/api/finance/transactions/${txId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        account_id: newAccountId ? Number(newAccountId) : null,
+      }),
+    });
+    setOpenMenuTxId(null);
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
   };
 
   const handleUnlinkPlaidItem = async (item) => {
@@ -858,17 +894,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
   });
 
-  // Build quick-jump month ribbon (past 4 months + current + next month, merged with available_months)
+  // Build quick-jump month ribbon starting from November 2026 (STARTING_MONTH) onward
   const ribbonMonths = Array.from(
-    new Set([
-      shiftMonthString(currentCalendarMonth, -3),
-      shiftMonthString(currentCalendarMonth, -2),
-      shiftMonthString(currentCalendarMonth, -1),
-      currentCalendarMonth,
-      shiftMonthString(currentCalendarMonth, 1),
-      selectedMonth,
-      ...(summary.available_months || []),
-    ])
+    new Set(
+      [
+        STARTING_MONTH,
+        currentCalendarMonth,
+        shiftMonthString(currentCalendarMonth, 1),
+        selectedMonth,
+        ...(summary.available_months || []),
+      ].filter((ym) => ym && ym >= STARTING_MONTH)
+    )
   ).sort();
 
   // =========================================================================
@@ -895,7 +931,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const barMaxProjected =
     projectedIncome > 0
       ? projectedIncome
-      : Math.max(actualIncome, totalBudget, totalSpent, 1);
+      : Math.max(totalBudget, totalSpent, 1);
 
   // Dollar threshold where the Grey Savings Zone begins (at the right end of Projected Income)
   const savingsZoneStartDollar = Math.max(0, barMaxProjected - totalGreySavings);
@@ -914,10 +950,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     100,
     Math.max(0, (totalBudget / barMaxProjected) * 100)
   );
-  const actualIncomePct = Math.min(
-    100,
-    Math.max(0, (actualIncome / barMaxProjected) * 100)
-  );
   const totalSpentPct = Math.min(
     100,
     Math.max(0, (totalSpent / barMaxProjected) * 100)
@@ -932,20 +964,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const spentIntoSavingsWidthPct =
     totalSpentPct > savingsStartPct ? totalSpentPct - savingsStartPct : 0;
 
-  // Explicit Overlap & Unbalanced Budget Flags
+  // Explicit Overlap & Unbalanced Budget Flags (Compared strictly against Projected Income & Category Budgets)
   const budgetExceedsProjected =
     projectedIncome > 0 ? totalBudget > projectedIncome : totalBudget > 0;
   const budgetOverProjectedAmt = Math.max(0, totalBudget - projectedIncome);
 
-  const budgetExceedsActual = totalBudget > actualIncome;
-  const budgetOverActualAmt = Math.max(0, totalBudget - actualIncome);
-
   const spentExceedsProjected =
     projectedIncome > 0 ? totalSpent > projectedIncome : totalSpent > 0;
   const spentOverProjectedAmt = Math.max(0, totalSpent - projectedIncome);
-
-  const spentExceedsActual = totalSpent > actualIncome;
-  const spentOverActualAmt = Math.max(0, totalSpent - actualIncome);
 
   const spentDippingIntoSavings =
     projectedIncome > 0 &&
@@ -968,7 +994,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       detail:
         projectedIncome > 0
           ? `Total budgeted ($${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })}, incl. $${savingsBudgetLimit.toFixed(0)} savings) is ${Math.round((totalBudget / projectedIncome) * 100)}% of your $${projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} projected income. Reduce category budgets to balance your budget.`
-          : `You have $${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })} budgeted, but Projected Income is $0.00. Log income to establish your baseline.`,
+          : `You have $${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })} budgeted, but Projected Income is $0.00. Set a Projected Income target to establish your baseline.`,
     });
   }
   if (spentExceedsProjected) {
@@ -985,22 +1011,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       severity: 'danger',
       title: `Spent Money Dipping Into Savings ($${spentDippingIntoSavingsAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })} dipped)`,
       detail: `Spending ($${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}) crossed past your $${savingsZoneStartDollar.toLocaleString('en-US', { minimumFractionDigits: 2 })} spending ceiling and is eating into your grey Savings zone ($${totalGreySavings.toLocaleString('en-US', { minimumFractionDigits: 2 })}).`,
-    });
-  }
-  if (budgetExceedsActual) {
-    overlapFlags.push({
-      id: 'budget_over_actual',
-      severity: 'warning',
-      title: `More Budgeted Than Actual Income (+$${budgetOverActualAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
-      detail: `Your $${totalBudget.toLocaleString('en-US', { minimumFractionDigits: 2 })} budget is higher than the $${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })} in actual income logged so far for ${formatShortMonth(selectedMonth)}.`,
-    });
-  }
-  if (spentExceedsActual) {
-    overlapFlags.push({
-      id: 'spent_over_actual',
-      severity: 'warning',
-      title: `More Spent Than Actual Income Received (+$${spentOverActualAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })})`,
-      detail: `Actual expenses ($${totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}) exceed actual income received so far ($${actualIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}).`,
     });
   }
   if (spentExceedsExpenseBudget && !spentDippingIntoSavings) {
@@ -1058,8 +1068,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     ...currentMonthBars.map((b) => b.value)
   );
 
-  // Multi-month historical comparison (chronological, up to 6 months)
-  const recentHistoryChrono = [...(historyData?.history || [])]
+  // Multi-month historical comparison (chronological, starting from November 2026)
+  const filteredHistoryList = (historyData?.history || []).filter(
+    (m) => m.budget_month >= STARTING_MONTH
+  );
+  const recentHistoryChrono = [...filteredHistoryList]
     .slice(0, 6)
     .reverse();
   const maxHistoryVal = Math.max(
@@ -1237,20 +1250,29 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       ? 'account-card-checking'
       : 'account-card-other';
     const isUpdating = updatingAccountId === acc.id;
+    const isConfirmingDelete = confirmDeleteAccId === acc.id;
+    const cardColor = acc.color || '#06b6d4';
 
     return (
-      <div key={acc.id} className={`user-account-item-card ${clusterClass}`}>
+      <div
+        key={acc.id}
+        className={`user-account-item-card ${clusterClass}`}
+        style={{ borderLeft: `4px solid ${cardColor}` }}
+      >
         <div className="account-card-topbar">
           <div className="account-card-inst-tag">
-            <span className="account-inst-icon">
-              {isCredit ? (
-                <CreditCard size={14} className="text-amber" />
-              ) : isSav ? (
-                <Building2 size={14} className="text-green" />
-              ) : (
-                <Wallet size={14} className="text-cyan" />
-              )}
-            </span>
+            <span
+              className="account-color-dot"
+              style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                backgroundColor: cardColor,
+                display: 'inline-block',
+                flexShrink: 0,
+              }}
+              title={`Account Ledger Color: ${cardColor}`}
+            />
             <strong>{acc.institution_name || 'Bank Account'}</strong>
             <span className="account-mask-pill">•••• {acc.mask || '0000'}</span>
           </div>
@@ -1270,6 +1292,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             >
               {acc.subtype || acc.type}
             </span>
+            <button
+              type="button"
+              className="btn-icon-danger"
+              style={{ padding: '0.18rem', marginLeft: '0.15rem' }}
+              onClick={() =>
+                setConfirmDeleteAccId(isConfirmingDelete ? null : acc.id)
+              }
+              title="Permanently remove this account and purge its transactions"
+            >
+              <Trash2 size={13} />
+            </button>
           </div>
         </div>
 
@@ -1305,9 +1338,35 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             )}
         </div>
 
+        {/* Account Color-Coding Selector (Reflects in Ledger Transactions) */}
+        <div className="account-color-picker-row">
+          <span className="owner-assign-label">Ledger Color:</span>
+          <div className="account-color-swatches">
+            {ACCOUNT_COLOR_PALETTE.slice(0, 7).map((hex) => (
+              <button
+                key={hex}
+                type="button"
+                className={`account-color-swatch-btn ${
+                  cardColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''
+                }`}
+                style={{ backgroundColor: hex }}
+                onClick={() => handleUpdateAccountColor(acc.id, hex)}
+                title={`Set ledger color to ${hex}`}
+              />
+            ))}
+            <input
+              type="color"
+              className="account-custom-color-input"
+              value={cardColor}
+              onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
+              title="Choose custom account color"
+            />
+          </div>
+        </div>
+
         <div className="account-card-owner-assigner">
           <label htmlFor={`owner-select-${acc.id}`} className="owner-assign-label">
-            <User size={12} /> Assigned Owner:
+            <User size={12} /> Owner:
           </label>
           <div className="owner-assign-select-wrapper">
             <select
@@ -1327,6 +1386,30 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             {isUpdating && <span className="assign-spinner">Saving...</span>}
           </div>
         </div>
+
+        {isConfirmingDelete && (
+          <div className="account-delete-confirm-box">
+            <small className="text-danger" style={{ display: 'block', marginBottom: '0.4rem' }}>
+              Remove <strong>{acc.name}</strong>? Permanently blocks this account from re-syncing and removes its duplicate transactions.
+            </small>
+            <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => setConfirmDeleteAccId(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-xs"
+                onClick={() => handleDeleteAccount(acc)}
+              >
+                Confirm Remove
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1857,7 +1940,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 {safeSpentWidthPct > 0 && (
                   <div
                     className={`layer-spend-fill ${
-                      spentExceedsActual || spentExceedsExpenseBudget
+                      spentExceedsExpenseBudget
                         ? 'spend-fill-warn'
                         : 'spend-fill-ok'
                     }`}
@@ -1887,7 +1970,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 )}
               </div>
 
-              {/* Layer 4: Vertical Limit Markers for Expense Budget, Total Budget, Actual Income & Projected Max */}
+              {/* Layer 4: Vertical Limit Markers for Expense Budget & Projected Max */}
               {expenseBudgetLimit > 0 && (
                 <div
                   className="layer-limit-marker marker-expense-budget"
@@ -1896,18 +1979,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 >
                   <span className="marker-tag tag-top">
                     Cat. Budget ${expenseBudgetLimit.toFixed(0)}
-                  </span>
-                </div>
-              )}
-
-              {actualIncome > 0 && (
-                <div
-                  className="layer-limit-marker marker-actual-income"
-                  style={{ left: `${ Math.min(99.5, actualIncomePct) }%` }}
-                  title={`Actual Income Received: $${actualIncome.toFixed(2)}`}
-                >
-                  <span className="marker-tag tag-bottom">
-                    Actual Inc. ${actualIncome.toFixed(0)}
                   </span>
                 </div>
               )}
@@ -1940,7 +2011,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             )}
           </div>
 
-          {/* Legend Strip for Layered Horizontal Bar */}
+          {/* Legend Strip for Layered Horizontal Bar (Streamlined: Projected Income, Categories & Savings) */}
           <div className="layered-bar-legend">
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-spend-ok" />
@@ -1965,10 +2036,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-grey-savings" />
               Savings at End (Grey): <strong>${totalGreySavings.toFixed(0)}</strong>
-            </span>
-            <span className="layered-legend-item">
-              <i className="legend-swatch swatch-actual-inc" />
-              Actual Income Limit: <strong>${actualIncome.toFixed(0)}</strong>
             </span>
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-proj-max" />
@@ -2002,17 +2069,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             <button
               type="button"
               className="income-entries-toggle-btn"
-              onClick={toggleIncomeEntriesExpanded}
-              aria-expanded={incomeEntriesExpanded}
+              onClick={() => setShowIncomeEntriesModal(true)}
             >
               <div className="income-entries-toggle-left">
-                {incomeEntriesExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                <SlidersHorizontal size={15} className="text-cyan" />
                 <strong>
-                  {incomeEntriesExpanded ? 'Hide' : 'Show'} Inflow & Income Entries (
-                  {summary.income_entries.length})
+                  Manage Inflow & Income Entries ({summary.income_entries.length})
                 </strong>
                 <span className="text-muted">
-                  — Paychecks, returns, CC payments & transfers in {formatShortMonth(selectedMonth)}
+                  — Tap to open modal (paychecks, returns, CC payments & transfers)
                 </span>
               </div>
               <div className="income-summary-badges">
@@ -2031,132 +2096,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 )}
               </div>
             </button>
-
-            {incomeEntriesExpanded && (
-              <div className="income-entries-list">
-                {summary.income_entries.map((inc) => {
-                  const isReturn = inc.income_type === 'return' || inc.income_type === 'refund';
-                  const isCC = inc.income_type === 'cc_payment' || inc.income_type === 'credit_card_payment';
-                  const isTransfer = inc.income_type === 'transfer' || inc.income_type === 'account_transfer';
-                  const isRealIncome = !isReturn && !isCC && !isTransfer;
-
-                  const diff =
-                    Number(inc.amount || 0) -
-                    Number(inc.expected_monthly_amount || inc.amount || 0);
-                  return (
-                    <div
-                      key={inc.id}
-                      className={`income-entry-row ${
-                        isReturn
-                          ? 'income-entry-return'
-                          : isCC || isTransfer
-                          ? 'income-entry-nonincome'
-                          : ''
-                      }`}
-                    >
-                      <div className="income-entry-left">
-                        <div className="request-badges">
-                          <strong>{inc.source_name}</strong>
-                          {isRealIncome ? (
-                            <span className="pill pill-green">
-                              <CheckCircle2 size={11} style={{ marginRight: '0.2rem' }} />
-                              {inc.income_type === 'paycheck' || inc.income_type === 'payroll'
-                                ? 'Payroll'
-                                : inc.income_type}
-                            </span>
-                          ) : isReturn ? (
-                            <span className="pill pill-primary">
-                              <RotateCcw size={11} style={{ marginRight: '0.2rem' }} />
-                              Return / Refund
-                            </span>
-                          ) : isCC ? (
-                            <span className="pill pill-outline">
-                              <CreditCard size={11} style={{ marginRight: '0.2rem' }} />
-                              CC Payment (Non-Income)
-                            </span>
-                          ) : (
-                            <span className="pill pill-outline">
-                              <ArrowLeftRight size={11} style={{ marginRight: '0.2rem' }} />
-                              Transfer (Non-Income)
-                            </span>
-                          )}
-
-                          {isReturn && inc.category && (
-                            <span className="pill pill-cyan">
-                              Credited to: {inc.category}
-                            </span>
-                          )}
-
-                          {inc.partner_name && (
-                            <span className="pill pill-outline">{inc.partner_name}</span>
-                          )}
-                        </div>
-                        <small className="text-muted">
-                          {inc.date}
-                          {inc.notes ? ` • ${inc.notes}` : ''}
-                          {isReturn
-                            ? ` • Offsets ${inc.category || 'spending'} & restores budget (equilibrium)`
-                            : isCC || isTransfer
-                            ? ` • Debt payoff / transfer excluded from monthly income`
-                            : ''}
-                        </small>
-                      </div>
-                      <div className="income-entry-right">
-                        <div style={{ textAlign: 'right' }}>
-                          <strong
-                            className={`font-mono ${
-                              isRealIncome
-                                ? 'text-green'
-                                : isReturn
-                                ? 'text-primary'
-                                : 'text-muted'
-                            }`}
-                          >
-                            {isRealIncome ? '+$' : isReturn ? '+$' : '$'}
-                            {Number(inc.amount).toLocaleString('en-US', {
-                              minimumFractionDigits: 2,
-                            })}
-                          </strong>
-                          {isReturn ? (
-                            <small style={{ display: 'block', fontSize: '0.72rem' }} className="text-cyan">
-                              offsets {inc.category || 'spend'}
-                            </small>
-                          ) : isCC || isTransfer ? (
-                            <small style={{ display: 'block', fontSize: '0.72rem' }} className="text-muted">
-                              non-income
-                            </small>
-                          ) : Math.abs(diff) >= 0.01 ? (
-                            <small
-                              style={{ display: 'block', fontSize: '0.72rem' }}
-                              className={diff >= 0 ? 'text-cyan' : 'text-amber'}
-                            >
-                              {diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(2)} vs expected ($
-                              {Number(inc.expected_monthly_amount).toFixed(0)})
-                            </small>
-                          ) : null}
-                        </div>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-xs"
-                          onClick={() => handleOpenReclassify(inc)}
-                          title="Change classification (Payroll, Return, CC Payment, Transfer)"
-                        >
-                          <SlidersHorizontal size={12} /> Reclassify
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-icon-danger"
-                          onClick={() => handleDeleteIncome(inc.id)}
-                          title="Delete income entry"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -2194,7 +2133,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 type="button"
                 className="btn btn-secondary btn-sm"
                 onClick={() => handleOpenAndScrollToCategoryManager()}
-                title="Open Category Manager panel below"
+                title="Open Category Manager modal"
               >
                 <Tags size={14} /> Categories
               </button>
@@ -2218,7 +2157,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             className={`category-budgets-balance-strip ${
               budgetExceedsProjected
                 ? 'strip-danger'
-                : budgetExceedsActual || spentDippingIntoSavings
+                : spentDippingIntoSavings
                 ? 'strip-warn'
                 : 'strip-balanced'
             }`}
@@ -2226,7 +2165,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             <div className="balance-strip-left">
               {budgetExceedsProjected ? (
                 <AlertTriangle size={16} className="text-danger" />
-              ) : budgetExceedsActual || spentDippingIntoSavings ? (
+              ) : spentDippingIntoSavings ? (
                 <AlertTriangle size={16} className="text-amber" />
               ) : (
                 <CheckCircle2 size={16} className="text-green" />
@@ -2235,8 +2174,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 <strong>
                   {budgetExceedsProjected
                     ? `Over-Budgeted! Categories Exceed Projected Income by +$${budgetOverProjectedAmt.toFixed(2)}`
-                    : budgetExceedsActual
-                    ? `Budget ($${totalBudget.toFixed(0)}) Exceeds Actual Income ($${actualIncome.toFixed(0)}) by +$${budgetOverActualAmt.toFixed(2)}`
                     : spentDippingIntoSavings
                     ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
                     : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
@@ -2255,45 +2192,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               </div>
             </div>
           </div>
-
-          {cancellingBudget && (
-            <div className="budget-cancel-drawer">
-              <strong>
-                Cancel / Remove "{cancellingBudget.category}" from Budgets?
-              </strong>
-              <p className="text-muted" style={{ fontSize: '0.8rem' }}>
-                For example, if you cancelled a subscription like Netflix starting in{' '}
-                <strong>{formatMonthLabel(selectedMonth)}</strong>, removing it for this & future months keeps it in all earlier months.
-              </p>
-              <div className="topbar-right">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-xs"
-                  onClick={() =>
-                    handleConfirmCancelBudget(cancellingBudget, 'this_and_future')
-                  }
-                >
-                  Remove for {formatShortMonth(selectedMonth)} & Future Months
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-xs"
-                  onClick={() =>
-                    handleConfirmCancelBudget(cancellingBudget, 'only_this_month')
-                  }
-                >
-                  Remove Only for {formatShortMonth(selectedMonth)}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  onClick={() => setCancellingBudget(null)}
-                >
-                  Keep Category
-                </button>
-              </div>
-            </div>
-          )}
 
           {sortedBudgets.length === 0 ? (
             <div className="empty-state-box">
@@ -2813,278 +2711,285 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       )}
 
       {/* =====================================================================
-          4. CATEGORY MANAGER IN-PAGE PANEL (SMOOTH-SCROLLED INTO VIEW)
+          FLOATING MODAL: CATEGORY MANAGER (PRE-LOADED & CUSTOM CATEGORIES)
          ===================================================================== */}
       {showCategoryManager && (
         <div
-          ref={categoryManagerRef}
-          className={`card category-manager-panel ${
-            highlightCatManager ? 'panel-scroll-highlight' : ''
-          }`}
+          className="finance-modal-backdrop"
+          onClick={() => setShowCategoryManager(false)}
         >
-          <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
-            <div>
-              <h3>
-                <Tags size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
-                Category Manager — Pre-Loaded & Custom Categories
-              </h3>
-              <small className="text-muted">
-                Clean up unused pre-loaded or custom categories, merge duplicates across all transactions, or flag & track unbudgeted categories.
-              </small>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setShowCategoryManager(false)}
-            >
-              <X size={15} /> Close Panel
-            </button>
-          </div>
-
-          <form className="category-create-bar" onSubmit={handleCreateManagedCategory}>
-            <input
-              type="text"
-              className="input input-sm"
-              placeholder="New category name (e.g., Pet Care, Subscriptions)..."
-              value={newCatName}
-              onChange={(e) => setNewCatName(e.target.value)}
-              required
-            />
-            <input
-              type="number"
-              step="5"
-              min="0"
-              className="input input-sm"
-              placeholder="Optional monthly budget ($)"
-              value={newCatLimit}
-              onChange={(e) => setNewCatLimit(e.target.value)}
-            />
-            <button type="submit" className="btn btn-primary btn-sm">
-              <Plus size={14} /> Add Category
-            </button>
-          </form>
-
-          <div className="filter-pills-row">
-            {[
-              {
-                id: 'all',
-                label: `All Active (${catalogList.filter((c) => !c.is_archived).length})`,
-              },
-              {
-                id: 'untracked',
-                label: `⚠️ Not Tracked (${
-                  catalogList.filter((c) => !c.is_tracked && !c.is_archived).length
-                })`,
-              },
-              {
-                id: 'preloaded',
-                label: `Pre-Loaded (${
-                  catalogList.filter((c) => c.is_preloaded && !c.is_archived).length
-                })`,
-              },
-              {
-                id: 'custom',
-                label: `Custom (${
-                  catalogList.filter((c) => c.is_custom && !c.is_archived).length
-                })`,
-              },
-              {
-                id: 'archived',
-                label: `Hidden / Archived (${catalogList.filter((c) => c.is_archived).length})`,
-              },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`filter-pill ${catFilter === tab.id ? 'active' : ''}`}
-                onClick={() => setCatFilter(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="category-manager-list">
-            {filteredCatalog.length === 0 ? (
-              <div className="empty-state-box">
-                <p className="text-muted">No categories match this filter.</p>
+          <div
+            ref={categoryManagerRef}
+            className="finance-modal-card finance-modal-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Tags size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
+                  Category Manager — Pre-Loaded & Custom Categories
+                </h3>
+                <p className="text-muted">
+                  Clean up unused pre-loaded or custom categories, merge duplicates across all transactions, or flag & track unbudgeted categories.
+                </p>
               </div>
-            ) : (
-              filteredCatalog.map((cat) => {
-                const isRenaming = renamingCatName === cat.name;
-                const isDeleting = deletingCatObj?.name === cat.name;
-                return (
-                  <div
-                    key={cat.name}
-                    className={`category-manager-item ${
-                      !cat.is_tracked && !cat.is_archived ? 'untracked-item' : ''
-                    }`}
-                  >
-                    <div className="category-manager-main">
-                      <div className="category-manager-info">
-                        <div className="request-badges">
-                          <strong>{cat.name}</strong>
-                          <span className="pill pill-outline">
-                            {cat.is_preloaded ? 'Pre-Loaded' : 'Custom'}
-                          </span>
-                          {cat.is_archived ? (
-                            <span className="pill pill-outline">Archived / Hidden</span>
-                          ) : cat.is_tracked ? (
-                            <span className="pill pill-green">
-                              ✓ Tracked (${cat.monthly_limit.toFixed(0)}/mo)
-                            </span>
-                          ) : (
-                            <span className="pill pill-amber">
-                              ⚠️ Not Tracked in {formatShortMonth(selectedMonth)} Budget
-                            </span>
-                          )}
-                        </div>
-                        <small className="text-muted">
-                          {formatShortMonth(selectedMonth)}: ${cat.month_spent.toFixed(2)} (
-                          {cat.month_tx_count} tx) • All-time: $
-                          {cat.total_spent_all_time.toFixed(2)} ({cat.total_tx_count} tx)
-                        </small>
-                      </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowCategoryManager(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
 
-                      <div className="category-manager-actions">
-                        {cat.is_archived ? (
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-xs"
-                            onClick={() => handleRestoreCategory(cat.name)}
-                          >
-                            <RotateCcw size={13} /> Restore Category
-                          </button>
-                        ) : (
-                          <>
-                            {!cat.is_tracked && (
+            <div className="finance-modal-body">
+              <form className="category-create-bar" onSubmit={handleCreateManagedCategory}>
+                <input
+                  type="text"
+                  className="input input-sm"
+                  placeholder="New category name (e.g., Pet Care, Subscriptions)..."
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  required
+                />
+                <input
+                  type="number"
+                  step="5"
+                  min="0"
+                  className="input input-sm"
+                  placeholder="Optional monthly budget ($)"
+                  value={newCatLimit}
+                  onChange={(e) => setNewCatLimit(e.target.value)}
+                />
+                <button type="submit" className="btn btn-primary btn-sm">
+                  <Plus size={14} /> Add Category
+                </button>
+              </form>
+
+              <div className="filter-pills-row">
+                {[
+                  {
+                    id: 'all',
+                    label: `All Active (${catalogList.filter((c) => !c.is_archived).length})`,
+                  },
+                  {
+                    id: 'untracked',
+                    label: `⚠️ Not Tracked (${
+                      catalogList.filter((c) => !c.is_tracked && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'preloaded',
+                    label: `Pre-Loaded (${
+                      catalogList.filter((c) => c.is_preloaded && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'custom',
+                    label: `Custom (${
+                      catalogList.filter((c) => c.is_custom && !c.is_archived).length
+                    })`,
+                  },
+                  {
+                    id: 'archived',
+                    label: `Hidden / Archived (${catalogList.filter((c) => c.is_archived).length})`,
+                  },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`filter-pill ${catFilter === tab.id ? 'active' : ''}`}
+                    onClick={() => setCatFilter(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="category-manager-list">
+                {filteredCatalog.length === 0 ? (
+                  <div className="empty-state-box">
+                    <p className="text-muted">No categories match this filter.</p>
+                  </div>
+                ) : (
+                  filteredCatalog.map((cat) => {
+                    const isRenaming = renamingCatName === cat.name;
+                    const isDeleting = deletingCatObj?.name === cat.name;
+                    return (
+                      <div
+                        key={cat.name}
+                        className={`category-manager-item ${
+                          !cat.is_tracked && !cat.is_archived ? 'untracked-item' : ''
+                        }`}
+                      >
+                        <div className="category-manager-main">
+                          <div className="category-manager-info">
+                            <div className="request-badges">
+                              <strong>{cat.name}</strong>
+                              <span className="pill pill-outline">
+                                {cat.is_preloaded ? 'Pre-Loaded' : 'Custom'}
+                              </span>
+                              {cat.is_archived ? (
+                                <span className="pill pill-outline">Archived / Hidden</span>
+                              ) : cat.is_tracked ? (
+                                <span className="pill pill-green">
+                                  ✓ Tracked (${cat.monthly_limit.toFixed(0)}/mo)
+                                </span>
+                              ) : (
+                                <span className="pill pill-amber">
+                                  ⚠️ Not Tracked in {formatShortMonth(selectedMonth)} Budget
+                                </span>
+                              )}
+                            </div>
+                            <small className="text-muted">
+                              {formatShortMonth(selectedMonth)}: ${cat.month_spent.toFixed(2)} (
+                              {cat.month_tx_count} tx) • All-time: $
+                              {cat.total_spent_all_time.toFixed(2)} ({cat.total_tx_count} tx)
+                            </small>
+                          </div>
+
+                          <div className="category-manager-actions">
+                            {cat.is_archived ? (
                               <button
                                 type="button"
                                 className="btn btn-primary btn-xs"
-                                onClick={() => handleQuickTrackCategory(cat.name)}
+                                onClick={() => handleRestoreCategory(cat.name)}
                               >
-                                <Plus size={13} /> Track in Budget
+                                <RotateCcw size={13} /> Restore Category
                               </button>
+                            ) : (
+                              <>
+                                {!cat.is_tracked && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-xs"
+                                    onClick={() => handleQuickTrackCategory(cat.name)}
+                                  >
+                                    <Plus size={13} /> Track in Budget
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-xs"
+                                  onClick={() => {
+                                    setRenamingCatName(isRenaming ? null : cat.name);
+                                    setRenameCatTarget(cat.name);
+                                    setDeletingCatObj(null);
+                                  }}
+                                >
+                                  <Edit3 size={13} /> Rename / Merge
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger-outline btn-xs"
+                                  onClick={() => {
+                                    setDeletingCatObj(isDeleting ? null : cat);
+                                    setReassignCatTarget(
+                                      availableCategories.find((c) => c !== cat.name) || ''
+                                    );
+                                    setRenamingCatName(null);
+                                  }}
+                                >
+                                  <Trash2 size={13} /> Remove / Hide
+                                </button>
+                              </>
                             )}
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-xs"
-                              onClick={() => {
-                                setRenamingCatName(isRenaming ? null : cat.name);
-                                setRenameCatTarget(cat.name);
-                                setDeletingCatObj(null);
-                              }}
-                            >
-                              <Edit3 size={13} /> Rename / Merge
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-danger-outline btn-xs"
-                              onClick={() => {
-                                setDeletingCatObj(isDeleting ? null : cat);
-                                setReassignCatTarget(
-                                  availableCategories.find((c) => c !== cat.name) || ''
-                                );
-                                setRenamingCatName(null);
-                              }}
-                            >
-                              <Trash2 size={13} /> Remove / Hide
-                            </button>
-                          </>
+                          </div>
+                        </div>
+
+                        {isRenaming && (
+                          <div className="category-inline-drawer">
+                            <label>
+                              Rename <strong>"{cat.name}"</strong> or type/select an existing category name to merge all transactions & budgets into it:
+                            </label>
+                            <div className="category-inline-controls">
+                              <input
+                                type="text"
+                                className="input input-sm"
+                                list="merge-category-suggestions"
+                                value={renameCatTarget}
+                                onChange={(e) => setRenameCatTarget(e.target.value)}
+                                placeholder="New or target category name..."
+                              />
+                              <datalist id="merge-category-suggestions">
+                                {availableCategories
+                                  .filter((c) => c !== cat.name)
+                                  .map((c) => (
+                                    <option key={c} value={c} />
+                                  ))}
+                              </datalist>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleRenameOrMergeCategory(cat.name)}
+                              >
+                                Save / Merge
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setRenamingCatName(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {isDeleting && (
+                          <div className="category-inline-drawer danger">
+                            <label>
+                              Remove / hide <strong>"{cat.name}"</strong> from dropdowns and active budgets?
+                              {cat.total_tx_count > 0 &&
+                                ` (${cat.total_tx_count} existing transaction(s) can be reassigned below):`}
+                            </label>
+                            <div className="category-inline-controls">
+                              {cat.total_tx_count > 0 && (
+                                <select
+                                  className="input input-sm"
+                                  value={reassignCatTarget}
+                                  onChange={(e) => setReassignCatTarget(e.target.value)}
+                                >
+                                  <option value="">Keep original category label on past transactions</option>
+                                  {availableCategories
+                                    .filter((c) => c !== cat.name)
+                                    .map((c) => (
+                                      <option key={c} value={c}>
+                                        Reassign all {cat.total_tx_count} tx to: {c}
+                                      </option>
+                                    ))}
+                                </select>
+                              )}
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleDeleteOrArchiveCategory(cat)}
+                              >
+                                Confirm Remove
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setDeletingCatObj(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
-                    </div>
-
-                    {isRenaming && (
-                      <div className="category-inline-drawer">
-                        <label>
-                          Rename <strong>"{cat.name}"</strong> or type/select an existing category name to merge all transactions & budgets into it:
-                        </label>
-                        <div className="category-inline-controls">
-                          <input
-                            type="text"
-                            className="input input-sm"
-                            list="merge-category-suggestions"
-                            value={renameCatTarget}
-                            onChange={(e) => setRenameCatTarget(e.target.value)}
-                            placeholder="New or target category name..."
-                          />
-                          <datalist id="merge-category-suggestions">
-                            {availableCategories
-                              .filter((c) => c !== cat.name)
-                              .map((c) => (
-                                <option key={c} value={c} />
-                              ))}
-                          </datalist>
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            onClick={() => handleRenameOrMergeCategory(cat.name)}
-                          >
-                            Save / Merge
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => setRenamingCatName(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {isDeleting && (
-                      <div className="category-inline-drawer danger">
-                        <label>
-                          Remove / hide <strong>"{cat.name}"</strong> from dropdowns and active budgets?
-                          {cat.total_tx_count > 0 &&
-                            ` (${cat.total_tx_count} existing transaction(s) can be reassigned below):`}
-                        </label>
-                        <div className="category-inline-controls">
-                          {cat.total_tx_count > 0 && (
-                            <select
-                              className="input input-sm"
-                              value={reassignCatTarget}
-                              onChange={(e) => setReassignCatTarget(e.target.value)}
-                            >
-                              <option value="">Keep original category label on past transactions</option>
-                              {availableCategories
-                                .filter((c) => c !== cat.name)
-                                .map((c) => (
-                                  <option key={c} value={c}>
-                                    Reassign all {cat.total_tx_count} tx to: {c}
-                                  </option>
-                                ))}
-                            </select>
-                          )}
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            onClick={() => handleDeleteOrArchiveCategory(cat)}
-                          >
-                            Confirm Remove
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => setDeletingCatObj(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
 
       {/* =====================================================================
-          5. TRANSACTIONS LEDGER
+          5. TRANSACTIONS LEDGER (COLOR-CODED BY ACCOUNT)
          ===================================================================== */}
       <div className="card">
         <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -3096,7 +3001,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 : `${formatMonthLabel(selectedMonth)} (${summary.month_transaction_count})`}
             </h3>
             <small className="text-muted">
-              Reassign any purchase category inline, or open the row <strong>☰ Menu</strong> to allocate a purchase to a different budget month.
+              Color-coded by bank/card account. Reassign any purchase category inline, or open the row <strong>☰ Menu</strong> to change account or budget month.
             </small>
           </div>
           <div className="topbar-right">
@@ -3131,7 +3036,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <thead>
                 <tr>
                   <th>Purchase Date</th>
-                  <th>Description</th>
+                  <th>Description & Account</th>
                   <th>Category</th>
                   <th className="text-right">Amount</th>
                   <th className="text-right" style={{ width: '56px' }}>
@@ -3147,9 +3052,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     tx.budget_month !== tx.original_date_month;
                   const isEditingCustomCat = customCatTxId === tx.id;
                   const isMenuOpen = openMenuTxId === tx.id;
+                  const txAccColor = tx.account_color || '#06b6d4';
 
                   return (
-                    <tr key={tx.id} className="tx-row">
+                    <tr
+                      key={tx.id}
+                      className="tx-row"
+                      style={{
+                        borderLeft: tx.account_name ? `4px solid ${txAccColor}` : undefined,
+                      }}
+                    >
                       <td className="tx-cell-date">
                         <span className="tx-date-text">{tx.date}</span>
                         {(isShifted || showAllMonthsInLedger) && (
@@ -3167,7 +3079,29 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         )}
                       </td>
                       <td className="tx-cell-desc">
-                        <strong>{tx.name}</strong>
+                        <div className="tx-desc-main-line">
+                          <strong>{tx.name}</strong>
+                          {tx.account_name && (
+                            <span
+                              className="tx-account-color-pill"
+                              style={{
+                                borderColor: txAccColor,
+                                backgroundColor: `${txAccColor}1f`,
+                                color: txAccColor,
+                              }}
+                              title={`Paid with ${tx.account_name}${
+                                tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
+                              }`}
+                            >
+                              <span
+                                className="tx-account-color-dot"
+                                style={{ backgroundColor: txAccColor }}
+                              />
+                              {tx.account_name}
+                              {tx.account_mask ? ` ••${tx.account_mask}` : ''}
+                            </span>
+                          )}
+                        </div>
                         {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
                       </td>
 
@@ -3281,14 +3215,36 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 </button>
                               </div>
 
-                              <button
-                                type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleAllocateMonth(tx.id, 'prev')}
-                              >
-                                <ChevronLeft size={14} />
-                                Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
-                              </button>
+                              {summary.accounts?.length > 0 && (
+                                <div className="tx-popover-month-picker">
+                                  <label>Account / Card Used:</label>
+                                  <select
+                                    className="input input-sm"
+                                    value={tx.account_id || ''}
+                                    onChange={(e) =>
+                                      handleReassignAccount(tx.id, e.target.value)
+                                    }
+                                  >
+                                    <option value="">No specific account</option>
+                                    {summary.accounts.map((a) => (
+                                      <option key={a.id} value={a.id}>
+                                        {a.name} (•••• {a.mask})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              {tx.previous_budget_month >= STARTING_MONTH && (
+                                <button
+                                  type="button"
+                                  className="tx-popover-item"
+                                  onClick={() => handleAllocateMonth(tx.id, 'prev')}
+                                >
+                                  <ChevronLeft size={14} />
+                                  Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
+                                </button>
+                              )}
 
                               <button
                                 type="button"
@@ -3303,6 +3259,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 <label>Reassign to Specific Month:</label>
                                 <input
                                   type="month"
+                                  min={STARTING_MONTH}
                                   className="input input-sm"
                                   value={tx.budget_month}
                                   onChange={(e) =>
@@ -3311,7 +3268,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 />
                               </div>
 
-                              {isShifted && (
+                              {isShifted && tx.original_date_month >= STARTING_MONTH && (
                                 <button
                                   type="button"
                                   className="tx-popover-item"
@@ -3364,7 +3321,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   Budget Period & Historical Month Comparison
                 </h3>
                 <p className="text-muted">
-                  Switch your active budget month or compare historical income, spending, and subscription changes across months.
+                  November 2026 is your starting point. Switch your active budget month or compare monthly income, spending, and subscription changes forward.
                 </p>
               </div>
               <button
@@ -3389,34 +3346,39 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         {selectedMonth === currentCalendarMonth && (
                           <span className="pill pill-cyan">Current Month</span>
                         )}
-                        {selectedMonth < currentCalendarMonth && (
-                          <span className="pill pill-outline">Historical Month Snapshot</span>
+                        {selectedMonth === STARTING_MONTH && (
+                          <span className="pill pill-outline">Starting Point (Nov 2026)</span>
                         )}
                         {selectedMonth > currentCalendarMonth && (
                           <span className="pill pill-amber">Future Month Plan</span>
                         )}
                       </div>
                       <small className="text-muted">
-                        Budgets reset cleanly on the 1st of every month.
+                        Budgets reset cleanly on the 1st of every month starting November 2026.
                       </small>
                     </div>
                   </div>
 
                   <div className="month-selector-controls">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setSelectedMonth(summary.previous_month)}
-                    >
-                      <ChevronLeft size={16} /> {formatShortMonth(summary.previous_month)}
-                    </button>
+                    {summary.previous_month >= STARTING_MONTH && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setSelectedMonth(summary.previous_month)}
+                      >
+                        <ChevronLeft size={16} /> {formatShortMonth(summary.previous_month)}
+                      </button>
+                    )}
 
                     <input
                       type="month"
+                      min={STARTING_MONTH}
                       className="input input-sm month-picker-input"
                       value={selectedMonth}
                       onChange={(e) => {
-                        if (e.target.value) setSelectedMonth(e.target.value);
+                        if (e.target.value && e.target.value >= STARTING_MONTH) {
+                          setSelectedMonth(e.target.value);
+                        }
                       }}
                     />
 
@@ -3457,15 +3419,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
               <div style={{ marginTop: '1.1rem' }}>
                 <h4 style={{ marginBottom: '0.65rem' }}>
-                  Historical Months Archive ({historyData?.history?.length || 0} Months)
+                  Monthly Archive ({filteredHistoryList.length} Month{filteredHistoryList.length === 1 ? '' : 's'})
                 </h4>
-                {!historyData?.history?.length ? (
+                {!filteredHistoryList.length ? (
                   <div className="empty-state-box">
                     <p className="text-muted">No monthly history recorded yet.</p>
                   </div>
                 ) : (
                   <div className="history-months-grid">
-                    {historyData.history.map((mItem) => {
+                    {filteredHistoryList.map((mItem) => {
                       const isOver =
                         mItem.total_spent > mItem.total_budget && mItem.total_budget > 0;
                       const isCurrent = mItem.budget_month === currentCalendarMonth;
@@ -3868,106 +3830,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    onClick={() => setShowAddAccountForm(!showAddAccountForm)}
+                    onClick={() => setShowAddAccountForm(true)}
                   >
-                    <Plus size={14} /> {showAddAccountForm ? 'Hide Form' : 'Add Manual Account'}
+                    <Plus size={14} /> Add Manual Account
                   </button>
                 </div>
               </div>
-
-              {showAddAccountForm && (
-                <form
-                  className="card form-card"
-                  style={{ marginBottom: '1rem' }}
-                  onSubmit={handleCreateAccount}
-                >
-                  <h4>Add a Manual Bank or Credit Card Account</h4>
-                  <div className="form-grid-3">
-                    <div className="form-group">
-                      <label>Account Name *</label>
-                      <input
-                        type="text"
-                        className="input"
-                        placeholder="e.g., Joint Checking"
-                        value={accName}
-                        onChange={(e) => setAccName(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Account Type</label>
-                      <select
-                        className="input"
-                        value={accType}
-                        onChange={(e) => {
-                          setAccType(e.target.value);
-                          setAccSubtype(
-                            e.target.value === 'credit' ? 'credit card' : 'checking'
-                          );
-                        }}
-                      >
-                        <option value="depository">Depository (Checking / Savings)</option>
-                        <option value="credit">Credit Card</option>
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label>Current Balance ($) *</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="input"
-                        placeholder="2500.00"
-                        value={accBalance}
-                        onChange={(e) => setAccBalance(e.target.value)}
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="form-grid-3">
-                    <div className="form-group">
-                      <label>Institution Name</label>
-                      <input
-                        type="text"
-                        className="input"
-                        placeholder="e.g., Chase, Ally"
-                        value={accInstitution}
-                        onChange={(e) => setAccInstitution(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Last 4 Digits (Mask)</label>
-                      <input
-                        type="text"
-                        maxLength={4}
-                        className="input"
-                        placeholder="1234"
-                        value={accMask}
-                        onChange={(e) => setAccMask(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Account Owner</label>
-                      <select
-                        className="input"
-                        value={accOwnerPartnerId}
-                        onChange={(e) => setAccOwnerPartnerId(e.target.value)}
-                      >
-                        <option value="">👥 Shared / Household</option>
-                        {summary.partners?.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            👤 {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.65rem' }}>
-                    <button type="submit" className="btn btn-primary">
-                      Save Account
-                    </button>
-                  </div>
-                </form>
-              )}
 
               {summary.accounts.length === 0 ? (
                 <div className="empty-state-box">
@@ -3977,56 +3845,123 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 </div>
               ) : (
                 <div className="accounts-stack">
-                  {summary.accounts.map((acc) => (
-                    <div key={acc.id} className="account-row-item">
-                      <div className="account-meta">
-                        {acc.type === 'credit' ? (
-                          <CreditCard size={20} />
-                        ) : (
-                          <Wallet size={20} />
-                        )}
-                        <div>
-                          <div className="request-badges">
-                            <strong>{acc.name}</strong>
-                            {acc.plaid_account_id ? (
-                              <span className="pill pill-cyan" style={{ fontSize: '0.65rem' }}>
-                                Plaid Synced
-                              </span>
+                  {summary.accounts.map((acc) => {
+                    const acctColor = acc.color || '#06b6d4';
+                    const isConfirmingDelete = confirmDeleteAccId === acc.id;
+                    return (
+                      <div
+                        key={acc.id}
+                        className="account-row-item"
+                        style={{
+                          borderLeft: `4px solid ${acctColor}`,
+                          flexDirection: 'column',
+                          alignItems: 'stretch',
+                          gap: '0.55rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                          <div className="account-meta">
+                            {acc.type === 'credit' ? (
+                              <CreditCard size={20} style={{ color: acctColor }} />
                             ) : (
-                              <span className="pill pill-outline" style={{ fontSize: '0.65rem' }}>
-                                Manual
-                              </span>
+                              <Wallet size={20} style={{ color: acctColor }} />
                             )}
+                            <div>
+                              <div className="request-badges">
+                                <strong>{acc.name}</strong>
+                                {acc.plaid_account_id ? (
+                                  <span className="pill pill-cyan" style={{ fontSize: '0.65rem' }}>
+                                    Plaid Synced
+                                  </span>
+                                ) : (
+                                  <span className="pill pill-outline" style={{ fontSize: '0.65rem' }}>
+                                    Manual
+                                  </span>
+                                )}
+                              </div>
+                              <small>
+                                {acc.institution_name} •••• {acc.mask} ({acc.subtype})
+                                {acc.owner_partner_name ? ` • Assigned to ${acc.owner_partner_name}` : ' • Shared'}
+                              </small>
+                            </div>
                           </div>
-                          <small>
-                            {acc.institution_name} •••• {acc.mask} ({acc.subtype})
-                            {acc.owner_partner_name ? ` • Assigned to ${acc.owner_partner_name}` : ' • Shared'}
-                          </small>
+                          <div className="topbar-right">
+                            <div className="account-bal">
+                              <strong>
+                                $
+                                {Number(acc.balance_current).toLocaleString('en-US', {
+                                  minimumFractionDigits: 2,
+                                })}
+                              </strong>
+                              <small className="text-muted">
+                                {acc.owner_partner_name ? acc.owner_partner_name.toUpperCase() : acc.owner_scope.toUpperCase()}
+                              </small>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn-icon-danger"
+                              disabled={deletingAccId === acc.id}
+                              onClick={() => setConfirmDeleteAccId(isConfirmingDelete ? null : acc.id)}
+                              title="Remove account and delete its synced transactions"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <div className="topbar-right">
-                        <div className="account-bal">
-                          <strong>
-                            $
-                            {Number(acc.balance_current).toLocaleString('en-US', {
-                              minimumFractionDigits: 2,
-                            })}
-                          </strong>
-                          <small className="text-muted">
-                            {acc.owner_partner_name ? acc.owner_partner_name.toUpperCase() : acc.owner_scope.toUpperCase()}
-                          </small>
+
+                        {/* Color Swatches & Owner Controls */}
+                        <div className="account-color-picker-row" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '0.45rem' }}>
+                          <span className="owner-assign-label">Ledger Color:</span>
+                          <div className="account-color-swatches">
+                            {ACCOUNT_COLOR_PALETTE.map((swatch) => (
+                              <button
+                                key={swatch.hex}
+                                type="button"
+                                className={`account-color-swatch-btn ${acctColor.toLowerCase() === swatch.hex.toLowerCase() ? 'active' : ''}`}
+                                style={{ backgroundColor: swatch.hex }}
+                                disabled={updatingAccountColorId === acc.id}
+                                onClick={() => handleUpdateAccountColor(acc.id, swatch.hex)}
+                                title={`Color code ${acc.name} as ${swatch.label}`}
+                              />
+                            ))}
+                            <label className="account-custom-color-input" title="Pick custom color">
+                              <input
+                                type="color"
+                                value={acctColor}
+                                disabled={updatingAccountColorId === acc.id}
+                                onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
+                              />
+                            </label>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          className="btn-icon-danger"
-                          onClick={() => handleDeleteAccount(acc)}
-                          title="Remove account and delete its synced transactions"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+
+                        {isConfirmingDelete && (
+                          <div className="account-delete-confirm-box">
+                            <p className="text-danger" style={{ fontSize: '0.76rem', margin: '0 0 0.45rem 0' }}>
+                              <strong>Remove "{acc.name}"?</strong> Deletes this account, blocks it from re-syncing via Plaid, and purges its transactions.
+                            </p>
+                            <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-xs"
+                                onClick={() => setConfirmDeleteAccId(null)}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-xs"
+                                disabled={deletingAccId === acc.id}
+                                onClick={() => handleDeleteAccount(acc)}
+                              >
+                                {deletingAccId === acc.id ? 'Removing...' : 'Confirm Remove'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -4969,6 +4904,21 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
               <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
                 <div className="form-group">
+                  <label>Account / Card Used</label>
+                  <select
+                    className="input"
+                    value={txAccountId}
+                    onChange={(e) => setTxAccountId(e.target.value)}
+                  >
+                    <option value="">-- Unlinked / Cash / Manual --</option>
+                    {summary.accounts?.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({a.institution_name} •••• {a.mask})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
                   <label>Allocate to Budget Month</label>
                   <select
                     className="input"
@@ -4980,16 +4930,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     <option value="1">Allocate to Next Month</option>
                   </select>
                 </div>
-                <div className="form-group">
-                  <label>Notes (Optional)</label>
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="Optional note..."
-                    value={txNotes}
-                    onChange={(e) => setTxNotes(e.target.value)}
-                  />
-                </div>
+              </div>
+
+              <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                <label>Notes (Optional)</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Optional note..."
+                  value={txNotes}
+                  onChange={(e) => setTxNotes(e.target.value)}
+                />
               </div>
 
               <div className="form-actions" style={{ marginTop: '1.1rem' }}>
@@ -5005,6 +4956,393 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL 7: ADD MANUAL ACCOUNT
+         ===================================================================== */}
+      {showAddAccountForm && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowAddAccountForm(false)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Wallet size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                  Add a Manual Bank or Credit Card Account
+                </h3>
+                <p className="text-muted">
+                  Create a checking, savings, or credit card account and choose its ledger color.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowAddAccountForm(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleCreateAccount}>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label>Account Name *</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., Joint Checking"
+                    value={accName}
+                    onChange={(e) => setAccName(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Account Type</label>
+                  <select
+                    className="input"
+                    value={accType}
+                    onChange={(e) => {
+                      setAccType(e.target.value);
+                      setAccSubtype(
+                        e.target.value === 'credit' ? 'credit card' : 'checking'
+                      );
+                    }}
+                  >
+                    <option value="depository">Depository (Checking / Savings)</option>
+                    <option value="credit">Credit Card</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-grid-3" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Current Balance ($) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="input"
+                    placeholder="2500.00"
+                    value={accBalance}
+                    onChange={(e) => setAccBalance(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Institution Name</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., Chase, Ally"
+                    value={accInstitution}
+                    onChange={(e) => setAccInstitution(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Last 4 Digits (Mask)</label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    className="input"
+                    placeholder="1234"
+                    value={accMask}
+                    onChange={(e) => setAccMask(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Account Owner</label>
+                  <select
+                    className="input"
+                    value={accOwnerPartnerId}
+                    onChange={(e) => setAccOwnerPartnerId(e.target.value)}
+                  >
+                    <option value="">👥 Shared / Household</option>
+                    {summary.partners?.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        👤 {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Ledger Color</label>
+                  <div className="account-color-swatches" style={{ marginTop: '0.35rem' }}>
+                    {ACCOUNT_COLOR_PALETTE.map((swatch) => (
+                      <button
+                        key={swatch.hex}
+                        type="button"
+                        className={`account-color-swatch-btn ${accColor.toLowerCase() === swatch.hex.toLowerCase() ? 'active' : ''}`}
+                        style={{ backgroundColor: swatch.hex }}
+                        onClick={() => setAccColor(swatch.hex)}
+                        title={swatch.label}
+                      />
+                    ))}
+                    <label className="account-custom-color-input" title="Pick custom color">
+                      <input
+                        type="color"
+                        value={accColor}
+                        onChange={(e) => setAccColor(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAddAccountForm(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Save Account
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL 8: CANCEL OR REMOVE CATEGORY BUDGET
+         ===================================================================== */}
+      {cancellingBudget && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setCancellingBudget(null)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Trash2 size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} className="text-danger" />
+                  Cancel "{cancellingBudget.category}" Budget
+                </h3>
+                <p className="text-muted">
+                  Did you cancel a subscription (like Netflix) starting in <strong>{formatMonthLabel(selectedMonth)}</strong>? Past historical months remain intact.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setCancellingBudget(null)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="finance-modal-body">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={() =>
+                    handleCancelCategoryBudget(cancellingBudget.category, 'this_and_future')
+                  }
+                >
+                  Remove for {formatShortMonth(selectedMonth)} & Future Months
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() =>
+                    handleCancelCategoryBudget(cancellingBudget.category, 'only_this_month')
+                  }
+                >
+                  Remove Only for {formatMonthLabel(selectedMonth)}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setCancellingBudget(null)}
+                >
+                  Keep Category Budget
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL 9: INFLOW & INCOME ENTRIES FOR SELECTED MONTH
+         ===================================================================== */}
+      {showIncomeEntriesModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowIncomeEntriesModal(false)}
+        >
+          <div
+            className="finance-modal-card finance-modal-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <DollarSign size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} className="text-green" />
+                  Inflow & Income Entries — {formatMonthLabel(selectedMonth)}
+                </h3>
+                <p className="text-muted">
+                  Review payroll deposits, store returns credited to categories, and excluded card payments or transfers.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowIncomeEntriesModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="finance-modal-body">
+              <div className="plan-card-header" style={{ marginBottom: '0.75rem' }}>
+                <span className="text-muted" style={{ fontSize: '0.82rem' }}>
+                  {summary.income_entries?.length || 0} inflow(s) recorded in {formatMonthLabel(selectedMonth)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  onClick={() => {
+                    setShowIncomeEntriesModal(false);
+                    setShowAddIncome(true);
+                  }}
+                >
+                  <Plus size={13} /> Log Inflow / Income
+                </button>
+              </div>
+
+              {(!summary.income_entries || summary.income_entries.length === 0) ? (
+                <div className="empty-state-box">
+                  <p className="text-muted">
+                    No inflows or paychecks logged for {formatMonthLabel(selectedMonth)} yet.
+                  </p>
+                </div>
+              ) : (
+                <div className="income-entries-list">
+                  {summary.income_entries.map((inc) => {
+                    const diff = Number(inc.amount) - Number(inc.expected_monthly_amount || inc.amount);
+                    const typeInfo = formatIncomeTypeBadge(inc.income_type, inc.category);
+                    const isEarned = !['return', 'cc_payment', 'transfer'].includes(inc.income_type);
+                    const acctColor = inc.account_color || '#06b6d4';
+                    return (
+                      <div
+                        key={inc.id}
+                        className="income-entry-row"
+                        style={inc.account_name ? { borderLeft: `4px solid ${acctColor}` } : undefined}
+                      >
+                        <div className="income-entry-meta">
+                          <div className="request-badges">
+                            <strong>{inc.source_name}</strong>
+                            <span className={`pill ${typeInfo.cls}`} style={{ fontSize: '0.68rem' }}>
+                              {typeInfo.label}
+                            </span>
+                            {inc.account_name && (
+                              <span
+                                className="tx-account-color-pill"
+                                style={{
+                                  borderColor: acctColor,
+                                  color: acctColor,
+                                  backgroundColor: `${acctColor}18`,
+                                }}
+                              >
+                                <span
+                                  className="tx-account-color-dot"
+                                  style={{ backgroundColor: acctColor }}
+                                />
+                                {inc.account_name}
+                              </span>
+                            )}
+                          </div>
+                          <small className="text-muted">
+                            {inc.date}
+                            {inc.notes ? ` • ${inc.notes}` : ''}
+                            {isEarned && Math.abs(diff) >= 0.01 && (
+                              <span className={diff > 0 ? 'text-green' : 'text-amber'}>
+                                {' '}
+                                ({diff > 0 ? '+' : ''}${diff.toFixed(2)} vs expected $
+                                {Number(inc.expected_monthly_amount).toFixed(2)})
+                              </span>
+                            )}
+                            {inc.income_type === 'return' && inc.category && (
+                              <span className="text-cyan">
+                                {' '}• Credited back to {inc.category} budget
+                              </span>
+                            )}
+                            {(inc.income_type === 'cc_payment' || inc.income_type === 'transfer') && (
+                              <span className="text-muted">
+                                {' '}• Excluded from monthly income
+                              </span>
+                            )}
+                          </small>
+                        </div>
+                        <div className="topbar-right">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-xs"
+                            onClick={() => openReclassifyModal(inc)}
+                            title="Change classification (Payroll, Return, Credit Card Payment, Transfer)"
+                          >
+                            <SlidersHorizontal size={12} /> Reclassify
+                          </button>
+                          <strong
+                            className={`font-mono ${
+                              inc.income_type === 'return'
+                                ? 'text-cyan'
+                                : isEarned
+                                ? 'text-green'
+                                : 'text-muted'
+                            }`}
+                          >
+                            {isEarned ? '+' : ''}$
+                            {Number(inc.amount).toLocaleString('en-US', {
+                              minimumFractionDigits: 2,
+                            })}
+                          </strong>
+                          <button
+                            type="button"
+                            className="btn-icon-danger"
+                            onClick={() => handleDeleteIncome(inc.id)}
+                            title="Remove inflow entry"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="finance-modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowIncomeEntriesModal(false)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

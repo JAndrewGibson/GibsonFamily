@@ -9,11 +9,13 @@ import {
   Square,
   Trash2,
   UserCheck,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
 export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [records, setRecords] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [title, setTitle] = useState('');
   const [recordType, setRecordType] = useState('medical');
   const [ownerId, setOwnerId] = useState(activePartner?.id || partners[0]?.id || 1);
@@ -47,6 +49,7 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syn
     setTitle('');
     setProvider('');
     setNotes('');
+    setShowAddModal(false);
     await loadRecords();
     onDataChanged?.();
   };
@@ -75,95 +78,148 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syn
             Keep medical forms, HSA claims, open enrollment deadlines, insurance policies, and household documents organized in one place.
           </p>
         </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setShowAddModal(true)}
+        >
+          <Plus size={18} /> Add Admin / Medical Record
+        </button>
       </div>
 
-      <form className="card form-card" onSubmit={handleAdd}>
-        <h3>Add Medical Paperwork or Couples Admin Task</h3>
-        <div className="form-grid-4">
-          <div className="form-group">
-            <label>Document or Admin Item *</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="e.g., Submit Dental Claim / HSA Receipt"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label>Category</label>
-            <select
-              className="input"
-              value={recordType}
-              onChange={(e) => setRecordType(e.target.value)}
-            >
-              <option value="medical">Medical & Health Paperwork</option>
-              <option value="insurance">Insurance Policy / Claim</option>
-              <option value="tax">Taxes & Financial Docs</option>
-              <option value="legal">Legal / ID / Passport</option>
-              <option value="home">Home Maintenance & Warranties</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Assigned Partner</label>
-            <select
-              className="input"
-              value={ownerId}
-              onChange={(e) => setOwnerId(e.target.value)}
-            >
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Due / Renewal Date</label>
-            <input
-              type="date"
-              className="input"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-            />
+      {showAddModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowAddModal(false)}
+        >
+          <div
+            className="finance-modal-card finance-modal-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>Add Medical Paperwork or Couples Admin Task</h3>
+                <p className="text-muted">
+                  Track medical paperwork, insurance renewals, tax filings, or household documents.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowAddModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form className="finance-modal-body" onSubmit={handleAdd}>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label>Document or Admin Item *</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., Submit Dental Claim / HSA Receipt"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Category</label>
+                  <select
+                    className="input"
+                    value={recordType}
+                    onChange={(e) => setRecordType(e.target.value)}
+                  >
+                    <option value="medical">Medical & Health Paperwork</option>
+                    <option value="insurance">Insurance Policy / Claim</option>
+                    <option value="tax">Taxes & Financial Docs</option>
+                    <option value="legal">Legal / ID / Passport</option>
+                    <option value="home">Home Maintenance & Warranties</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Assigned Partner</label>
+                  <select
+                    className="input"
+                    value={ownerId}
+                    onChange={(e) => setOwnerId(e.target.value)}
+                  >
+                    {partners.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Due / Renewal Date</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Provider / Portal / Location</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., BlueShield Portal, Valley Medical, Filing Cabinet"
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Notes</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Policy #, instructions, or next step..."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAddModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  <Plus size={16} /> Add Admin / Medical Record
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-        <div className="form-grid-2">
-          <div className="form-group">
-            <label>Provider / Portal / Location</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="e.g., BlueShield Portal, Valley Medical, Filing Cabinet"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-            />
-          </div>
-          <div className="form-group">
-            <label>Notes</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="Policy #, instructions, or next step..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary">
-            <Plus size={16} /> Add Admin / Medical Record
-          </button>
-        </div>
-      </form>
+      )}
 
       {records.length === 0 ? (
         <div className="card empty-state-card">
           <h3>No Medical or Admin Records Yet</h3>
           <p className="text-muted">
-            Use the form above to track medical paperwork, insurance renewals, tax filings, or household documents.
+            Click <strong>Add Admin / Medical Record</strong> above to track medical paperwork, insurance renewals, tax filings, or household documents.
           </p>
+          <div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowAddModal(true)}
+            >
+              <Plus size={16} /> Add First Admin / Medical Record
+            </button>
+          </div>
         </div>
       ) : (
         <div className="plans-grid">
@@ -217,6 +273,7 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syn
 
 export function TodosSubModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [todos, setTodos] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Household');
   const [assignedTo, setAssignedTo] = useState(activePartner?.id || partners[0]?.id || 1);
@@ -246,6 +303,7 @@ export function TodosSubModule({ activePartner, partners, onDataChanged, syncVer
       }),
     });
     setTitle('');
+    setShowAddModal(false);
     await loadTodos();
     onDataChanged?.();
   };
@@ -271,59 +329,125 @@ export function TodosSubModule({ activePartner, partners, onDataChanged, syncVer
             Coordinate errands, household chores, financial check-ins, and medical follow-ups together.
           </p>
         </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setShowAddModal(true)}
+        >
+          <Plus size={18} /> Add Task
+        </button>
       </div>
 
-      <form className="card form-card" onSubmit={handleAdd}>
-        <div className="form-grid-4">
-          <div className="form-group">
-            <label>Task Title *</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="e.g., Schedule furnace tune-up"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label>Category</label>
-            <select
-              className="input"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="Household">Household</option>
-              <option value="Finance">Finance</option>
-              <option value="Medical Admin">Medical Admin</option>
-              <option value="Errands">Errands</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Assigned Partner</label>
-            <select
-              className="input"
-              value={assignedTo}
-              onChange={(e) => setAssignedTo(e.target.value)}
-            >
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group form-group-end">
-            <button type="submit" className="btn btn-primary">
-              <Plus size={16} /> Add Task
-            </button>
+      {showAddModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowAddModal(false)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>Add Shared Couples Task</h3>
+                <p className="text-muted">
+                  Assign a household, finance, or medical errand to a partner.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowAddModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form className="finance-modal-body" onSubmit={handleAdd}>
+              <div className="form-group">
+                <label>Task Title *</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g., Schedule furnace tune-up"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Category</label>
+                  <select
+                    className="input"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                  >
+                    <option value="Household">Household</option>
+                    <option value="Finance">Finance</option>
+                    <option value="Medical Admin">Medical Admin</option>
+                    <option value="Errands">Errands</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Assigned Partner</label>
+                  <select
+                    className="input"
+                    value={assignedTo}
+                    onChange={(e) => setAssignedTo(e.target.value)}
+                  >
+                    {partners.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Due Date (Optional)</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Priority</label>
+                  <select
+                    className="input"
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAddModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  <Plus size={16} /> Add Task
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </form>
+      )}
 
       <div className="card">
         {todos.length === 0 ? (
-          <p className="text-muted">No shared tasks yet. Add your first to-do item above!</p>
+          <p className="text-muted">No shared tasks yet. Click "Add Task" above to add your first to-do item!</p>
         ) : (
           <div className="checklist-stack">
             {todos.map((t) => (
@@ -361,6 +485,7 @@ export function TodosSubModule({ activePartner, partners, onDataChanged, syncVer
 
 export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }) {
   const [groceries, setGroceries] = useState([]);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [totals, setTotals] = useState({ estimated_total: 0, unchecked_total: 0 });
   const [name, setName] = useState('');
   const [aisle, setAisle] = useState('Produce');
@@ -395,6 +520,7 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
     });
     setName('');
     setPrice('');
+    setShowAddModal(false);
     await loadGroceries();
     onDataChanged?.();
   };
@@ -420,11 +546,20 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
             Add groceries from either phone or laptop — automatically estimates your weekly grocery run cost against your Groceries budget.
           </p>
         </div>
-        {groceries.some((g) => g.checked) && (
-          <button type="button" className="btn btn-secondary" onClick={handleClearChecked}>
-            Clear Checked Items
+        <div className="topbar-right">
+          {groceries.some((g) => g.checked) && (
+            <button type="button" className="btn btn-secondary" onClick={handleClearChecked}>
+              Clear Checked Items
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowAddModal(true)}
+          >
+            <Plus size={18} /> Add Grocery Item
           </button>
-        )}
+        </div>
       </div>
 
       <div className="kpi-grid-2">
@@ -440,59 +575,95 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
         </div>
       </div>
 
-      <form className="card form-card" onSubmit={handleAdd}>
-        <div className="form-grid-4">
-          <div className="form-group">
-            <label>Grocery Item *</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="e.g., Pasture-Raised Eggs"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label>Aisle / Section</label>
-            <select className="input" value={aisle} onChange={(e) => setAisle(e.target.value)}>
-              <option value="Produce">Produce</option>
-              <option value="Dairy & Refrigerated">Dairy & Refrigerated</option>
-              <option value="Meat & Seafood">Meat & Seafood</option>
-              <option value="Bakery">Bakery</option>
-              <option value="Pantry & Dry Goods">Pantry & Dry Goods</option>
-              <option value="Beverages">Beverages</option>
-              <option value="Household Essentials">Household Essentials</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Quantity</label>
-            <input
-              type="text"
-              className="input"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="1 dozen"
-            />
-          </div>
-          <div className="form-group">
-            <label>Est. Price ($)</label>
-            <div className="passkey-register-row">
-              <input
-                type="number"
-                step="0.01"
-                className="input"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="6.99"
-              />
-              <button type="submit" className="btn btn-primary">
-                <Plus size={16} /> Add
+      {showAddModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowAddModal(false)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>Add Grocery Item</h3>
+                <p className="text-muted">
+                  Add an item to your shared household shopping list.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowAddModal(false)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
               </button>
             </div>
+            <form className="finance-modal-body" onSubmit={handleAdd}>
+              <div className="form-group">
+                <label>Grocery Item *</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g., Pasture-Raised Eggs"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Aisle / Section</label>
+                  <select className="input" value={aisle} onChange={(e) => setAisle(e.target.value)}>
+                    <option value="Produce">Produce</option>
+                    <option value="Dairy & Refrigerated">Dairy & Refrigerated</option>
+                    <option value="Meat & Seafood">Meat & Seafood</option>
+                    <option value="Bakery">Bakery</option>
+                    <option value="Pantry & Dry Goods">Pantry & Dry Goods</option>
+                    <option value="Beverages">Beverages</option>
+                    <option value="Household Essentials">Household Essentials</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Quantity</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder="1 dozen"
+                  />
+                </div>
+              </div>
+              <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                <label>Est. Price ($)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="input"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="6.99"
+                />
+              </div>
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAddModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  <Plus size={16} /> Add to List
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </form>
+      )}
 
       <div className="card">
         {groceries.length === 0 ? (

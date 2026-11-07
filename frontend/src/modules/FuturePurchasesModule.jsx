@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CalendarClock, PiggyBank, Plus, Sparkles, Target, Trash2 } from 'lucide-react';
+import { CalendarClock, PiggyBank, Plus, Sparkles, Target, Trash2, X } from 'lucide-react';
 import { apiFetch } from '../api';
 
 export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
@@ -92,9 +92,9 @@ export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
             Plan upcoming couple purchases, vacations, home upgrades, and approved partner request timelines.
           </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
+        <button type="button" className="btn btn-primary" onClick={() => setShowAdd(true)}>
           <Plus size={18} />
-          {showAdd ? 'Cancel' : 'Plan Future Purchase'}
+          Plan Future Purchase
         </button>
       </div>
 
@@ -119,98 +119,134 @@ export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
       </div>
 
       {showAdd && (
-        <form className="card form-card" onSubmit={handleCreatePlan}>
-          <h3>Create a Future Purchase Plan</h3>
-          <div className="form-grid-3">
-            <div className="form-group">
-              <label>Purchase or Goal Name *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="e.g., Patio Dining Set, Japan Trip, New Washer/Dryer"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Target Cost ($) *</label>
-              <input
-                type="number"
-                step="0.01"
-                min="1"
-                className="input"
-                placeholder="1500"
-                value={targetAmount}
-                onChange={(e) => setTargetAmount(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Category</label>
-              <select
-                className="input"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowAdd(false)}
+        >
+          <div
+            className="finance-modal-card finance-modal-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Target size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                  Create a Future Purchase Plan
+                </h3>
+                <p className="text-muted">
+                  Set a target cost, monthly contribution, and ideal date for an upcoming purchase.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowAdd(false)}
+                aria-label="Close modal"
               >
-                <option value="Home & Lifestyle">Home & Lifestyle</option>
-                <option value="Travel & Experiences">Travel & Experiences</option>
-                <option value="Shopping & Tech">Shopping & Tech</option>
-                <option value="Entertainment & Gaming">Entertainment & Gaming</option>
-                <option value="Automotive & Mobility">Automotive & Mobility</option>
-              </select>
+                <X size={20} />
+              </button>
             </div>
-          </div>
+            <form className="finance-modal-body" onSubmit={handleCreatePlan}>
+              <div className="form-grid-3">
+                <div className="form-group">
+                  <label>Purchase or Goal Name *</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., Patio Dining Set, Japan Trip, New Washer/Dryer"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Target Cost ($) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    className="input"
+                    placeholder="1500"
+                    value={targetAmount}
+                    onChange={(e) => setTargetAmount(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Category</label>
+                  <select
+                    className="input"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                  >
+                    <option value="Home & Lifestyle">Home & Lifestyle</option>
+                    <option value="Travel & Experiences">Travel & Experiences</option>
+                    <option value="Shopping & Tech">Shopping & Tech</option>
+                    <option value="Entertainment & Gaming">Entertainment & Gaming</option>
+                    <option value="Automotive & Mobility">Automotive & Mobility</option>
+                  </select>
+                </div>
+              </div>
 
-          <div className="form-grid-3">
-            <div className="form-group">
-              <label>Monthly Savings Contribution ($/mo)</label>
-              <input
-                type="number"
-                step="10"
-                className="input"
-                value={monthlyContribution}
-                onChange={(e) => setMonthlyContribution(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Starting Saved Amount ($)</label>
-              <input
-                type="number"
-                step="10"
-                className="input"
-                value={currentSaved}
-                onChange={(e) => setCurrentSaved(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Target Purchase Date</label>
-              <input
-                type="date"
-                className="input"
-                value={targetDate}
-                onChange={(e) => setTargetDate(e.target.value)}
-              />
-            </div>
-          </div>
+              <div className="form-grid-3" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Monthly Savings Contribution ($/mo)</label>
+                  <input
+                    type="number"
+                    step="10"
+                    className="input"
+                    value={monthlyContribution}
+                    onChange={(e) => setMonthlyContribution(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Starting Saved Amount ($)</label>
+                  <input
+                    type="number"
+                    step="10"
+                    className="input"
+                    value={currentSaved}
+                    onChange={(e) => setCurrentSaved(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Target Purchase Date</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={targetDate}
+                    onChange={(e) => setTargetDate(e.target.value)}
+                  />
+                </div>
+              </div>
 
-          <div className="form-group">
-            <label>Notes / Milestones</label>
-            <input
-              type="text"
-              className="input"
-              placeholder="Wait for Memorial Day sale or use rewards points..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
+              <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                <label>Notes / Milestones</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Wait for Memorial Day sale or use rewards points..."
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
+              </div>
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary">
-              <Target size={16} /> Save Future Purchase Plan
-            </button>
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAdd(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  <Target size={16} /> Save Future Purchase Plan
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       )}
 
       {loading ? (

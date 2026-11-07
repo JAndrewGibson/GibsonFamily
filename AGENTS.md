@@ -1,4 +1,4 @@
-# AGENTS.md — GibsonFamily Hub Architecture & Agent Guidelines
+<!--  --># AGENTS.md — GibsonFamily Hub Architecture & Agent Guidelines
 
 This document is the authoritative engineering reference for AI coding agents and developers working on **GibsonFamily Hub** (`https://gibsonfamily.onrender.com`). Keep this file updated whenever architectural, database, security, or UI patterns change.
 
@@ -100,18 +100,22 @@ GibsonFamily/
   - Top header features the active month trigger pill (`Calendar` icon + `{formatMonthLabel(selectedMonth)}`), primary quick buttons (`+ Log Expense`, `+ Log Income`), and a generic **`Options`** button (`SlidersHorizontal` icon, rendered as a bottom sheet on mobile) that houses secondary tools so mobile headers never clutter:
     - **Budget Period & Historical Months** (floating modal)
     - **Add / Adjust Month Budget** (floating modal)
-    - **Manage Categories Panel** (in-page panel; clicking opens it and smoothly scrolls the viewport directly to `categoryManagerRef` with a highlight pulse)
-    - **Accounts & Balances** (floating modal with connected/manual accounts and "Add Manual Account" form)
-    - **Bank Connections / Plaid** (floating modal with Plaid Link, Sandbox Quick Connect, and Re-Sync)
+    - **Manage Categories** (floating modal)
+    - **All Accounts & Balances by User** (floating modal with partner checking, savings, and credit breakdown, color-coding swatches, and account removal)
+    - **Accounts & Balances** (floating modal with connected/manual accounts, color swatches, and "Add Manual Account" modal trigger)
+    - **Bank Connections / Plaid** (floating modal with Plaid Link, Sandbox Quick Connect, Re-Sync, and Unlink)
   - Below the header, the primary view immediately surfaces:
     1. **Monthly Income, Layered Budget Balance Bar & Fluctuation Tracker**:
-       - Features a **Layered Horizontal Bar Graph** where the 100% maximum ceiling is **Projected Income** (`projected_monthly_income`), **Savings** (`savings_budget_limit + unallocated_projected_savings`) is shown in **grey at the right end**, and **Actual Spending**, **Budgeted Categories Limit**, and **Actual Income Limit** are layered with vertical limit markers.
-       - Automatically surfaces high-visibility flags and warnings whenever parts overlap (`budget_exceeds_projected_income`, `budget_exceeds_actual_income`, `spent_exceeds_projected_income`, `spent_dipping_into_savings`, or spending exceeding category limits), plus a status strip inside the **Category Budgets** card.
-       - Includes the collapsible Income & Refund Entries drawer.
+       - Features a **Layered Horizontal Bar Graph** where the 100% maximum ceiling is **Projected Income** (`projected_monthly_income`), **Savings** (`savings_budget_limit + unallocated_projected_savings`) is shown in **grey at the right end**, and **Actual Spending** and **Budgeted Categories Limit** are layered with a vertical limit marker. (Actual Income is intentionally excluded from the bar and overlap warnings so bi-weekly pay schedules do not trigger false overspending alerts mid-month).
+       - Automatically surfaces high-visibility flags and warnings whenever parts overlap (`budget_exceeds_projected_income`, `spent_exceeds_projected_income`, `spent_dipping_into_savings`, or spending exceeding category limits), plus a status strip inside the **Category Budgets** card.
+       - Includes a button to open the **Inflow & Income Entries** floating modal.
     2. **Two-Column Main Grid (`.finance-two-col`)**:
        - **Left Column**: **Category Budgets** (with persistent sort order and per-month scope adjustments).
        - **Right Column**: **Interactive Financial Visualizations & Graphs Panel** (`income_vs_expenses` vertical bar chart + multi-month clustered bars, `spending_pie` SVG donut/pie chart, `budget_bars` horizontal category utilization bars, and `cashflow_trend` multi-month net cash flow & savings rate).
-    3. **Untracked Categories Flag Banner**, **Category Manager Panel** (smooth-scrolled when opened), and **Transactions Ledger**.
+    3. **Untracked Categories Flag Banner** and **Transactions Ledger** (with user-set account color-coding reflected on every transaction row and account pill).
+- **Starting Budget Month (`2026-11`) & 12-Hour Auto-Sync on Page Load**:
+  - `STARTING_BUDGET_MONTH = "2026-11"`: November 2026 is the household starting point; pre-November historical noise is excluded from period selectors and auto-seeding.
+  - On page load, `FinanceModule.jsx` calls `POST /api/finance/plaid/auto-sync`. If connected Plaid accounts have not been synced in `>= 12` hours (`app_settings.last_plaid_sync_at`), the backend spawns a background sync thread and bumps `state_version` upon completion.
 - **Transaction Budget Month (`transactions.budget_month`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.
@@ -153,12 +157,14 @@ GibsonFamily/
   - Allows partners to unlink any connected bank or remove accidentally duplicated connections.
   - De-registers the item via Plaid's `/item/remove` API, deletes the entry from `plaid_items`, removes its synced `accounts`, and purges all imported `transactions` and `income_entries` tied to that connection.
   - Automatically restores true non-overstated balances, cashflow, and spending without leaving orphaned records.
-- **Account Deletion (`DELETE /api/finance/accounts/<id>`)**:
-  - Deletes the account and cascades deletion to all transactions and income entries associated with that account. If the deleted account was the only account on a Plaid item, cleans up `plaid_items` so it does not re-sync.
-- **Account Ownership & User Balances Breakdown (`accounts.owner_partner_id`, `PUT /api/finance/accounts/<id>`)**:
+- **Account Deletion & Permanent Blocklist (`DELETE /api/finance/accounts/<id>`, `deleted_accounts_blocklist` table)**:
+  - Deletes the account (plus any duplicate Plaid account rows sharing the same `(institution_name, mask, subtype, name)` signature) and cascades deletion to all associated transactions and income entries.
+  - Records deleted accounts in `deleted_accounts_blocklist` so future Plaid syncs never re-create removed accounts, and cleans up `plaid_items` when no accounts remain for an item or institution.
+- **Account Color-Coding (`accounts.color`) & Ownership (`accounts.owner_partner_id`, `PUT /api/finance/accounts/<id>`)**:
+  - Every account has a user-customizable `color` (preset swatches + custom color picker in **All Accounts & Balances by User** and **Accounts & Balances** modals) that is reflected on transactions and inflows in the ledger (left border accent + colored account badge pill).
   - Accounts track relational ownership via `owner_partner_id REFERENCES partners(id) ON DELETE SET NULL` (in addition to `owner_scope`).
   - Plaid accounts default their initial owner to the linking partner (`linked_by_partner_id`), and manual accounts can be created with an assigned partner or shared.
-  - Any account's owner can be assigned, reassigned, or set to Shared via `PUT /api/finance/accounts/<id>` directly from the UI.
+  - Any account's owner or color can be updated via `PUT /api/finance/accounts/<id>` directly from the UI.
   - Accessible via the **"All Accounts & Balances by User"** modal in the top **Options** dropdown in `FinanceModule.jsx`.
   - Groups accounts by user (e.g., Alex, Jordan) and Shared/Household, subdividing each into **Checking Accounts**, **Savings Accounts**, **Credit Cards & Debt**, and **Other/Investments** with live balances, available balances, partner subtotals, and household aggregate KPIs.
 

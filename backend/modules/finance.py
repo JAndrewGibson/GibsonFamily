@@ -1,10 +1,26 @@
-from datetime import date
+from datetime import date, datetime, timezone
+import threading
 import requests
 from flask import Blueprint, current_app, g, jsonify, request
-from backend.database import get_db
+from backend.database import bump_state_version, get_db
 from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 finance_bp = Blueprint("finance", __name__, url_prefix="/api/finance")
+
+STARTING_BUDGET_MONTH = "2026-11"
+
+ACCOUNT_COLOR_PALETTE = [
+    "#06b6d4",
+    "#6366f1",
+    "#10b981",
+    "#f59e0b",
+    "#ec4899",
+    "#a855f7",
+    "#3b82f6",
+    "#ef4444",
+    "#14b8a6",
+    "#f97316",
+]
 
 DEFAULT_CATEGORIES = [
     "Groceries & Dining",
@@ -251,6 +267,22 @@ def _plaid_headers_and_auth():
     return base_url, client_id, secret
 
 
+def _get_plaid_sync_freshness(db) -> tuple[str, float | None, bool]:
+    row = db.execute("SELECT value FROM app_settings WHERE key = 'last_plaid_sync_at'").fetchone()
+    last_sync_str = (row["value"] or "").strip() if row else ""
+    if not last_sync_str:
+        return "", None, True
+    try:
+        dt = datetime.fromisoformat(last_sync_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        elapsed_hours = max(0.0, (now_utc - dt).total_seconds() / 3600.0)
+        return last_sync_str, round(elapsed_hours, 2), elapsed_hours >= 12.0
+    except Exception:
+        return last_sync_str, None, True
+
+
 @finance_bp.route("/plaid/status", methods=["GET"])
 def plaid_status():
     base_url, client_id, secret = _plaid_headers_and_auth()
@@ -272,6 +304,7 @@ def plaid_status():
         "SELECT value FROM app_settings WHERE key = 'plaid_banner_dismissed'"
     ).fetchone()
     banner_dismissed = bool(dismissed_row and dismissed_row["value"] == "1")
+    last_sync_str, elapsed_hours, is_stale = _get_plaid_sync_freshness(db)
 
     return jsonify({
         "configured": bool(client_id and secret),
@@ -281,6 +314,9 @@ def plaid_status():
         "client_id_preview": f"{client_id[:6]}...{client_id[-4:]}" if len(client_id) >= 10 else ("configured" if client_id else ""),
         "linked_items": items,
         "banner_dismissed": banner_dismissed,
+        "last_plaid_sync_at": last_sync_str,
+        "hours_since_last_sync": elapsed_hours,
+        "needs_auto_sync": bool(len(items) > 0 and is_stale),
     })
 
 
@@ -370,15 +406,65 @@ def _sync_plaid_accounts_and_transactions(
     imported_accounts = 0
     account_id_map = {}
 
+    # Load permanently deleted accounts blocklist so deleted Plaid accounts never reappear
+    blocked_rows = db.execute(
+        "SELECT plaid_account_id, institution_name, name, subtype, mask FROM deleted_accounts_blocklist"
+    ).fetchall()
+    blocked_plaid_ids = {r["plaid_account_id"] for r in blocked_rows if r["plaid_account_id"]}
+    blocked_sigs = {
+        (
+            (r["institution_name"] or "").strip().lower(),
+            (r["mask"] or "").strip(),
+            (r["subtype"] or "").strip().lower(),
+            (r["name"] or "").strip().lower(),
+        )
+        for r in blocked_rows
+    }
+
+    existing_count = db.execute("SELECT COUNT(*) AS cnt FROM accounts").fetchone()["cnt"]
+
     for acc in acc_data.get("accounts", []):
         plaid_acc_id = acc.get("account_id")
+        acc_name = acc.get("name", "Plaid Account")
+        acc_subtype = acc.get("subtype", "checking")
+        acc_mask = acc.get("mask") or "0000"
+        sig = (
+            (institution_name or "").strip().lower(),
+            acc_mask.strip(),
+            (acc_subtype or "").strip().lower(),
+            (acc_name or "").strip().lower(),
+        )
+
+        # 1. Skip if this account or its signature was explicitly deleted by a user
+        if (plaid_acc_id and plaid_acc_id in blocked_plaid_ids) or sig in blocked_sigs:
+            continue
+
+        # 2. Prevent duplicate accounts when the same bank was accidentally linked twice
+        dup_existing = db.execute(
+            """
+            SELECT id, plaid_account_id FROM accounts
+            WHERE LOWER(COALESCE(institution_name, '')) = ?
+              AND COALESCE(mask, '') = ?
+              AND LOWER(COALESCE(subtype, '')) = ?
+              AND LOWER(COALESCE(name, '')) = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            sig,
+        ).fetchone()
+        if dup_existing and dup_existing["plaid_account_id"] and dup_existing["plaid_account_id"] != plaid_acc_id:
+            # Map transactions to the existing primary account or skip so we don't double-count
+            continue
+
         balances = acc.get("balances") or {}
         current_bal = float(balances.get("current") or 0.0)
         avail_bal = float(balances.get("available") if balances.get("available") is not None else current_bal)
+        default_color = ACCOUNT_COLOR_PALETTE[(existing_count + imported_accounts) % len(ACCOUNT_COLOR_PALETTE)]
+
         db.execute(
             """
-            INSERT INTO accounts (plaid_account_id, item_id, owner_partner_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?)
+            INSERT INTO accounts (plaid_account_id, item_id, owner_partner_id, name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, institution_name, color)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?)
             ON CONFLICT(plaid_account_id) DO UPDATE SET
                 item_id = COALESCE(excluded.item_id, accounts.item_id),
                 owner_partner_id = COALESCE(accounts.owner_partner_id, excluded.owner_partner_id),
@@ -389,14 +475,15 @@ def _sync_plaid_accounts_and_transactions(
                 plaid_acc_id,
                 item_id,
                 partner_id,
-                acc.get("name", "Plaid Account"),
-                acc.get("official_name") or acc.get("name"),
+                acc_name,
+                acc.get("official_name") or acc_name,
                 acc.get("type", "depository"),
-                acc.get("subtype", "checking"),
-                acc.get("mask") or "0000",
+                acc_subtype,
+                acc_mask,
                 current_bal,
                 avail_bal,
                 institution_name,
+                default_color,
             ),
         )
         row = db.execute("SELECT id FROM accounts WHERE plaid_account_id = ?", (plaid_acc_id,)).fetchone()
@@ -412,11 +499,19 @@ def _sync_plaid_accounts_and_transactions(
     tx_data = tx_resp.json()
     imported_txs = 0
     for tx in tx_data.get("added", [])[:100]:
+        local_acc_id = account_id_map.get(tx.get("account_id"))
+        if not local_acc_id:
+            # Skip transactions belonging to deleted or deduplicated accounts
+            continue
+
         amount = float(tx.get("amount") or 0.0)
         pfc = (tx.get("personal_finance_category") or {}).get("primary", "")
-        local_acc_id = account_id_map.get(tx.get("account_id"))
         tx_date = tx.get("date") or date.today().isoformat()
         tx_budget_month = tx_date[:7]
+
+        # Enforce November (STARTING_BUDGET_MONTH) starting point for synced transactions
+        if tx_budget_month < STARTING_BUDGET_MONTH:
+            continue
 
         # In Plaid, negative amounts or INCOME primary category represent inflows/deposits
         if amount < 0 or pfc == "INCOME":
@@ -506,6 +601,11 @@ def _sync_plaid_accounts_and_transactions(
         )
         imported_txs += 1
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_plaid_sync_at', ?)",
+        (now_iso,),
+    )
     db.commit()
     return imported_accounts, imported_txs
 
@@ -539,6 +639,17 @@ def exchange_public_token():
         item_id = ex_data["item_id"]
 
         db = get_db()
+        # If no active accounts exist for this institution, clear any prior blocklist entries so a fresh link works
+        active_for_inst = db.execute(
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE LOWER(COALESCE(institution_name, '')) = ?",
+            ((institution_name or "").strip().lower(),),
+        ).fetchone()["cnt"]
+        if active_for_inst == 0:
+            db.execute(
+                "DELETE FROM deleted_accounts_blocklist WHERE LOWER(COALESCE(institution_name, '')) = ?",
+                ((institution_name or "").strip().lower(),),
+            )
+
         db.execute(
             "INSERT OR REPLACE INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id) VALUES (?, ?, ?, ?)",
             (item_id, encrypt_plaid_token(access_token), institution_name, partner_id_int),
@@ -598,6 +709,16 @@ def sandbox_quick_connect():
         item_id = ex_data["item_id"]
 
         db = get_db()
+        active_for_inst = db.execute(
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE LOWER(COALESCE(institution_name, '')) = ?",
+            ((institution_name or "").strip().lower(),),
+        ).fetchone()["cnt"]
+        if active_for_inst == 0:
+            db.execute(
+                "DELETE FROM deleted_accounts_blocklist WHERE LOWER(COALESCE(institution_name, '')) = ?",
+                ((institution_name or "").strip().lower(),),
+            )
+
         db.execute(
             "INSERT OR REPLACE INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id) VALUES (?, ?, ?, ?)",
             (item_id, encrypt_plaid_token(access_token), institution_name, partner_id_int),
@@ -637,7 +758,89 @@ def sync_all_plaid_items():
         "synced": True,
         "updated_accounts": total_acc,
         "imported_transactions": total_tx,
+        "last_plaid_sync_at": datetime.now(timezone.utc).isoformat(),
     })
+
+
+@finance_bp.route("/plaid/auto-sync", methods=["POST"])
+def auto_sync_plaid_items():
+    """
+    Background server action triggered on page load.
+    If Plaid bank accounts are linked and haven't been synced in >= 12 hours,
+    triggers a background sync (or synchronous if `background=False`).
+    """
+    data = request.get_json(silent=True) or {}
+    run_in_background = bool(data.get("background", True))
+    force = bool(data.get("force", False))
+
+    db = get_db()
+    items = [dict(r) for r in db.execute("SELECT * FROM plaid_items").fetchall()]
+    if not items:
+        return jsonify({
+            "triggered": False,
+            "reason": "no_linked_items",
+            "last_plaid_sync_at": None,
+        })
+
+    last_sync_iso, hours_since, is_stale = _get_plaid_sync_freshness(db, max_age_hours=12.0)
+    if not is_stale and not force:
+        return jsonify({
+            "triggered": False,
+            "reason": "recently_synced",
+            "last_plaid_sync_at": last_sync_iso,
+            "hours_since_last_sync": hours_since,
+        })
+
+    # Stamp immediately so concurrent page loads don't trigger duplicate syncs
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_plaid_sync_at', ?)",
+        (now_iso,),
+    )
+    db.commit()
+
+    app_obj = current_app._get_current_object()
+
+    def _perform_sync():
+        with app_obj.app_context():
+            bg_db = get_db()
+            t_acc = 0
+            t_tx = 0
+            for item in items:
+                try:
+                    raw_token = decrypt_plaid_token(item["access_token"])
+                    ac, tc = _sync_plaid_accounts_and_transactions(
+                        raw_token,
+                        item["institution_name"],
+                        item["linked_by_partner_id"],
+                        item["item_id"],
+                    )
+                    t_acc += ac
+                    t_tx += tc
+                except Exception:
+                    pass
+            bump_state_version(bg_db)
+            return t_acc, t_tx
+
+    if run_in_background:
+        t = threading.Thread(target=_perform_sync, daemon=True)
+        t.start()
+        return jsonify({
+            "triggered": True,
+            "background": True,
+            "last_plaid_sync_at": now_iso,
+            "previous_hours_since_sync": hours_since,
+        })
+    else:
+        acc_cnt, tx_cnt = _perform_sync()
+        return jsonify({
+            "triggered": True,
+            "background": False,
+            "updated_accounts": acc_cnt,
+            "imported_transactions": tx_cnt,
+            "last_plaid_sync_at": now_iso,
+            "previous_hours_since_sync": hours_since,
+        })
 
 
 @finance_bp.route("/plaid/items/<item_identifier>", methods=["DELETE"])
@@ -698,19 +901,18 @@ def delete_plaid_item(item_identifier: str):
             pass
 
     # 3. Fallback: if still no match and there are accounts matching this institution_name
-    if not matched_acc_ids:
-        other_items = db.execute(
-            "SELECT COUNT(*) AS cnt FROM plaid_items WHERE institution_name = ? AND id != ?",
-            (item["institution_name"], item["id"]),
-        ).fetchone()["cnt"]
-        if other_items == 0:
-            matched_acc_ids = [
-                r["id"]
-                for r in db.execute(
-                    "SELECT id FROM accounts WHERE institution_name = ?",
-                    (item["institution_name"],),
-                ).fetchall()
-            ]
+    other_items = db.execute(
+        "SELECT COUNT(*) AS cnt FROM plaid_items WHERE institution_name = ? AND id != ?",
+        (item["institution_name"], item["id"]),
+    ).fetchone()["cnt"]
+    if not matched_acc_ids and other_items == 0:
+        matched_acc_ids = [
+            r["id"]
+            for r in db.execute(
+                "SELECT id FROM accounts WHERE institution_name = ?",
+                (item["institution_name"],),
+            ).fetchall()
+        ]
 
     # Delete transactions, income_entries, and accounts belonging to this connection
     deleted_tx_cnt = 0
@@ -719,6 +921,24 @@ def delete_plaid_item(item_identifier: str):
 
     if matched_acc_ids:
         ph = ",".join("?" * len(matched_acc_ids))
+        acc_rows_to_del = db.execute(
+            f"SELECT * FROM accounts WHERE id IN ({ph})", matched_acc_ids
+        ).fetchall()
+        for ar in acc_rows_to_del:
+            db.execute(
+                """
+                INSERT INTO deleted_accounts_blocklist (plaid_account_id, item_id, institution_name, name, subtype, mask)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ar["plaid_account_id"],
+                    ar["item_id"] or item["item_id"],
+                    ar["institution_name"] or item["institution_name"],
+                    ar["name"],
+                    ar["subtype"],
+                    ar["mask"],
+                ),
+            )
         deleted_tx_cnt = db.execute(
             f"DELETE FROM transactions WHERE account_id IN ({ph})", matched_acc_ids
         ).rowcount
@@ -743,8 +963,9 @@ def delete_plaid_item(item_identifier: str):
 
 @finance_bp.route("/summary", methods=["GET"])
 def finance_summary():
-    current_ym = date.today().strftime("%Y-%m")
-    selected_month = (request.args.get("month") or current_ym).strip()[:7]
+    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    raw_req_month = (request.args.get("month") or "").strip()[:7]
+    selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
     include_all = request.args.get("include_all_months") == "true"
 
     db = get_db()
@@ -777,7 +998,10 @@ def finance_summary():
                    COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month,
                    p.name AS partner_name,
                    p.avatar_color AS partner_color,
-                   a.name AS account_name
+                   a.name AS account_name,
+                   a.color AS account_color,
+                   a.mask AS account_mask,
+                   a.institution_name AS account_institution
             FROM transactions t
             LEFT JOIN partners p ON t.partner_id = p.id
             LEFT JOIN accounts a ON t.account_id = a.id
@@ -786,12 +1010,16 @@ def finance_summary():
         ).fetchall()
     ]
 
+    # Do not auto-generate months prior to STARTING_BUDGET_MONTH (November 2026)
     month_set = {
-        _shift_year_month(selected_month, -2),
-        _shift_year_month(selected_month, -1),
-        selected_month,
-        _shift_year_month(selected_month, 1),
-        current_ym,
+        m
+        for m in [
+            STARTING_BUDGET_MONTH,
+            selected_month,
+            _shift_year_month(selected_month, 1),
+            current_ym,
+        ]
+        if m >= STARTING_BUDGET_MONTH
     }
     tx_categories = set()
     for tx in all_transactions:
@@ -799,14 +1027,14 @@ def finance_summary():
         tx["original_date_month"] = (tx["date"] or "")[:7]
         tx["previous_budget_month"] = _shift_year_month(tx["budget_month"], -1)
         tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
-        if tx["budget_month"]:
+        if tx["budget_month"] and tx["budget_month"] >= STARTING_BUDGET_MONTH:
             month_set.add(tx["budget_month"])
         if tx.get("category"):
             tx_categories.add(tx["category"])
 
-    # Also include any months from monthly_budgets and income_entries
+    # Also include any months from monthly_budgets and income_entries (>= STARTING_BUDGET_MONTH)
     for mb_row in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
-        if mb_row["budget_month"]:
+        if mb_row["budget_month"] and mb_row["budget_month"] >= STARTING_BUDGET_MONTH:
             month_set.add(mb_row["budget_month"])
 
     all_income_entries = [
@@ -817,7 +1045,10 @@ def finance_summary():
                    COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) AS effective_budget_month,
                    p.name AS partner_name,
                    p.avatar_color AS partner_color,
-                   a.name AS account_name
+                   a.name AS account_name,
+                   a.color AS account_color,
+                   a.mask AS account_mask,
+                   a.institution_name AS account_institution
             FROM income_entries i
             LEFT JOIN partners p ON i.partner_id = p.id
             LEFT JOIN accounts a ON i.account_id = a.id
@@ -848,7 +1079,8 @@ def finance_summary():
         inc["is_transfer_or_cc"] = is_trans
 
         if ym:
-            month_set.add(ym)
+            if ym >= STARTING_BUDGET_MONTH:
+                month_set.add(ym)
             if is_real:
                 income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
                 expected_by_month[ym] = expected_by_month.get(ym, 0.0) + exp
@@ -1155,18 +1387,16 @@ def finance_history():
     ]
 
     months_set = {
-        _shift_year_month(current_ym, -2),
-        _shift_year_month(current_ym, -1),
-        current_ym,
+        max(current_ym, STARTING_BUDGET_MONTH),
     }
     for tx in all_txs:
-        if tx["effective_budget_month"]:
+        if tx["effective_budget_month"] and tx["effective_budget_month"] >= STARTING_BUDGET_MONTH:
             months_set.add(tx["effective_budget_month"])
     for inc in all_incomes:
-        if inc["effective_budget_month"]:
+        if inc["effective_budget_month"] and inc["effective_budget_month"] >= STARTING_BUDGET_MONTH:
             months_set.add(inc["effective_budget_month"])
-    for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
-        if mb["budget_month"]:
+    for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets").fetchall():
+        if mb["budget_month"] and mb["budget_month"] >= STARTING_BUDGET_MONTH:
             months_set.add(mb["budget_month"])
 
     income_totals_by_month = {}
@@ -1469,10 +1699,13 @@ def create_account():
         owner_partner_id = None
 
     db = get_db()
+    existing_cnt = db.execute("SELECT COUNT(*) AS cnt FROM accounts").fetchone()["cnt"]
+    color = (data.get("color") or "").strip() or ACCOUNT_COLOR_PALETTE[existing_cnt % len(ACCOUNT_COLOR_PALETTE)]
+
     cur = db.execute(
         """
-        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name, color)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -1485,6 +1718,7 @@ def create_account():
             data.get("owner_scope", "individual" if owner_partner_id else "shared"),
             owner_partner_id,
             data.get("institution_name", "Manual Entry"),
+            color,
         ),
     )
     db.commit()
@@ -1545,6 +1779,10 @@ def update_account(acc_id: int):
         fields.append("balance_available = ?")
         params.append(float(data["balance_available"]))
 
+    if "color" in data and str(data["color"]).strip():
+        fields.append("color = ?")
+        params.append(str(data["color"]).strip())
+
     if "owner_partner_id" in data:
         raw_pid = data["owner_partner_id"]
         if raw_pid is None or str(raw_pid).strip().lower() in ["", "none", "null", "0", "shared"]:
@@ -1590,23 +1828,80 @@ def delete_account(acc_id: int):
     if not acc:
         return jsonify({"error": "Account not found"}), 404
 
-    # Delete transactions and income entries belonging to this deleted account
-    deleted_tx = db.execute("DELETE FROM transactions WHERE account_id = ?", (acc_id,)).rowcount
-    deleted_inc = db.execute("DELETE FROM income_entries WHERE account_id = ?", (acc_id,)).rowcount
-    db.execute("DELETE FROM accounts WHERE id = ?", (acc_id,))
+    # 1. Also locate any duplicate Plaid accounts matching the same institution/mask/subtype/name
+    sig = (
+        (acc["institution_name"] or "").strip().lower(),
+        (acc["mask"] or "").strip(),
+        (acc["subtype"] or "").strip().lower(),
+        (acc["name"] or "").strip().lower(),
+    )
+    matching_rows = db.execute(
+        """
+        SELECT * FROM accounts
+        WHERE id = ?
+           OR (
+               plaid_account_id IS NOT NULL
+               AND LOWER(COALESCE(institution_name, '')) = ?
+               AND COALESCE(mask, '') = ?
+               AND LOWER(COALESCE(subtype, '')) = ?
+               AND LOWER(COALESCE(name, '')) = ?
+           )
+        """,
+        (acc_id, *sig),
+    ).fetchall()
 
-    # If this account was linked to a Plaid item and no other accounts remain for it, clean up plaid_items
-    if acc["item_id"]:
+    target_acc_ids = [r["id"] for r in matching_rows]
+    affected_item_ids = {r["item_id"] for r in matching_rows if r["item_id"]}
+
+    # 2. Record in deleted_accounts_blocklist so future Plaid syncs never re-create this account
+    for r in matching_rows:
+        if r["plaid_account_id"] or r["institution_name"]:
+            db.execute(
+                """
+                INSERT INTO deleted_accounts_blocklist (plaid_account_id, item_id, institution_name, name, subtype, mask)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r["plaid_account_id"],
+                    r["item_id"],
+                    r["institution_name"],
+                    r["name"],
+                    r["subtype"],
+                    r["mask"],
+                ),
+            )
+
+    # 3. Delete transactions, income entries, and account rows
+    ph = ",".join("?" * len(target_acc_ids))
+    deleted_tx = db.execute(f"DELETE FROM transactions WHERE account_id IN ({ph})", target_acc_ids).rowcount
+    deleted_inc = db.execute(f"DELETE FROM income_entries WHERE account_id IN ({ph})", target_acc_ids).rowcount
+    db.execute(f"DELETE FROM accounts WHERE id IN ({ph})", target_acc_ids)
+
+    # 4. Clean up plaid_items if no accounts remain for that item_id OR for that institution_name
+    for it_id in affected_item_ids:
         remaining = db.execute(
-            "SELECT COUNT(*) AS cnt FROM accounts WHERE item_id = ?", (acc["item_id"],)
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE item_id = ?", (it_id,)
         ).fetchone()["cnt"]
         if remaining == 0:
-            db.execute("DELETE FROM plaid_items WHERE item_id = ?", (acc["item_id"],))
+            db.execute("DELETE FROM plaid_items WHERE item_id = ?", (it_id,))
+
+    if acc["institution_name"]:
+        rem_inst = db.execute(
+            "SELECT COUNT(*) AS cnt FROM accounts WHERE LOWER(COALESCE(institution_name, '')) = ? AND plaid_account_id IS NOT NULL",
+            ((acc["institution_name"] or "").strip().lower(),),
+        ).fetchone()["cnt"]
+        if rem_inst == 0:
+            db.execute(
+                "DELETE FROM plaid_items WHERE LOWER(COALESCE(institution_name, '')) = ?",
+                ((acc["institution_name"] or "").strip().lower(),),
+            )
 
     db.commit()
     return jsonify({
         "deleted": True,
         "id": acc_id,
+        "deleted_account_ids": target_acc_ids,
+        "deleted_accounts_count": len(target_acc_ids),
         "deleted_transactions": deleted_tx,
         "deleted_income_entries": deleted_inc,
     })
@@ -1659,7 +1954,17 @@ def create_transaction():
         ),
     )
     db.commit()
-    tx = dict(db.execute("SELECT * FROM transactions WHERE id = ?", (cur.lastrowid,)).fetchone())
+    tx = dict(
+        db.execute(
+            """
+            SELECT t.*, a.name AS account_name, a.color AS account_color, a.mask AS account_mask
+            FROM transactions t
+            LEFT JOIN accounts a ON t.account_id = a.id
+            WHERE t.id = ?
+            """,
+            (cur.lastrowid,),
+        ).fetchone()
+    )
     return jsonify(tx), 201
 
 
@@ -1695,19 +2000,34 @@ def update_transaction(tx_id: int):
 
     new_notes = data.get("notes", existing["notes"])
     new_name = (data.get("name") or existing["name"]).strip()
+    if "account_id" in data:
+        raw_acc = data["account_id"]
+        new_account_id = int(raw_acc) if raw_acc and str(raw_acc).isdigit() and int(raw_acc) > 0 else None
+    else:
+        new_account_id = existing["account_id"]
 
     _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
-        SET category = ?, budget_month = ?, notes = ?, name = ?
+        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?
         WHERE id = ?
         """,
-        (new_category, new_budget_month, new_notes, new_name, tx_id),
+        (new_category, new_budget_month, new_notes, new_name, new_account_id, tx_id),
     )
     db.commit()
 
-    updated = dict(db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone())
+    updated = dict(
+        db.execute(
+            """
+            SELECT t.*, a.name AS account_name, a.color AS account_color, a.mask AS account_mask
+            FROM transactions t
+            LEFT JOIN accounts a ON t.account_id = a.id
+            WHERE t.id = ?
+            """,
+            (tx_id,),
+        ).fetchone()
+    )
     return jsonify(updated)
 
 

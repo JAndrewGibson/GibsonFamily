@@ -13,6 +13,7 @@ import {
   Send,
   Sparkles,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react';
 import { apiFetch } from '../api';
@@ -201,126 +202,156 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => setShowNewForm(!showNewForm)}
+          onClick={() => setShowNewForm(true)}
         >
           <Plus size={18} />
-          {showNewForm ? 'Close Form' : `Request Purchase from ${otherPartner.name.split(' ')[0]}`}
+          Request Purchase from {otherPartner.name.split(' ')[0]}
         </button>
       </div>
 
       {showNewForm && (
-        <form className="card form-card" onSubmit={handleCreateRequest}>
-          <h3>Submit a New Financial Request</h3>
-          <p className="text-muted">
-            Requesting as <strong>{activePartner.name}</strong> → Sent to{' '}
-            <strong>{otherPartner.name}</strong> for review
-          </p>
-          <div className="form-grid-3">
-            <div className="form-group">
-              <label>Item or Purchase Title *</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="e.g., PlayStation 5 Pro, OLED TV, Weekend Ski Pass"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Estimated Cost ($) *</label>
-              <input
-                type="number"
-                step="0.01"
-                min="1"
-                className="input"
-                placeholder="749.99"
-                value={newAmount}
-                onChange={(e) => setNewAmount(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Budget Category</label>
-              <select
-                className="input"
-                value={newCategory}
-                onChange={(e) => setNewCategory(e.target.value)}
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowNewForm(false)}
+        >
+          <div
+            className="finance-modal-card finance-modal-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>Submit a New Financial Request</h3>
+                <p className="text-muted">
+                  Requesting as <strong>{activePartner.name}</strong> → Sent to{' '}
+                  <strong>{otherPartner.name}</strong> for review
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowNewForm(false)}
+                aria-label="Close modal"
               >
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+                <X size={20} />
+              </button>
             </div>
-          </div>
+            <form className="finance-modal-body" onSubmit={handleCreateRequest}>
+              <div className="form-grid-3">
+                <div className="form-group">
+                  <label>Item or Purchase Title *</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g., PlayStation 5 Pro, OLED TV, Weekend Ski Pass"
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Estimated Cost ($) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    className="input"
+                    placeholder="749.99"
+                    value={newAmount}
+                    onChange={(e) => setNewAmount(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Budget Category</label>
+                  <select
+                    className="input"
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
-          <div className="form-grid-3">
-            <div className="form-group">
-              <label>Priority</label>
-              <select
-                className="input"
-                value={newPriority}
-                onChange={(e) => setNewPriority(e.target.value)}
-              >
-                <option value="low">Low — Nice to have eventually</option>
-                <option value="medium">Medium — Would love soon</option>
-                <option value="high">High — Time-sensitive / Important</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label>Suggested Monthly Savings ($/mo)</label>
-              <input
-                type="number"
-                step="1"
-                className="input"
-                placeholder="Optional, e.g., 200"
-                value={newProposedMonthly}
-                onChange={(e) => setNewProposedMonthly(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Ideal Target Purchase Date</label>
-              <input
-                type="date"
-                className="input"
-                value={newTargetDate}
-                onChange={(e) => setNewTargetDate(e.target.value)}
-              />
-            </div>
-          </div>
+              <div className="form-grid-3" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Priority</label>
+                  <select
+                    className="input"
+                    value={newPriority}
+                    onChange={(e) => setNewPriority(e.target.value)}
+                  >
+                    <option value="low">Low — Nice to have eventually</option>
+                    <option value="medium">Medium — Would love soon</option>
+                    <option value="high">High — Time-sensitive / Important</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Suggested Monthly Savings ($/mo)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    className="input"
+                    placeholder="Optional, e.g., 200"
+                    value={newProposedMonthly}
+                    onChange={(e) => setNewProposedMonthly(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Ideal Target Purchase Date</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={newTargetDate}
+                    onChange={(e) => setNewTargetDate(e.target.value)}
+                  />
+                </div>
+              </div>
 
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label>Why I'd love this / Details</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="Explain why or how we'll enjoy it..."
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Product Link (Optional)</label>
-              <input
-                type="url"
-                className="input"
-                placeholder="https://..."
-                value={newUrl}
-                onChange={(e) => setNewUrl(e.target.value)}
-              />
-            </div>
-          </div>
+              <div className="form-grid-2" style={{ marginTop: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Why I'd love this / Details</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Explain why or how we'll enjoy it..."
+                    value={newDescription}
+                    onChange={(e) => setNewDescription(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Product Link (Optional)</label>
+                  <input
+                    type="url"
+                    className="input"
+                    placeholder="https://..."
+                    value={newUrl}
+                    onChange={(e) => setNewUrl(e.target.value)}
+                  />
+                </div>
+              </div>
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary">
-              <Send size={16} />
-              Submit Request to {otherPartner.name}
-            </button>
+              <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowNewForm(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  <Send size={16} />
+                  Submit Request to {otherPartner.name}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       )}
 
       <div className="filter-pills-row">
@@ -572,95 +603,118 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
                   </button>
                 </div>
 
-                {/* Interactive Budget & Timeline Builder Drawer */}
+                {/* Interactive Budget & Timeline Builder Modal */}
                 {isPlanning && (
-                  <div className="timeline-builder-drawer">
-                    <h4>
-                      <CalendarClock size={18} /> Configure Budget & Purchase Timeline for "{req.title}"
-                    </h4>
-                    <p className="text-muted">
-                      Setting up a timeline automatically creates a linked goal in{' '}
-                      <strong>Future Purchases</strong> so you can track monthly savings together.
-                    </p>
-                    <div className="form-grid-3">
-                      <div className="form-group">
-                        <label>Monthly Budget Allocation ($/month)</label>
-                        <input
-                          type="number"
-                          step="5"
-                          min="10"
-                          className="input"
-                          value={planMonthly}
-                          onChange={(e) => setPlanMonthly(e.target.value)}
-                        />
+                  <div
+                    className="finance-modal-backdrop"
+                    onClick={() => setPlanningReqId(null)}
+                  >
+                    <div
+                      className="finance-modal-card"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="finance-modal-header">
+                        <div>
+                          <h3>
+                            <CalendarClock size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                            Configure Budget & Timeline for "{req.title}"
+                          </h3>
+                          <p className="text-muted">
+                            Setting up a timeline automatically creates a linked goal in{' '}
+                            <strong>Future Purchases</strong> so you can track monthly savings together.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-icon-subtle"
+                          onClick={() => setPlanningReqId(null)}
+                          aria-label="Close modal"
+                        >
+                          <X size={20} />
+                        </button>
                       </div>
-                      <div className="form-group">
-                        <label>Target Purchase Date</label>
-                        <input
-                          type="date"
-                          className="input"
-                          value={planTargetDate}
-                          onChange={(e) => setPlanTargetDate(e.target.value)}
-                        />
+                      <div className="finance-modal-body">
+                        <div className="form-grid-3">
+                          <div className="form-group">
+                            <label>Monthly Budget Allocation ($/month)</label>
+                            <input
+                              type="number"
+                              step="5"
+                              min="10"
+                              className="input"
+                              value={planMonthly}
+                              onChange={(e) => setPlanMonthly(e.target.value)}
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>Target Purchase Date</label>
+                            <input
+                              type="date"
+                              className="input"
+                              value={planTargetDate}
+                              onChange={(e) => setPlanTargetDate(e.target.value)}
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>Already Saved / Initial Allocation ($)</label>
+                            <input
+                              type="number"
+                              step="10"
+                              min="0"
+                              className="input"
+                              value={planSaved}
+                              onChange={(e) => setPlanSaved(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="timeline-preview-callout" style={{ marginTop: '0.85rem' }}>
+                          <span>
+                            Remaining to save: <strong>${liveRemaining.toFixed(2)}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            At <strong>${Number(planMonthly || 0).toFixed(0)}/mo</strong>, ready to buy in{' '}
+                            <strong>{liveMonths !== null ? `${liveMonths} month(s)` : 'N/A'}</strong>
+                          </span>
+                        </div>
+
+                        <div className="form-group" style={{ marginTop: '0.85rem' }}>
+                          <label>Note to Partner</label>
+                          <input
+                            type="text"
+                            className="input"
+                            value={decisionNotes}
+                            onChange={(e) => setDecisionNotes(e.target.value)}
+                            placeholder="e.g., Let's put $250/mo aside from our shared fun budget and buy it in January!"
+                          />
+                        </div>
+
+                        <div className="form-actions" style={{ marginTop: '1.1rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setPlanningReqId(null)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() =>
+                              submitDecision(req.id, 'budget_planned', {
+                                proposed_monthly_contribution: parseFloat(planMonthly),
+                                proposed_target_date: planTargetDate,
+                                saved_amount: parseFloat(planSaved || 0),
+                                decision_notes: decisionNotes,
+                              })
+                            }
+                          >
+                            <Sparkles size={15} />
+                            Activate Budget & Timeline Plan
+                          </button>
+                        </div>
                       </div>
-                      <div className="form-group">
-                        <label>Already Saved / Initial Allocation ($)</label>
-                        <input
-                          type="number"
-                          step="10"
-                          min="0"
-                          className="input"
-                          value={planSaved}
-                          onChange={(e) => setPlanSaved(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="timeline-preview-callout">
-                      <span>
-                        Remaining to save: <strong>${liveRemaining.toFixed(2)}</strong>
-                      </span>
-                      <span>•</span>
-                      <span>
-                        At <strong>${Number(planMonthly || 0).toFixed(0)}/mo</strong>, ready to buy in{' '}
-                        <strong>{liveMonths !== null ? `${liveMonths} month(s)` : 'N/A'}</strong>
-                      </span>
-                    </div>
-
-                    <div className="form-group">
-                      <label>Note to Partner</label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={decisionNotes}
-                        onChange={(e) => setDecisionNotes(e.target.value)}
-                        placeholder="e.g., Let's put $250/mo aside from our shared fun budget and buy it in January!"
-                      />
-                    </div>
-
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setPlanningReqId(null)}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        onClick={() =>
-                          submitDecision(req.id, 'budget_planned', {
-                            proposed_monthly_contribution: parseFloat(planMonthly),
-                            proposed_target_date: planTargetDate,
-                            saved_amount: parseFloat(planSaved || 0),
-                            decision_notes: decisionNotes,
-                          })
-                        }
-                      >
-                        <Sparkles size={15} />
-                        Activate Budget & Timeline Plan
-                      </button>
                     </div>
                   </div>
                 )}

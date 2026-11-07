@@ -98,7 +98,19 @@ CREATE TABLE IF NOT EXISTS accounts (
     balance_available REAL NOT NULL DEFAULT 0.0,
     owner_scope TEXT NOT NULL DEFAULT 'shared',
     institution_name TEXT NOT NULL DEFAULT 'Bank Account',
+    color TEXT NOT NULL DEFAULT '#06b6d4',
     FOREIGN KEY (owner_partner_id) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS deleted_accounts_blocklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plaid_account_id TEXT,
+    item_id TEXT,
+    institution_name TEXT,
+    name TEXT,
+    subtype TEXT,
+    mask TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -390,6 +402,30 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE accounts ADD COLUMN item_id TEXT")
     if "owner_partner_id" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN owner_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
+    if "color" not in acc_cols:
+        db.execute("ALTER TABLE accounts ADD COLUMN color TEXT NOT NULL DEFAULT '#06b6d4'")
+        palette = ["#06b6d4", "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#a855f7", "#3b82f6", "#ef4444"]
+        existing_accs = db.execute("SELECT id FROM accounts ORDER BY id").fetchall()
+        for idx, row in enumerate(existing_accs):
+            db.execute(
+                "UPDATE accounts SET color = ? WHERE id = ?",
+                (palette[idx % len(palette)], row["id"]),
+            )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deleted_accounts_blocklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plaid_account_id TEXT,
+            item_id TEXT,
+            institution_name TEXT,
+            name TEXT,
+            subtype TEXT,
+            mask TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
 
     db.execute(
         """
@@ -401,6 +437,58 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         )
         """
     )
+
+    # One-time migration: enforce November (2026-11) starting point & deduplicate duplicate Plaid accounts
+    cleanup_row = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'november_start_and_dedup_v1'"
+    ).fetchone()
+    if not cleanup_row:
+        # 1. Remove any pre-November (< '2026-11') historical transactions, income entries & monthly budgets
+        db.execute(
+            "DELETE FROM transactions WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) < '2026-11'"
+        )
+        db.execute(
+            "DELETE FROM income_entries WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) < '2026-11'"
+        )
+        db.execute("DELETE FROM monthly_budgets WHERE budget_month < '2026-11'")
+        db.execute("DELETE FROM monthly_income_projections WHERE budget_month < '2026-11'")
+
+        # 2. Deduplicate duplicate accounts (same institution + mask + subtype + name)
+        all_accs = db.execute("SELECT * FROM accounts ORDER BY id ASC").fetchall()
+        seen_signatures = {}
+        for acc in all_accs:
+            sig = (
+                (acc["institution_name"] or "").strip().lower(),
+                (acc["mask"] or "").strip(),
+                (acc["subtype"] or "").strip().lower(),
+                (acc["name"] or "").strip().lower(),
+            )
+            if sig in seen_signatures and acc["plaid_account_id"]:
+                # Duplicate account from linking the same bank twice!
+                if acc["plaid_account_id"]:
+                    db.execute(
+                        """
+                        INSERT INTO deleted_accounts_blocklist (plaid_account_id, item_id, institution_name, name, subtype, mask)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            acc["plaid_account_id"],
+                            acc["item_id"],
+                            acc["institution_name"],
+                            acc["name"],
+                            acc["subtype"],
+                            acc["mask"],
+                        ),
+                    )
+                db.execute("DELETE FROM transactions WHERE account_id = ?", (acc["id"],))
+                db.execute("DELETE FROM income_entries WHERE account_id = ?", (acc["id"],))
+                db.execute("DELETE FROM accounts WHERE id = ?", (acc["id"],))
+            else:
+                seen_signatures[sig] = acc["id"]
+
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('november_start_and_dedup_v1', '1')"
+        )
 
 
 def _ensure_module_definitions(db: sqlite3.Connection) -> None:
@@ -419,6 +507,7 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
         "household_name": "Gibson Household",
         "state_version": str(int(time.time() * 1000)),
         "plaid_banner_dismissed": "0",
+        "last_plaid_sync_at": "",
     }
     for k, v in defaults.items():
         row = db.execute("SELECT value FROM app_settings WHERE key = ?", (k,)).fetchone()
