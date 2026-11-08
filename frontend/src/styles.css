@@ -4601,3 +4601,25 @@ html[data-theme='light'] .marker-tag.tag-max {
   border-radius: 999px;
   flex-shrink: 0;
 }
+
+.tx-pending-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.12rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #fbbf24;
+  line-height: 1.25;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+html[data-theme='light'] .tx-pending-pill {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(217, 119, 6, 0.5);
+  color: #b45309;
+}

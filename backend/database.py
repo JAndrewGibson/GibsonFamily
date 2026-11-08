@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     partner_id INTEGER,
     is_shared INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
+    is_pending INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
@@ -172,6 +173,7 @@ CREATE TABLE IF NOT EXISTS income_entries (
     category TEXT NOT NULL DEFAULT '',
     is_recurring INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
+    is_pending INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL
@@ -389,6 +391,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     tx_cols = [r["name"] for r in db.execute("PRAGMA table_info(transactions)").fetchall()]
     if "budget_month" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN budget_month TEXT NOT NULL DEFAULT ''")
+    if "is_pending" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN is_pending INTEGER NOT NULL DEFAULT 0")
     db.execute(
         "UPDATE transactions SET budget_month = substr(date, 1, 7) WHERE budget_month IS NULL OR budget_month = ''"
     )
@@ -396,6 +400,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     inc_cols = [r["name"] for r in db.execute("PRAGMA table_info(income_entries)").fetchall()]
     if "category" not in inc_cols:
         db.execute("ALTER TABLE income_entries ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+    if "is_pending" not in inc_cols:
+        db.execute("ALTER TABLE income_entries ADD COLUMN is_pending INTEGER NOT NULL DEFAULT 0")
 
     acc_cols = [r["name"] for r in db.execute("PRAGMA table_info(accounts)").fetchall()]
     if "item_id" not in acc_cols:

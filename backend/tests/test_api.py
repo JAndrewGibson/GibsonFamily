@@ -1160,6 +1160,152 @@ def test_account_color_coding_deleted_account_blocklist_and_12h_autosync(app_ins
     assert auto_res.get_json()["reason"] == "no_linked_items"
 
 
+def test_pending_transactions_inclusion_and_posting_lifecycle(app_instance, client):
+    """
+    Test suite for pending transactions:
+    1. Pending transactions are included in ledger and summary totals immediately.
+    2. Pending transactions can be categorized immediately.
+    3. When transaction posts (settles) via Plaid sync (pending_transaction_id or modified),
+       is_pending updates to 0 and the user's assigned category is preserved.
+    """
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Jordan", "email": "jordan@gibson.local", "password": "PassJordan123!"},
+                {"name": "Taylor", "email": "taylor@gibson.local", "password": "PassTaylor123!"},
+            ],
+        },
+    )
+    headers = {"Authorization": f"Bearer {p_res.get_json()['token']}"}
+
+    # 1. Create a manual pending transaction and verify it counts in summary
+    create_res = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Trader Joe's",
+            "amount": 75.50,
+            "category": "Groceries & Dining",
+            "date": "2026-11-05",
+            "is_pending": True,
+        },
+    )
+    assert create_res.status_code == 201
+    tx_data = create_res.get_json()
+    assert tx_data["is_pending"] == 1
+
+    # Verify summary includes this pending transaction in spending totals
+    sum_res = client.get("/api/finance/summary?month=2026-11", headers=headers)
+    assert sum_res.status_code == 200
+    sum_data = sum_res.get_json()
+    assert sum_data["total_gross_spent"] == 75.50
+    assert sum_data["total_monthly_spent"] == 75.50
+
+    # Categorize the pending transaction to a custom category
+    cat_update = client.put(
+        f"/api/finance/transactions/{tx_data['id']}",
+        headers=headers,
+        json={"category": "Organic Groceries"},
+    )
+    assert cat_update.status_code == 200
+    assert cat_update.get_json()["category"] == "Organic Groceries"
+    assert cat_update.get_json()["is_pending"] == 1
+
+    # 2. Simulate Plaid sync lifecycle for pending -> settled transactions
+    with app_instance.app_context():
+        from backend.database import get_db
+        from backend.modules.finance import _sync_plaid_accounts_and_transactions
+        from unittest.mock import patch, MagicMock
+
+        db = get_db()
+        cur_acc = db.execute(
+            """
+            INSERT INTO accounts (plaid_account_id, name, type, subtype, mask, balance_current, institution_name)
+            VALUES ('plaid_acc_chase_pending', 'Chase Sapphire', 'credit', 'credit card', '4321', 500.0, 'Chase')
+            """
+        )
+        chase_acc_id = cur_acc.lastrowid
+        db.commit()
+
+        # Step A: Plaid delivers a pending transaction
+        mock_added_pending = {
+            "accounts": [{"account_id": "plaid_acc_chase_pending", "name": "Chase Sapphire", "type": "credit", "subtype": "credit card", "mask": "4321", "balances": {"current": 500.0}}],
+            "added": [{
+                "account_id": "plaid_acc_chase_pending",
+                "transaction_id": "plaid_tx_pending_999",
+                "date": "2026-11-06",
+                "name": "Target Store #1020",
+                "amount": 120.00,
+                "pending": True,
+                "personal_finance_category": {"primary": "GENERAL_MERCHANDISE"},
+            }],
+            "modified": [],
+            "removed": [],
+        }
+
+        with patch("requests.post") as mock_post:
+            def side_effect(url, **kwargs):
+                resp = MagicMock()
+                resp.status_code = 200
+                if "accounts/get" in url:
+                    resp.json.return_value = {"accounts": mock_added_pending["accounts"]}
+                else:
+                    resp.json.return_value = mock_added_pending
+                return resp
+            mock_post.side_effect = side_effect
+            _sync_plaid_accounts_and_transactions("access_tok_test", "Chase", 1, "item_chase")
+
+        # Verify transaction was inserted as pending
+        row_pending = db.execute("SELECT * FROM transactions WHERE plaid_transaction_id = 'plaid_tx_pending_999'").fetchone()
+        assert row_pending is not None
+        assert row_pending["is_pending"] == 1
+        assert row_pending["amount"] == 120.00
+
+        # User categorizes the pending transaction
+        db.execute("UPDATE transactions SET category = 'Target Household Items' WHERE id = ?", (row_pending["id"],))
+        db.commit()
+
+        # Step B: A few days later, Plaid delivers the posted transaction referencing pending_transaction_id
+        mock_settled = {
+            "accounts": mock_added_pending["accounts"],
+            "added": [{
+                "account_id": "plaid_acc_chase_pending",
+                "transaction_id": "plaid_tx_posted_1000",
+                "pending_transaction_id": "plaid_tx_pending_999",
+                "date": "2026-11-08",
+                "name": "Target Store #1020",
+                "amount": 120.00,
+                "pending": False,
+                "personal_finance_category": {"primary": "GENERAL_MERCHANDISE"},
+            }],
+            "modified": [],
+            "removed": [{"transaction_id": "plaid_tx_pending_999"}],
+        }
+
+        with patch("requests.post") as mock_post:
+            def side_effect_settled(url, **kwargs):
+                resp = MagicMock()
+                resp.status_code = 200
+                if "accounts/get" in url:
+                    resp.json.return_value = {"accounts": mock_settled["accounts"]}
+                else:
+                    resp.json.return_value = mock_settled
+                return resp
+            mock_post.side_effect = side_effect_settled
+            _sync_plaid_accounts_and_transactions("access_tok_test", "Chase", 1, "item_chase")
+
+        # Verify: The existing row was updated to posted (is_pending = 0), and preserved the user's category!
+        row_settled = db.execute("SELECT * FROM transactions WHERE plaid_transaction_id = 'plaid_tx_posted_1000'").fetchone()
+        assert row_settled is not None
+        assert row_settled["is_pending"] == 0
+        assert row_settled["category"] == "Target Household Items"
+        # Old pending transaction ID was upgraded, not lingering as duplicate
+        assert db.execute("SELECT COUNT(*) AS cnt FROM transactions WHERE plaid_transaction_id = 'plaid_tx_pending_999'").fetchone()["cnt"] == 0
+
+
+
 
 
 

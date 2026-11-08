@@ -508,6 +508,8 @@ def _sync_plaid_accounts_and_transactions(
         pfc = (tx.get("personal_finance_category") or {}).get("primary", "")
         tx_date = tx.get("date") or date.today().isoformat()
         tx_budget_month = tx_date[:7]
+        is_pending = 1 if tx.get("pending") else 0
+        pending_tx_id = tx.get("pending_transaction_id")
 
         # Enforce November (STARTING_BUDGET_MONTH) starting point for synced transactions
         if tx_budget_month < STARTING_BUDGET_MONTH:
@@ -546,11 +548,33 @@ def _sync_plaid_accounts_and_transactions(
                     auto_income_type = "payroll"
                     ret_cat = ""
 
+                # If this settled transaction replaces an earlier pending deposit, upgrade it in-place
+                if pending_tx_id:
+                    existing_pending_inc = db.execute(
+                        "SELECT id FROM income_entries WHERE plaid_transaction_id = ?",
+                        (pending_tx_id,),
+                    ).fetchone()
+                    if existing_pending_inc:
+                        db.execute(
+                            """
+                            UPDATE income_entries
+                            SET plaid_transaction_id = ?, date = ?, amount = ?, source_name = ?, is_pending = ?
+                            WHERE id = ?
+                            """,
+                            (tx.get("transaction_id"), tx_date, inc_amt, name_str, is_pending, existing_pending_inc["id"]),
+                        )
+                        continue
+
                 db.execute(
                     """
-                    INSERT OR IGNORE INTO income_entries
-                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid')
+                    INSERT INTO income_entries
+                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes, is_pending)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid', ?)
+                    ON CONFLICT(plaid_transaction_id) DO UPDATE SET
+                        is_pending = excluded.is_pending,
+                        amount = excluded.amount,
+                        date = excluded.date,
+                        source_name = excluded.source_name
                     """,
                     (
                         partner_id,
@@ -564,6 +588,7 @@ def _sync_plaid_accounts_and_transactions(
                         auto_income_type,
                         ret_cat,
                         1 if auto_income_type == "payroll" else 0,
+                        is_pending,
                     ),
                 )
             continue
@@ -581,11 +606,48 @@ def _sync_plaid_accounts_and_transactions(
         }
         mapped_cat = category_map.get(pfc, "Shopping & Tech")
 
+        # If this posted transaction replaces an earlier pending transaction, upgrade it in-place to preserve user's assigned category
+        if pending_tx_id:
+            existing_pending_tx = db.execute(
+                "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
+                (pending_tx_id,),
+            ).fetchone()
+            if existing_pending_tx:
+                db.execute(
+                    """
+                    UPDATE transactions
+                    SET plaid_transaction_id = ?,
+                        date = ?,
+                        amount = ?,
+                        name = ?,
+                        merchant_name = ?,
+                        is_pending = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        tx.get("transaction_id"),
+                        tx_date,
+                        round(amount, 2),
+                        tx.get("name", "Plaid Transaction"),
+                        tx.get("merchant_name") or tx.get("name"),
+                        is_pending,
+                        existing_pending_tx["id"],
+                    ),
+                )
+                imported_txs += 1
+                continue
+
         db.execute(
             """
-            INSERT OR IGNORE INTO transactions
-            (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid')
+            INSERT INTO transactions
+            (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid', ?)
+            ON CONFLICT(plaid_transaction_id) DO UPDATE SET
+                is_pending = excluded.is_pending,
+                amount = excluded.amount,
+                date = excluded.date,
+                name = excluded.name,
+                merchant_name = excluded.merchant_name
             """,
             (
                 local_acc_id,
@@ -597,9 +659,62 @@ def _sync_plaid_accounts_and_transactions(
                 round(amount, 2),
                 mapped_cat,
                 partner_id,
+                is_pending,
             ),
         )
         imported_txs += 1
+
+    # Process modified transactions (e.g., pending transitions to posted or amounts adjust)
+    for mtx in tx_data.get("modified", []):
+        m_plaid_id = mtx.get("transaction_id")
+        if not m_plaid_id:
+            continue
+        m_pending = 1 if mtx.get("pending") else 0
+        m_amt = float(mtx.get("amount") or 0.0)
+        m_date = mtx.get("date") or date.today().isoformat()
+        db.execute(
+            """
+            UPDATE transactions
+            SET is_pending = ?,
+                amount = ?,
+                date = ?,
+                name = COALESCE(?, name),
+                merchant_name = COALESCE(?, merchant_name)
+            WHERE plaid_transaction_id = ?
+            """,
+            (
+                m_pending,
+                round(m_amt, 2),
+                m_date,
+                mtx.get("name"),
+                mtx.get("merchant_name") or mtx.get("name"),
+                m_plaid_id,
+            ),
+        )
+        db.execute(
+            """
+            UPDATE income_entries
+            SET is_pending = ?,
+                amount = ?,
+                date = ?,
+                source_name = COALESCE(?, source_name)
+            WHERE plaid_transaction_id = ?
+            """,
+            (
+                m_pending,
+                round(abs(m_amt), 2),
+                m_date,
+                mtx.get("merchant_name") or mtx.get("name"),
+                m_plaid_id,
+            ),
+        )
+
+    # Process removed transactions (e.g., cancelled pending items)
+    for rtx in tx_data.get("removed", []):
+        r_id = rtx.get("transaction_id") if isinstance(rtx, dict) else rtx
+        if r_id:
+            db.execute("DELETE FROM transactions WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
+            db.execute("DELETE FROM income_entries WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
 
     now_iso = datetime.now(timezone.utc).isoformat()
     db.execute(
@@ -1932,13 +2047,14 @@ def create_transaction():
         budget_month = date_ym
 
     category = (data.get("category") or "Groceries & Dining").strip()
+    is_pending = 1 if data.get("is_pending") else 0
 
     db = get_db()
     _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     cur = db.execute(
         """
-        INSERT INTO transactions (account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(account_id) if account_id else None,
@@ -1951,6 +2067,7 @@ def create_transaction():
             int(partner_id) if partner_id else None,
             1 if data.get("is_shared", True) else 0,
             data.get("notes", ""),
+            is_pending,
         ),
     )
     db.commit()
@@ -2006,14 +2123,16 @@ def update_transaction(tx_id: int):
     else:
         new_account_id = existing["account_id"]
 
+    new_is_pending = (1 if data["is_pending"] else 0) if "is_pending" in data else existing["is_pending"]
+
     _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
-        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?
+        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, is_pending = ?
         WHERE id = ?
         """,
-        (new_category, new_budget_month, new_notes, new_name, new_account_id, tx_id),
+        (new_category, new_budget_month, new_notes, new_name, new_account_id, new_is_pending, tx_id),
     )
     db.commit()
 

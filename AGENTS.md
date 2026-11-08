@@ -118,9 +118,14 @@ GibsonFamily/
 - **Starting Budget Month (`2026-11`) & 12-Hour Auto-Sync on Page Load**:
   - `STARTING_BUDGET_MONTH = "2026-11"`: November 2026 is the household starting point; pre-November historical noise is excluded from period selectors and auto-seeding.
   - On page load, `FinanceModule.jsx` calls `POST /api/finance/plaid/auto-sync`. If connected Plaid accounts have not been synced in `>= 12` hours (`app_settings.last_plaid_sync_at`), the backend spawns a background sync thread and bumps `state_version` upon completion.
-- **Transaction Budget Month (`transactions.budget_month`)**:
+- **Transaction Budget Month (`transactions.budget_month`) & Pending Transactions (`is_pending`)**:
   - Defaults to `substr(date, 1, 7)` (`YYYY-MM`), cleanly separating budgets on the **1st of every month**.
   - Any transaction can be reassigned to a standard or custom category (`PUT /api/finance/transactions/<id>`) or allocated to the previous month (`prev`), next month (`next`), a specific `YYYY-MM`, or reset to its purchase date month (`reset`) via the per-row `☰` hamburger menu.
+  - **Pending Transactions (`transactions.is_pending`, `income_entries.is_pending`)**:
+    - Plaid pending transactions (`pending: true`) are actively ingested and count towards all monthly budget totals, gross spend, and net cashflow immediately.
+    - Rendered in the ledger and inflow entries with an amber **"Pending"** pill (`.tx-pending-pill`) placed immediately after the colored account pill.
+    - Users can categorize pending transactions immediately.
+    - When a transaction settles with the bank, Plaid delivers the posted transaction (via `pending_transaction_id` or `modified` sync). The existing row upgrades in-place to `is_pending = 0`, preserving the category assigned by the user while pending.
 - **Income, Projected Income & Fluctuation Tracking (`income_entries` & `monthly_income_projections` tables)**:
   - Stores monthly inflows in `income_entries(source_name, amount, expected_monthly_amount, income_type, category, date, budget_month, notes)`.
   - **Inflow Classification & Strict Financial Equilibrium**:

@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Clock,
   CreditCard,
   DollarSign,
   Edit3,
@@ -3101,6 +3102,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               {tx.account_mask ? ` ••${tx.account_mask}` : ''}
                             </span>
                           )}
+                          {Boolean(tx.is_pending) && (
+                            <span
+                              className="tx-pending-pill"
+                              title="Pending transaction with bank — counting towards your budget"
+                            >
+                              <Clock size={11} /> Pending
+                            </span>
+                          )}
                         </div>
                         {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
                       </td>
@@ -5270,6 +5279,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   style={{ backgroundColor: acctColor }}
                                 />
                                 {inc.account_name}
+                              </span>
+                            )}
+                            {Boolean(inc.is_pending) && (
+                              <span
+                                className="tx-pending-pill"
+                                title="Pending deposit with bank"
+                              >
+                                <Clock size={11} /> Pending
                               </span>
                             )}
                           </div>
