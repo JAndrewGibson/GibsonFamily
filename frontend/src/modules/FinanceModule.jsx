@@ -121,6 +121,31 @@ function shiftMonthString(ym, delta) {
   return `${String(ny).padStart(4, '0')}-${String(nm).padStart(2, '0')}`;
 }
 
+function formatIncomeTypeBadge(type, category = '') {
+  switch (type) {
+    case 'payroll':
+    case 'paycheck':
+    case 'salary':
+      return { cls: 'pill-green', label: 'Payroll' };
+    case 'bonus':
+      return { cls: 'pill-purple', label: 'Bonus' };
+    case 'variable':
+    case 'commission':
+      return { cls: 'pill-purple', label: 'Variable / Comm' };
+    case 'side_income':
+      return { cls: 'pill-cyan', label: 'Side Income' };
+    case 'return':
+      return { cls: 'pill-cyan', label: category ? `Return (${category})` : 'Store Return' };
+    case 'cc_payment':
+      return { cls: 'pill-outline', label: 'CC Payment' };
+    case 'transfer':
+      return { cls: 'pill-outline', label: 'Transfer' };
+    case 'other':
+    default:
+      return { cls: 'pill-outline', label: type || 'Inflow' };
+  }
+}
+
 export default function FinanceModule({ activePartner, onDataChanged, syncVersion }) {
   const rawCalendarMonth = new Date().toISOString().slice(0, 7);
   const currentCalendarMonth =
@@ -178,6 +203,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [selectedUserFilter, setSelectedUserFilter] = useState('all');
   const [updatingAccountId, setUpdatingAccountId] = useState(null);
   const [confirmDeleteAccId, setConfirmDeleteAccId] = useState(null);
+  const [deletingAccId, setDeletingAccId] = useState(null);
   const [showAddAccountForm, setShowAddAccountForm] = useState(false);
 
   const optionsMenuRef = useRef(null);
@@ -568,10 +594,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
   const handleDeleteAccount = async (acc) => {
     const accId = typeof acc === 'object' ? acc.id : acc;
-    await apiFetch(`/api/finance/accounts/${accId}`, { method: 'DELETE' });
-    setConfirmDeleteAccId(null);
-    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
-    onDataChanged?.();
+    setDeletingAccId(accId);
+    try {
+      await apiFetch(`/api/finance/accounts/${accId}`, { method: 'DELETE' });
+      setConfirmDeleteAccId(null);
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      console.error('Failed to delete account:', err);
+    } finally {
+      setDeletingAccId(null);
+    }
   };
 
   const handleReassignAccount = async (txId, newAccountId) => {
@@ -4060,22 +4093,22 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <div className="account-color-picker-row" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '0.45rem' }}>
                           <span className="owner-assign-label">Ledger Color:</span>
                           <div className="account-color-swatches">
-                            {ACCOUNT_COLOR_PALETTE.map((swatch) => (
+                            {ACCOUNT_COLOR_PALETTE.map((hex) => (
                               <button
-                                key={swatch.hex}
+                                key={hex}
                                 type="button"
-                                className={`account-color-swatch-btn ${acctColor.toLowerCase() === swatch.hex.toLowerCase() ? 'active' : ''}`}
-                                style={{ backgroundColor: swatch.hex }}
-                                disabled={updatingAccountColorId === acc.id}
-                                onClick={() => handleUpdateAccountColor(acc.id, swatch.hex)}
-                                title={`Color code ${acc.name} as ${swatch.label}`}
+                                className={`account-color-swatch-btn ${acctColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''}`}
+                                style={{ backgroundColor: hex }}
+                                disabled={updatingAccountId === acc.id}
+                                onClick={() => handleUpdateAccountColor(acc.id, hex)}
+                                title={`Color code ${acc.name} as ${hex}`}
                               />
                             ))}
                             <label className="account-custom-color-input" title="Pick custom color">
                               <input
                                 type="color"
                                 value={acctColor}
-                                disabled={updatingAccountColorId === acc.id}
+                                disabled={updatingAccountId === acc.id}
                                 onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
                               />
                             </label>
@@ -5226,14 +5259,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 <div className="form-group">
                   <label>Ledger Color</label>
                   <div className="account-color-swatches" style={{ marginTop: '0.35rem' }}>
-                    {ACCOUNT_COLOR_PALETTE.map((swatch) => (
+                    {ACCOUNT_COLOR_PALETTE.map((hex) => (
                       <button
-                        key={swatch.hex}
+                        key={hex}
                         type="button"
-                        className={`account-color-swatch-btn ${accColor.toLowerCase() === swatch.hex.toLowerCase() ? 'active' : ''}`}
-                        style={{ backgroundColor: swatch.hex }}
-                        onClick={() => setAccColor(swatch.hex)}
-                        title={swatch.label}
+                        className={`account-color-swatch-btn ${accColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''}`}
+                        style={{ backgroundColor: hex }}
+                        onClick={() => setAccColor(hex)}
+                        title={`Color code account as ${hex}`}
                       />
                     ))}
                     <label className="account-custom-color-input" title="Pick custom color">
@@ -5302,7 +5335,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   type="button"
                   className="btn btn-danger"
                   onClick={() =>
-                    handleCancelCategoryBudget(cancellingBudget.category, 'this_and_future')
+                    handleConfirmCancelBudget(cancellingBudget, 'this_and_future')
                   }
                 >
                   Remove for {formatShortMonth(selectedMonth)} & Future Months
@@ -5311,7 +5344,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   type="button"
                   className="btn btn-secondary"
                   onClick={() =>
-                    handleCancelCategoryBudget(cancellingBudget.category, 'only_this_month')
+                    handleConfirmCancelBudget(cancellingBudget, 'only_this_month')
                   }
                 >
                   Remove Only for {formatMonthLabel(selectedMonth)}
@@ -5454,7 +5487,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           <button
                             type="button"
                             className="btn btn-secondary btn-xs"
-                            onClick={() => openReclassifyModal(inc)}
+                            onClick={() => handleOpenReclassify(inc)}
                             title="Change classification (Payroll, Return, Credit Card Payment, Transfer)"
                           >
                             <SlidersHorizontal size={12} /> Reclassify

@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setAuthToken, setCookie } from './api';
+import ErrorBoundary from './components/ErrorBoundary';
 import OnboardingWizard from './components/OnboardingWizard';
 import LoginScreen from './components/LoginScreen';
 import NotificationCenter, { MobilePushPromptBanner } from './components/NotificationCenter';
@@ -513,58 +514,60 @@ export default function App() {
         {!isLocked && (
           <main className="content-scroll">
             <MobilePushPromptBanner currentPartner={activePartner} />
-            {activeTab === 'requests' && (
-              <RequestsModule
-                activePartner={activePartner}
-                partners={partners}
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'future_plans' && (
-              <FuturePurchasesModule
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'finance' && (
-              <FinanceModule
-                activePartner={activePartner}
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'admin_docs' && (
-              <AdminDocsSubModule
-                activePartner={activePartner}
-                partners={partners}
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'todos' && (
-              <TodosSubModule
-                activePartner={activePartner}
-                partners={partners}
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'groceries' && (
-              <GroceriesSubModule
-                activePartner={activePartner}
-                onDataChanged={loadCoreState}
-                syncVersion={syncVersion}
-              />
-            )}
-            {activeTab === 'modules_registry' && (
-              <ModuleManagerSubModule
-                modules={modules}
-                partners={partners}
-                onToggleModule={handleToggleModule}
-                onRefreshState={loadCoreState}
-              />
-            )}
+            <ErrorBoundary onReset={loadCoreState}>
+              {activeTab === 'requests' && (
+                <RequestsModule
+                  activePartner={activePartner}
+                  partners={partners}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'future_plans' && (
+                <FuturePurchasesModule
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'finance' && (
+                <FinanceModule
+                  activePartner={activePartner}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'admin_docs' && (
+                <AdminDocsSubModule
+                  activePartner={activePartner}
+                  partners={partners}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'todos' && (
+                <TodosSubModule
+                  activePartner={activePartner}
+                  partners={partners}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'groceries' && (
+                <GroceriesSubModule
+                  activePartner={activePartner}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'modules_registry' && (
+                <ModuleManagerSubModule
+                  modules={modules}
+                  partners={partners}
+                  onToggleModule={handleToggleModule}
+                  onRefreshState={loadCoreState}
+                />
+              )}
+            </ErrorBoundary>
           </main>
         )}
 
