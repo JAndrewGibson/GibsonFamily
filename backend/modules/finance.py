@@ -48,7 +48,131 @@ REAL_INCOME_TYPES = {
     "other_income",
 }
 RETURN_TYPES = {"return", "refund"}
-NON_INCOME_TYPES = {"cc_payment", "credit_card_payment", "transfer", "account_transfer"}
+NON_INCOME_TYPES = {"cc_payment", "credit_card_payment", "transfer", "account_transfer", "savings_transfer", "transfer_to_savings"}
+
+SAVINGS_SPEND_CATEGORY = "Spent from Savings"
+SAVINGS_SPEND_ALIASES = {"spent from savings", "savings spend", "from savings", "savings withdrawal"}
+
+SAVINGS_SUBTYPES = {
+    "savings",
+    "hysa",
+    "high yield savings",
+    "money market",
+    "cd",
+    "certificate of deposit",
+    "cash management",
+    "isa",
+    "christmas club",
+}
+
+BROKERAGE_SUBTYPES = {
+    "brokerage",
+    "investment",
+    "ira",
+    "roth",
+    "roth ira",
+    "401k",
+    "403b",
+    "529",
+    "hsa",
+    "health savings",
+    "pension",
+    "retirement",
+    "ugma",
+    "utma",
+    "trust",
+    "mutual fund",
+    "stock",
+    "etf",
+    "crypto",
+}
+
+
+def is_tx_savings_spend(tx: dict) -> bool:
+    if bool(tx.get("is_savings_spend")):
+        return True
+    cat = (tx.get("category") or "").strip().lower()
+    return cat in SAVINGS_SPEND_ALIASES
+
+
+def classify_savings_account(acc: dict) -> dict:
+    acc_type = (acc.get("type") or "").strip().lower()
+    acc_subtype = (acc.get("subtype") or "").strip().lower()
+    combined_name = f"{acc.get('name') or ''} {acc.get('official_name') or ''} {acc_subtype}".lower()
+
+    is_brokerage_like = (
+        acc_type in ("investment", "brokerage")
+        or acc_subtype in BROKERAGE_SUBTYPES
+        or any(
+            k in combined_name
+            for k in (
+                "brokerage",
+                "invest",
+                "401k",
+                "403b",
+                "ira",
+                "roth",
+                "529",
+                "fidelity",
+                "vanguard",
+                "schwab",
+                "wealthfront",
+                "betterment",
+                "robinhood",
+            )
+        )
+    )
+    is_savings_like = (
+        acc_subtype in SAVINGS_SUBTYPES
+        or any(
+            k in combined_name
+            for k in ("saving", "hysa", "money market", "emergency fund", "reserve", "vault", "high yield")
+        )
+    )
+
+    explicit_flag = acc.get("is_savings_account")
+    if explicit_flag is not None and str(explicit_flag).strip() != "":
+        is_tracked = bool(int(explicit_flag))
+    else:
+        if acc_type in ("credit", "loan"):
+            is_tracked = False
+        elif is_brokerage_like or (is_savings_like and acc_subtype != "checking"):
+            is_tracked = True
+        else:
+            is_tracked = False
+
+    if is_brokerage_like:
+        bucket = "brokerage"
+    elif is_tracked or is_savings_like:
+        bucket = "savings"
+    else:
+        bucket = "other"
+
+    return {
+        "is_savings_or_brokerage": is_tracked,
+        "savings_bucket": bucket,
+    }
+
+
+def _upsert_account_balance_snapshot(
+    db, account_id: int | None, balance: float, ym: str | None = None, notes: str | None = None
+) -> None:
+    if not account_id:
+        return
+    target_ym = (ym or max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)).strip()[:7]
+    if len(target_ym) != 7:
+        return
+    db.execute(
+        """
+        INSERT INTO account_balance_snapshots (account_id, snapshot_month, balance, notes, updated_at)
+        VALUES (?, ?, ?, COALESCE(?, 'Auto-recorded balance'), datetime('now'))
+        ON CONFLICT(account_id, snapshot_month) DO UPDATE SET
+            balance = excluded.balance,
+            notes = COALESCE(?, account_balance_snapshots.notes),
+            updated_at = datetime('now')
+        """,
+        (int(account_id), target_ym, round(float(balance or 0.0), 2), notes, notes),
+    )
 
 
 def is_real_earned_income(itype: str) -> bool:
@@ -149,6 +273,8 @@ def _build_category_management_payload(
     month_spend_map = {}
     month_cnt_map = {}
     for tx in month_transactions:
+        if is_tx_savings_spend(tx):
+            continue
         cat = (tx.get("category") or "").strip()
         if cat:
             month_spend_map[cat] = month_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
@@ -157,6 +283,8 @@ def _build_category_management_payload(
     all_spend_map = {}
     all_cnt_map = {}
     for tx in all_transactions:
+        if is_tx_savings_spend(tx):
+            continue
         cat = (tx.get("category") or "").strip()
         if cat:
             all_spend_map[cat] = all_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
@@ -165,6 +293,8 @@ def _build_category_management_payload(
     enriched_catalog = []
     for row in catalog_rows:
         cat_name = row["name"]
+        if cat_name.strip().lower() in SAVINGS_SPEND_ALIASES:
+            continue
         is_tracked = cat_name in tracked_map
         b_row = tracked_map.get(cat_name)
         m_spent = round(month_spend_map.get(cat_name, 0.0), 2)
@@ -198,7 +328,9 @@ def _build_category_management_payload(
     untracked_categories = [
         c
         for c in enriched_catalog
-        if not c["is_tracked"] and (not c["is_archived"] or c["month_tx_count"] > 0)
+        if not c["is_tracked"]
+        and c["name"].strip().lower() not in SAVINGS_SPEND_ALIASES
+        and (not c["is_archived"] or c["month_tx_count"] > 0)
     ]
     untracked_categories.sort(
         key=lambda c: (-c["month_spent"], -c["month_tx_count"], -c["total_tx_count"], c["name"])
@@ -534,6 +666,7 @@ def _sync_plaid_accounts_and_transactions(
         row = db.execute("SELECT id FROM accounts WHERE plaid_account_id = ?", (plaid_acc_id,)).fetchone()
         if row:
             account_id_map[plaid_acc_id] = row["id"]
+            _upsert_account_balance_snapshot(db, row["id"], current_bal)
         imported_accounts += 1
 
     # Ensure account_id_map includes all known local accounts for mapping
@@ -623,14 +756,16 @@ def _sync_plaid_accounts_and_transactions(
             if tx_budget_month < STARTING_BUDGET_MONTH:
                 continue
 
-            # In Plaid, negative amounts or INCOME primary category represent inflows/deposits
-            if amount < 0 or pfc == "INCOME":
+            # In Plaid, negative amounts or INCOME / TRANSFER_IN primary category represent inflows/deposits
+            if amount < 0 or pfc in ("INCOME", "TRANSFER_IN"):
                 inc_amt = round(abs(amount), 2)
                 if inc_amt > 0:
                     name_str = (tx.get("merchant_name") or tx.get("name") or "Plaid Deposit").strip()
                     name_lower = name_str.lower()
-                    acc_row = db.execute("SELECT type, subtype FROM accounts WHERE id = ?", (local_acc_id,)).fetchone()
-                    is_credit_acc = bool(acc_row and (acc_row["type"] == "credit" or "credit" in (acc_row["subtype"] or "").lower()))
+                    acc_row = db.execute("SELECT * FROM accounts WHERE id = ?", (local_acc_id,)).fetchone()
+                    acc_dict = dict(acc_row) if acc_row else {}
+                    is_credit_acc = bool(acc_dict and (acc_dict.get("type") == "credit" or "credit" in (acc_dict.get("subtype") or "").lower()))
+                    is_sav_acc = classify_savings_account(acc_dict)["is_savings_or_brokerage"] if acc_dict else False
 
                     category_map = {
                         "FOOD_AND_DRINK": "Groceries & Dining",
@@ -642,14 +777,18 @@ def _sync_plaid_accounts_and_transactions(
                     }
                     mapped_cat = category_map.get(pfc, "Shopping & Tech")
 
-                    # Auto-classify inflow: Credit Card Payment, Return, Account Transfer, or Payroll
+                    # Auto-classify inflow: Credit Card Payment, Return, Account/Savings Transfer, or Payroll
                     if is_credit_acc or any(w in name_lower for w in ["payment", "autopay", "thank you", "card payment", "bill pay"]):
                         auto_income_type = "cc_payment"
                         ret_cat = ""
                     elif any(w in name_lower for w in ["return", "refund", "reimbursement", "credit for return"]) or pfc in ["GENERAL_MERCHANDISE", "FOOD_AND_DRINK", "ENTERTAINMENT"]:
                         auto_income_type = "return"
                         ret_cat = mapped_cat
-                    elif any(w in name_lower for w in ["transfer", "zelle", "venmo", "xfer", "wire", "deposit transfer", "internal transfer"]):
+                    elif (
+                        pfc == "TRANSFER_IN"
+                        or any(w in name_lower for w in ["transfer", "zelle", "venmo", "xfer", "wire", "deposit transfer", "internal transfer", "contribution"])
+                        or (is_sav_acc and not any(w in name_lower for w in ["payroll", "salary", "paycheck", "direct dep"]))
+                    ):
                         auto_income_type = "transfer"
                         ret_cat = ""
                     else:
@@ -1280,19 +1419,21 @@ def finance_summary():
     include_all = request.args.get("include_all_months") == "true"
 
     db = get_db()
-    accounts = [
-        dict(r)
-        for r in db.execute(
-            """
-            SELECT a.*,
-                   p.name AS owner_partner_name,
-                   p.avatar_color AS owner_partner_color
-            FROM accounts a
-            LEFT JOIN partners p ON a.owner_partner_id = p.id
-            ORDER BY a.type, a.subtype, a.name
-            """
-        ).fetchall()
-    ]
+    accounts = []
+    for r in db.execute(
+        """
+        SELECT a.*,
+               p.name AS owner_partner_name,
+               p.avatar_color AS owner_partner_color
+        FROM accounts a
+        LEFT JOIN partners p ON a.owner_partner_id = p.id
+        ORDER BY a.type, a.subtype, a.name
+        """
+    ).fetchall():
+        acc_d = dict(r)
+        acc_d.update(classify_savings_account(acc_d))
+        accounts.append(acc_d)
+
     household_partners = [
         dict(r)
         for r in db.execute(
@@ -1312,10 +1453,13 @@ def finance_summary():
                    a.name AS account_name,
                    a.color AS account_color,
                    a.mask AS account_mask,
-                   a.institution_name AS account_institution
+                   a.institution_name AS account_institution,
+                   sa.name AS savings_account_name,
+                   sa.color AS savings_account_color
             FROM transactions t
             LEFT JOIN partners p ON t.partner_id = p.id
             LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts sa ON t.savings_account_id = sa.id
             ORDER BY t.date DESC, t.id DESC
             """
         ).fetchall()
@@ -1338,9 +1482,10 @@ def finance_summary():
         tx["original_date_month"] = (tx["date"] or "")[:7]
         tx["previous_budget_month"] = _shift_year_month(tx["budget_month"], -1)
         tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
+        tx["is_savings_spend"] = is_tx_savings_spend(tx)
         if tx["budget_month"] and tx["budget_month"] >= STARTING_BUDGET_MONTH:
             month_set.add(tx["budget_month"])
-        if tx.get("category"):
+        if tx.get("category") and not tx["is_savings_spend"]:
             tx_categories.add(tx["category"])
 
     # Also include any months from monthly_budgets and income_entries (>= STARTING_BUDGET_MONTH)
@@ -1496,12 +1641,18 @@ def finance_summary():
     month_transactions = [
         tx for tx in all_transactions if tx["budget_month"] == selected_month
     ]
+    budget_month_transactions = [
+        tx for tx in month_transactions if not tx["is_savings_spend"]
+    ]
+    savings_month_transactions = [
+        tx for tx in month_transactions if tx["is_savings_spend"]
+    ]
 
     total_cash = sum(a["balance_current"] for a in accounts if a["type"] == "depository")
     total_credit_used = sum(a["balance_current"] for a in accounts if a["type"] == "credit")
 
     spend_by_category = {}
-    for tx in month_transactions:
+    for tx in budget_month_transactions:
         cat = tx["category"]
         spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
 
@@ -1536,9 +1687,10 @@ def finance_summary():
     # Mark each transaction with whether its category is currently tracked in its budget month
     tracked_cat_names = {b["category"] for b in enriched_budgets}
     for tx in all_transactions:
-        tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
+        tx["is_category_tracked"] = True if tx["is_savings_spend"] else (tx.get("category") in tracked_cat_names)
 
-    total_gross_spent = round(sum(float(t["amount"]) for t in month_transactions), 2)
+    total_gross_spent = round(sum(float(t["amount"]) for t in budget_month_transactions), 2)
+    total_savings_spent = round(sum(float(t["amount"]) for t in savings_month_transactions), 2)
     # Net monthly spent subtracts returns so equilibrium is strictly maintained and returns offset spending
     total_monthly_spent = round(max(0.0, total_gross_spent - total_monthly_returns), 2)
     net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
@@ -1627,6 +1779,9 @@ def finance_summary():
         "is_balanced_budget": is_balanced_budget,
         "total_monthly_spent": total_monthly_spent,
         "total_gross_spent": total_gross_spent,
+        "total_savings_spent": total_savings_spent,
+        "savings_spend_count": len(savings_month_transactions),
+        "savings_transactions": savings_month_transactions,
         "total_monthly_returns": total_monthly_returns,
         "total_cc_payments": total_cc_payments,
         "total_transfers": total_transfers,
@@ -1743,10 +1898,12 @@ def finance_history():
     for ym in sorted_months:
         m_budgets = _ensure_monthly_budgets_for_month(db, ym)
         m_txs = [tx for tx in all_txs if tx["effective_budget_month"] == ym]
+        budget_m_txs = [tx for tx in m_txs if not is_tx_savings_spend(tx)]
+        savings_m_txs = [tx for tx in m_txs if is_tx_savings_spend(tx)]
         m_incomes = [inc for inc in all_incomes if inc["effective_budget_month"] == ym]
 
         spend_by_cat = {}
-        for tx in m_txs:
+        for tx in budget_m_txs:
             cat = tx["category"]
             spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
 
@@ -1758,7 +1915,8 @@ def finance_history():
                     cat_returns_map[rc] = cat_returns_map.get(rc, 0.0) + float(r_inc.get("amount") or 0.0)
 
         month_ret = returns_by_month.get(ym, 0.0)
-        gross_spent = round(sum(float(tx["amount"]) for tx in m_txs), 2)
+        gross_spent = round(sum(float(tx["amount"]) for tx in budget_m_txs), 2)
+        savings_spent = round(sum(float(tx["amount"]) for tx in savings_m_txs), 2)
         total_spent = round(max(0.0, gross_spent - month_ret), 2)
         total_limit = round(sum(float(b["monthly_limit"]) for b in m_budgets), 2)
         total_income = round(income_totals_by_month.get(ym, 0.0), 2)
@@ -1819,6 +1977,8 @@ def finance_history():
             "budget_month": ym,
             "total_spent": total_spent,
             "total_gross_spent": gross_spent,
+            "total_savings_spent": savings_spent,
+            "savings_spend_count": len(savings_m_txs),
             "total_returns": month_ret,
             "total_budget": total_limit,
             "total_income": total_income,
@@ -1831,7 +1991,7 @@ def finance_history():
             "income_count": len(m_incomes),
             "net_variance": round(total_limit - total_spent, 2),
             "utilization_pct": round((total_spent / total_limit) * 100, 1) if total_limit > 0 else 0.0,
-            "transaction_count": len(m_txs),
+            "transaction_count": len(budget_m_txs),
             "categories": cat_breakdown,
         })
 
@@ -2009,14 +2169,22 @@ def create_account():
     else:
         owner_partner_id = None
 
+    raw_sav_flag = data.get("is_savings_account")
+    if raw_sav_flag is None or str(raw_sav_flag).strip().lower() in ["", "auto", "null", "none"]:
+        is_savings_account = None
+    else:
+        is_savings_account = 1 if bool(raw_sav_flag) and str(raw_sav_flag).lower() not in ["0", "false"] else 0
+
     db = get_db()
     existing_cnt = db.execute("SELECT COUNT(*) AS cnt FROM accounts").fetchone()["cnt"]
     color = (data.get("color") or "").strip() or ACCOUNT_COLOR_PALETTE[existing_cnt % len(ACCOUNT_COLOR_PALETTE)]
+    bal_curr = float(data.get("balance_current", 0.0))
+    bal_avail = float(data.get("balance_available", bal_curr))
 
     cur = db.execute(
         """
-        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name, color)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name, color, is_savings_account)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -2024,14 +2192,16 @@ def create_account():
             data.get("type", "depository"),
             data.get("subtype", "checking"),
             data.get("mask", "0000"),
-            float(data.get("balance_current", 0.0)),
-            float(data.get("balance_available", data.get("balance_current", 0.0))),
+            bal_curr,
+            bal_avail,
             data.get("owner_scope", "individual" if owner_partner_id else "shared"),
             owner_partner_id,
             data.get("institution_name", "Manual Entry"),
             color,
+            is_savings_account,
         ),
     )
+    _upsert_account_balance_snapshot(db, cur.lastrowid, bal_curr)
     db.commit()
     acc = dict(
         db.execute(
@@ -2044,6 +2214,7 @@ def create_account():
             (cur.lastrowid,),
         ).fetchone()
     )
+    acc.update(classify_savings_account(acc))
     return jsonify(acc), 201
 
 
@@ -2085,6 +2256,7 @@ def update_account(acc_id: int):
     if "balance_current" in data:
         fields.append("balance_current = ?")
         params.append(float(data["balance_current"]))
+        _upsert_account_balance_snapshot(db, acc_id, float(data["balance_current"]))
 
     if "balance_available" in data:
         fields.append("balance_available = ?")
@@ -2093,6 +2265,15 @@ def update_account(acc_id: int):
     if "color" in data and str(data["color"]).strip():
         fields.append("color = ?")
         params.append(str(data["color"]).strip())
+
+    if "is_savings_account" in data:
+        raw_sav = data["is_savings_account"]
+        if raw_sav is None or str(raw_sav).strip().lower() in ["", "auto", "null", "none"]:
+            fields.append("is_savings_account = ?")
+            params.append(None)
+        else:
+            fields.append("is_savings_account = ?")
+            params.append(1 if bool(raw_sav) and str(raw_sav).lower() not in ["0", "false"] else 0)
 
     if "owner_partner_id" in data:
         raw_pid = data["owner_partner_id"]
@@ -2129,6 +2310,7 @@ def update_account(acc_id: int):
             (acc_id,),
         ).fetchone()
     )
+    updated.update(classify_savings_account(updated))
     return jsonify(updated)
 
 
@@ -2227,6 +2409,12 @@ def create_transaction():
         return jsonify({"error": "Valid transaction name and positive amount are required"}), 400
 
     account_id = data.get("account_id")
+    raw_sav_acc = data.get("savings_account_id")
+    savings_account_id = (
+        int(raw_sav_acc)
+        if raw_sav_acc and str(raw_sav_acc).isdigit() and int(raw_sav_acc) > 0
+        else None
+    )
     actor = getattr(g, "current_partner", None)
     partner_id = actor["id"] if actor else data.get("partner_id")
 
@@ -2244,16 +2432,21 @@ def create_transaction():
 
     category = (data.get("category") or "Groceries & Dining").strip()
     is_pending = 1 if data.get("is_pending") else 0
+    is_savings_spend = 1 if (bool(data.get("is_savings_spend")) or category.lower() in SAVINGS_SPEND_ALIASES) else 0
+    if is_savings_spend:
+        category = SAVINGS_SPEND_CATEGORY
 
     db = get_db()
-    _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
+    if not is_savings_spend:
+        _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     cur = db.execute(
         """
-        INSERT INTO transactions (account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(account_id) if account_id else None,
+            savings_account_id,
             tx_date,
             budget_month,
             name,
@@ -2264,20 +2457,25 @@ def create_transaction():
             1 if data.get("is_shared", True) else 0,
             data.get("notes", ""),
             is_pending,
+            is_savings_spend,
         ),
     )
     db.commit()
     tx = dict(
         db.execute(
             """
-            SELECT t.*, a.name AS account_name, a.color AS account_color, a.mask AS account_mask
+            SELECT t.*,
+                   a.name AS account_name, a.color AS account_color, a.mask AS account_mask,
+                   sa.name AS savings_account_name, sa.color AS savings_account_color
             FROM transactions t
             LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts sa ON t.savings_account_id = sa.id
             WHERE t.id = ?
             """,
             (cur.lastrowid,),
         ).fetchone()
     )
+    tx["is_savings_spend"] = is_tx_savings_spend(tx)
     return jsonify(tx), 201
 
 
@@ -2295,6 +2493,26 @@ def update_transaction(tx_id: int):
     new_category = (data.get("category") or existing["category"]).strip()
     if not new_category:
         return jsonify({"error": "Category cannot be empty"}), 400
+
+    if "is_savings_spend" in data:
+        if bool(data["is_savings_spend"]):
+            new_is_savings_spend = 1
+            new_category = SAVINGS_SPEND_CATEGORY
+        else:
+            new_is_savings_spend = 0
+            if new_category.lower() in SAVINGS_SPEND_ALIASES:
+                new_category = (data.get("fallback_category") or "Shopping & Tech").strip()
+    else:
+        if "category" in data:
+            if new_category.lower() in SAVINGS_SPEND_ALIASES:
+                new_is_savings_spend = 1
+                new_category = SAVINGS_SPEND_CATEGORY
+            else:
+                new_is_savings_spend = 0
+        else:
+            new_is_savings_spend = int(existing["is_savings_spend"] or 0)
+            if new_category.lower() in SAVINGS_SPEND_ALIASES:
+                new_is_savings_spend = 1
 
     if "allocate_direction" in data:
         direction = data["allocate_direction"]
@@ -2319,30 +2537,51 @@ def update_transaction(tx_id: int):
     else:
         new_account_id = existing["account_id"]
 
+    if "savings_account_id" in data:
+        raw_sav = data["savings_account_id"]
+        new_savings_account_id = int(raw_sav) if raw_sav and str(raw_sav).isdigit() and int(raw_sav) > 0 else None
+    else:
+        new_savings_account_id = existing["savings_account_id"]
+
     new_is_pending = (1 if data["is_pending"] else 0) if "is_pending" in data else existing["is_pending"]
 
-    _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
+    if not new_is_savings_spend:
+        _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
-        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, is_pending = ?
+        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, savings_account_id = ?, is_pending = ?, is_savings_spend = ?
         WHERE id = ?
         """,
-        (new_category, new_budget_month, new_notes, new_name, new_account_id, new_is_pending, tx_id),
+        (
+            new_category,
+            new_budget_month,
+            new_notes,
+            new_name,
+            new_account_id,
+            new_savings_account_id,
+            new_is_pending,
+            new_is_savings_spend,
+            tx_id,
+        ),
     )
     db.commit()
 
     updated = dict(
         db.execute(
             """
-            SELECT t.*, a.name AS account_name, a.color AS account_color, a.mask AS account_mask
+            SELECT t.*,
+                   a.name AS account_name, a.color AS account_color, a.mask AS account_mask,
+                   sa.name AS savings_account_name, sa.color AS savings_account_color
             FROM transactions t
             LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts sa ON t.savings_account_id = sa.id
             WHERE t.id = ?
             """,
             (tx_id,),
         ).fetchone()
     )
+    updated["is_savings_spend"] = is_tx_savings_spend(updated)
     return jsonify(updated)
 
 
@@ -2680,3 +2919,639 @@ def delete_or_archive_category():
 
     db.commit()
     return jsonify({"deleted": True, "name": name, "reassigned_to": reassign_to or None})
+
+
+# --- Savings & Brokerage Long-Term Analytics Module API ---
+
+def _build_continuous_month_range(min_ym: str, max_ym: str) -> list[str]:
+    if not min_ym or not max_ym or min_ym > max_ym:
+        return [max_ym or STARTING_BUDGET_MONTH]
+    months = []
+    curr = min_ym
+    guard = 0
+    while curr <= max_ym and guard < 120:
+        months.append(curr)
+        curr = _shift_year_month(curr, 1)
+        guard += 1
+    return months
+
+
+@finance_bp.route("/savings", methods=["GET"])
+def get_savings_analytics():
+    """
+    Returns comprehensive Month-over-Month (MoM) and Year-over-Year (YoY) analytics
+    for Savings & Brokerage accounts, Transfers into Savings, and Purchases Funded from Savings.
+    """
+    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    raw_req_month = (request.args.get("month") or "").strip()[:7]
+    selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
+
+    db = get_db()
+    household_partners = [
+        dict(r)
+        for r in db.execute(
+            "SELECT id, name, email, avatar_color FROM partners ORDER BY id"
+        ).fetchall()
+    ]
+
+    all_accounts = []
+    for r in db.execute(
+        """
+        SELECT a.*,
+               p.name AS owner_partner_name,
+               p.avatar_color AS owner_partner_color
+        FROM accounts a
+        LEFT JOIN partners p ON a.owner_partner_id = p.id
+        ORDER BY a.type, a.subtype, a.name
+        """
+    ).fetchall():
+        acc_d = dict(r)
+        acc_d.update(classify_savings_account(acc_d))
+        all_accounts.append(acc_d)
+
+    savings_accounts = [a for a in all_accounts if a["is_savings_or_brokerage"]]
+    sav_acc_ids = {a["id"] for a in savings_accounts}
+    acc_lookup = {a["id"]: a for a in all_accounts}
+
+    # Ensure current month snapshot exists for each savings/brokerage account if it has no snapshot for current_ym
+    for sa in savings_accounts:
+        existing_snap = db.execute(
+            "SELECT id FROM account_balance_snapshots WHERE account_id = ? AND snapshot_month = ?",
+            (sa["id"], current_ym),
+        ).fetchone()
+        if not existing_snap:
+            _upsert_account_balance_snapshot(db, sa["id"], float(sa["balance_current"] or 0.0), current_ym)
+    db.commit()
+
+    # Load all snapshots
+    snapshot_rows = db.execute(
+        "SELECT * FROM account_balance_snapshots ORDER BY snapshot_month ASC"
+    ).fetchall()
+    snapshots_by_acc = {}
+    snapshot_months = set()
+    for sr in snapshot_rows:
+        aid = sr["account_id"]
+        sm = (sr["snapshot_month"] or "").strip()[:7]
+        if len(sm) == 7 and aid in sav_acc_ids:
+            snapshots_by_acc.setdefault(aid, {})[sm] = {
+                "id": sr["id"],
+                "account_id": aid,
+                "snapshot_month": sm,
+                "balance": round(float(sr["balance"] or 0.0), 2),
+                "notes": sr["notes"] or "",
+                "updated_at": sr["updated_at"],
+            }
+            snapshot_months.add(sm)
+
+    # Fetch all inflows and identify Transfers Into Savings
+    all_incomes = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT i.*,
+                   COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) AS effective_budget_month,
+                   p.name AS partner_name,
+                   p.avatar_color AS partner_color,
+                   a.name AS account_name,
+                   a.color AS account_color,
+                   a.mask AS account_mask,
+                   a.subtype AS account_subtype,
+                   a.type AS account_type,
+                   a.institution_name AS account_institution
+            FROM income_entries i
+            LEFT JOIN partners p ON i.partner_id = p.id
+            LEFT JOIN accounts a ON i.account_id = a.id
+            ORDER BY i.date DESC, i.id DESC
+            """
+        ).fetchall()
+    ]
+
+    savings_transfers = []
+    for inc in all_incomes:
+        inc["budget_month"] = inc["effective_budget_month"]
+        itype = (inc.get("income_type") or "").strip().lower()
+        aid = inc.get("account_id")
+        text_blob = f"{inc.get('source_name') or ''} {inc.get('notes') or ''}".lower()
+        is_sav_transfer = False
+        if aid in sav_acc_ids and not is_return_refund(itype) and itype != "cc_payment":
+            is_sav_transfer = True
+        elif itype in ("savings_transfer", "transfer_to_savings"):
+            is_sav_transfer = True
+        elif itype in ("transfer", "account_transfer") and any(
+            k in text_blob for k in ("saving", "hysa", "brokerage", "invest", "ira", "roth", "401k", "vault", "reserve")
+        ):
+            is_sav_transfer = True
+
+        if is_sav_transfer:
+            acc_info = acc_lookup.get(aid)
+            inc["savings_bucket"] = acc_info["savings_bucket"] if acc_info else "savings"
+            savings_transfers.append(inc)
+
+    # Fetch all transactions and identify Purchases Funded from Savings
+    all_txs = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month,
+                   p.name AS partner_name,
+                   p.avatar_color AS partner_color,
+                   a.name AS account_name,
+                   a.color AS account_color,
+                   a.mask AS account_mask,
+                   a.institution_name AS account_institution,
+                   sa.name AS savings_account_name,
+                   sa.color AS savings_account_color,
+                   sa.mask AS savings_account_mask
+            FROM transactions t
+            LEFT JOIN partners p ON t.partner_id = p.id
+            LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts sa ON t.savings_account_id = sa.id
+            ORDER BY t.date DESC, t.id DESC
+            """
+        ).fetchall()
+    ]
+
+    savings_spends = []
+    for tx in all_txs:
+        tx["budget_month"] = tx["effective_budget_month"]
+        tx["is_savings_spend"] = is_tx_savings_spend(tx)
+        if tx["is_savings_spend"] or (tx.get("account_id") in sav_acc_ids):
+            eff_sav_acc_id = tx.get("savings_account_id") or (
+                tx.get("account_id") if tx.get("account_id") in sav_acc_ids else None
+            )
+            tx["effective_savings_account_id"] = eff_sav_acc_id
+            if eff_sav_acc_id and eff_sav_acc_id in acc_lookup:
+                s_acc = acc_lookup[eff_sav_acc_id]
+                tx["effective_savings_account_name"] = s_acc["name"]
+                tx["effective_savings_account_color"] = s_acc["color"]
+                tx["savings_bucket"] = s_acc["savings_bucket"]
+            else:
+                tx["effective_savings_account_name"] = "Household Savings"
+                tx["effective_savings_account_color"] = "#10b981"
+                tx["savings_bucket"] = "savings"
+            savings_spends.append(tx)
+
+    # Build timeline of months
+    raw_months = {STARTING_BUDGET_MONTH, current_ym, selected_month}
+    raw_months.update(snapshot_months)
+    for tr in savings_transfers:
+        if tr["budget_month"] and tr["budget_month"] >= STARTING_BUDGET_MONTH:
+            raw_months.add(tr["budget_month"])
+    for sp in savings_spends:
+        if sp["budget_month"] and sp["budget_month"] >= STARTING_BUDGET_MONTH:
+            raw_months.add(sp["budget_month"])
+    for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
+        if mb["budget_month"] and mb["budget_month"] >= STARTING_BUDGET_MONTH:
+            raw_months.add(mb["budget_month"])
+
+    valid_months = sorted(m for m in raw_months if m and len(m) == 7)
+    chron_months = _build_continuous_month_range(valid_months[0], valid_months[-1]) if valid_months else [current_ym]
+
+    # Map inflows & outflows per account & month, plus unassigned household flows
+    inflows_by_acc_ym = {aid: {} for aid in sav_acc_ids}
+    unassigned_inflows_by_ym = {}
+    total_inflows_by_ym = {}
+
+    for tr in savings_transfers:
+        ym = tr["budget_month"]
+        amt = round(float(tr["amount"] or 0.0), 2)
+        total_inflows_by_ym[ym] = round(total_inflows_by_ym.get(ym, 0.0) + amt, 2)
+        aid = tr.get("account_id")
+        if aid in sav_acc_ids:
+            inflows_by_acc_ym[aid][ym] = round(inflows_by_acc_ym[aid].get(ym, 0.0) + amt, 2)
+        else:
+            unassigned_inflows_by_ym[ym] = round(unassigned_inflows_by_ym.get(ym, 0.0) + amt, 2)
+
+    outflows_by_acc_ym = {aid: {} for aid in sav_acc_ids}
+    unassigned_outflows_by_ym = {}
+    total_outflows_by_ym = {}
+
+    for sp in savings_spends:
+        ym = sp["budget_month"]
+        amt = round(float(sp["amount"] or 0.0), 2)
+        total_outflows_by_ym[ym] = round(total_outflows_by_ym.get(ym, 0.0) + amt, 2)
+        aid = sp.get("effective_savings_account_id")
+        if aid in sav_acc_ids:
+            outflows_by_acc_ym[aid][ym] = round(outflows_by_acc_ym[aid].get(ym, 0.0) + amt, 2)
+        else:
+            unassigned_outflows_by_ym[ym] = round(unassigned_outflows_by_ym.get(ym, 0.0) + amt, 2)
+
+    # Reconstruct monthly balance curve per account
+    account_series = {}
+    acc_bal_by_ym = {aid: {} for aid in sav_acc_ids}
+
+    for sa in savings_accounts:
+        aid = sa["id"]
+        curr_live_bal = round(float(sa["balance_current"] or 0.0), 2)
+        acc_snaps = snapshots_by_acc.get(aid, {})
+
+        # Step 1: Anchor known snapshots; always anchor current_ym to live balance unless a snapshot was explicitly set
+        month_vals = {}
+        for m, s_obj in acc_snaps.items():
+            month_vals[m] = s_obj["balance"]
+        if current_ym in chron_months:
+            month_vals[current_ym] = curr_live_bal
+        elif chron_months:
+            month_vals[chron_months[-1]] = curr_live_bal
+
+        # Step 2: Fill backwards from the earliest anchored month
+        anchor_indices = [i for i, m in enumerate(chron_months) if m in month_vals]
+        if not anchor_indices:
+            for m in chron_months:
+                month_vals[m] = curr_live_bal
+        else:
+            first_idx = anchor_indices[0]
+            for idx in range(first_idx - 1, -1, -1):
+                next_m = chron_months[idx + 1]
+                curr_m = chron_months[idx]
+                next_net = inflows_by_acc_ym[aid].get(next_m, 0.0) - outflows_by_acc_ym[aid].get(next_m, 0.0)
+                month_vals[curr_m] = round(max(0.0, month_vals[next_m] - next_net), 2)
+
+            # Step 3: Fill forwards between/after anchored months
+            for idx in range(first_idx + 1, len(chron_months)):
+                curr_m = chron_months[idx]
+                if curr_m not in month_vals:
+                    prev_m = chron_months[idx - 1]
+                    curr_net = inflows_by_acc_ym[aid].get(curr_m, 0.0) - outflows_by_acc_ym[aid].get(curr_m, 0.0)
+                    month_vals[curr_m] = round(max(0.0, month_vals[prev_m] + curr_net), 2)
+
+        series_list = []
+        for idx, m in enumerate(chron_months):
+            end_bal = round(month_vals.get(m, curr_live_bal), 2)
+            acc_bal_by_ym[aid][m] = end_bal
+            tin = round(inflows_by_acc_ym[aid].get(m, 0.0), 2)
+            tout = round(outflows_by_acc_ym[aid].get(m, 0.0), 2)
+            nflow = round(tin - tout, 2)
+            start_bal = round(month_vals[chron_months[idx - 1]], 2) if idx > 0 else round(max(0.0, end_bal - nflow), 2)
+            mom_chg = round(end_bal - start_bal, 2)
+            mom_pct = round((mom_chg / start_bal) * 100, 1) if start_bal > 0 else 0.0
+            series_list.append({
+                "month": m,
+                "year": m[:4],
+                "starting_balance": start_bal,
+                "balance": end_bal,
+                "ending_balance": end_bal,
+                "transfers_in": tin,
+                "savings_spent": tout,
+                "net_flow": nflow,
+                "mom_change": mom_chg,
+                "mom_change_pct": mom_pct,
+                "is_snapshot": m in acc_snaps,
+            })
+        account_series[str(aid)] = series_list
+
+    # Build Combined Month-over-Month (MoM) Series
+    monthly_chron = []
+    combined_bal_by_ym = {}
+
+    for idx, m in enumerate(chron_months):
+        sav_bal = round(
+            sum(acc_bal_by_ym[a["id"]].get(m, 0.0) for a in savings_accounts if a["savings_bucket"] == "savings"),
+            2,
+        )
+        brok_bal = round(
+            sum(acc_bal_by_ym[a["id"]].get(m, 0.0) for a in savings_accounts if a["savings_bucket"] == "brokerage"),
+            2,
+        )
+        comb_bal = round(sav_bal + brok_bal, 2)
+        combined_bal_by_ym[m] = comb_bal
+
+        tin = round(total_inflows_by_ym.get(m, 0.0), 2)
+        tout = round(total_outflows_by_ym.get(m, 0.0), 2)
+        unassigned_out = round(unassigned_outflows_by_ym.get(m, 0.0), 2)
+        nflow = round(tin - tout, 2)
+
+        start_bal = combined_bal_by_ym[chron_months[idx - 1]] if idx > 0 else round(max(0.0, comb_bal - nflow), 2)
+        mom_chg = round(comb_bal - start_bal, 2)
+        mom_pct = round((mom_chg / start_bal) * 100, 1) if start_bal > 0 else 0.0
+
+        prev_year_m = _shift_year_month(m, -12)
+        if prev_year_m in combined_bal_by_ym:
+            yoy_base = combined_bal_by_ym[prev_year_m]
+        else:
+            yoy_base = start_bal if idx == 0 else combined_bal_by_ym[chron_months[0]]
+        yoy_chg = round(comb_bal - yoy_base, 2)
+        yoy_pct = round((yoy_chg / yoy_base) * 100, 1) if yoy_base > 0 else 0.0
+
+        monthly_chron.append({
+            "month": m,
+            "year": m[:4],
+            "starting_balance": start_bal,
+            "combined_balance": comb_bal,
+            "savings_balance": sav_bal,
+            "brokerage_balance": brok_bal,
+            "transfers_in": tin,
+            "savings_spent": tout,
+            "unassigned_savings_spent": unassigned_out,
+            "net_flow": nflow,
+            "mom_change": mom_chg,
+            "mom_change_pct": mom_pct,
+            "yoy_change": yoy_chg,
+            "yoy_change_pct": yoy_pct,
+            "account_balances": {str(a["id"]): acc_bal_by_ym[a["id"]].get(m, 0.0) for a in savings_accounts},
+            "account_transfers_in": {str(a["id"]): inflows_by_acc_ym[a["id"]].get(m, 0.0) for a in savings_accounts},
+            "account_savings_spent": {str(a["id"]): outflows_by_acc_ym[a["id"]].get(m, 0.0) for a in savings_accounts},
+        })
+
+    # Build Year-over-Year (YoY) Series
+    years_order = sorted({m[:4] for m in chron_months})
+    yearly_chron = []
+    for y_idx, yr in enumerate(years_order):
+        yr_months = [row for row in monthly_chron if row["year"] == yr]
+        if not yr_months:
+            continue
+        first_m = yr_months[0]
+        last_m = yr_months[-1]
+        yr_start_bal = yearly_chron[y_idx - 1]["ending_balance"] if y_idx > 0 else first_m["starting_balance"]
+        yr_end_bal = last_m["combined_balance"]
+        yr_sav_end = last_m["savings_balance"]
+        yr_brok_end = last_m["brokerage_balance"]
+        yr_tin = round(sum(r["transfers_in"] for r in yr_months), 2)
+        yr_tout = round(sum(r["savings_spent"] for r in yr_months), 2)
+        yr_unassigned_out = round(sum(r["unassigned_savings_spent"] for r in yr_months), 2)
+        yr_net = round(yr_tin - yr_tout, 2)
+        yoy_chg = round(yr_end_bal - yr_start_bal, 2)
+        yoy_pct = round((yoy_chg / yr_start_bal) * 100, 1) if yr_start_bal > 0 else 0.0
+
+        acc_yr_tin = {
+            str(a["id"]): round(sum(r["account_transfers_in"].get(str(a["id"]), 0.0) for r in yr_months), 2)
+            for a in savings_accounts
+        }
+        acc_yr_tout = {
+            str(a["id"]): round(sum(r["account_savings_spent"].get(str(a["id"]), 0.0) for r in yr_months), 2)
+            for a in savings_accounts
+        }
+
+        yearly_chron.append({
+            "year": yr,
+            "starting_balance": yr_start_bal,
+            "ending_balance": yr_end_bal,
+            "combined_balance": yr_end_bal,
+            "savings_ending_balance": yr_sav_end,
+            "brokerage_ending_balance": yr_brok_end,
+            "transfers_in": yr_tin,
+            "savings_spent": yr_tout,
+            "unassigned_savings_spent": yr_unassigned_out,
+            "net_flow": yr_net,
+            "yoy_change": yoy_chg,
+            "yoy_change_pct": yoy_pct,
+            "months_count": len(yr_months),
+            "account_ending_balances": last_m["account_balances"],
+            "account_transfers_in": acc_yr_tin,
+            "account_savings_spent": acc_yr_tout,
+        })
+
+    # Enrich each savings_account with current month & MoM/YoY metrics
+    for sa in savings_accounts:
+        aid = sa["id"]
+        s_list = account_series.get(str(aid), [])
+        sel_entry = next((r for r in s_list if r["month"] == selected_month), s_list[-1] if s_list else None)
+        first_entry = s_list[0] if s_list else None
+        sa["month_transfers_in"] = sel_entry["transfers_in"] if sel_entry else 0.0
+        sa["month_savings_spent"] = sel_entry["savings_spent"] if sel_entry else 0.0
+        sa["month_net_flow"] = sel_entry["net_flow"] if sel_entry else 0.0
+        sa["mom_change"] = sel_entry["mom_change"] if sel_entry else 0.0
+        sa["mom_change_pct"] = sel_entry["mom_change_pct"] if sel_entry else 0.0
+        yoy_base_val = first_entry["starting_balance"] if first_entry else float(sa["balance_current"] or 0.0)
+        sa["yoy_change"] = round(float(sa["balance_current"] or 0.0) - yoy_base_val, 2)
+        sa["yoy_change_pct"] = (
+            round((sa["yoy_change"] / yoy_base_val) * 100, 1) if yoy_base_val > 0 else 0.0
+        )
+
+    total_savings_bal = round(
+        sum(float(a["balance_current"] or 0.0) for a in savings_accounts if a["savings_bucket"] == "savings"),
+        2,
+    )
+    total_brokerage_bal = round(
+        sum(float(a["balance_current"] or 0.0) for a in savings_accounts if a["savings_bucket"] == "brokerage"),
+        2,
+    )
+    total_combined_bal = round(total_savings_bal + total_brokerage_bal, 2)
+
+    sel_month_row = next(
+        (r for r in monthly_chron if r["month"] == selected_month),
+        monthly_chron[-1] if monthly_chron else None,
+    )
+    curr_year_row = yearly_chron[-1] if yearly_chron else None
+
+    kpis = {
+        "total_combined_balance": total_combined_bal,
+        "total_savings_balance": total_savings_bal,
+        "total_brokerage_balance": total_brokerage_bal,
+        "savings_account_count": sum(1 for a in savings_accounts if a["savings_bucket"] == "savings"),
+        "brokerage_account_count": sum(1 for a in savings_accounts if a["savings_bucket"] == "brokerage"),
+        "total_tracked_accounts": len(savings_accounts),
+        "month_transfers_in": sel_month_row["transfers_in"] if sel_month_row else 0.0,
+        "month_savings_spent": sel_month_row["savings_spent"] if sel_month_row else 0.0,
+        "month_net_flow": sel_month_row["net_flow"] if sel_month_row else 0.0,
+        "mom_balance_change": sel_month_row["mom_change"] if sel_month_row else 0.0,
+        "mom_balance_change_pct": sel_month_row["mom_change_pct"] if sel_month_row else 0.0,
+        "yoy_balance_change": curr_year_row["yoy_change"] if curr_year_row else 0.0,
+        "yoy_balance_change_pct": curr_year_row["yoy_change_pct"] if curr_year_row else 0.0,
+        "all_time_transfers_in": round(sum(float(t["amount"] or 0.0) for t in savings_transfers), 2),
+        "all_time_savings_spent": round(sum(float(s["amount"] or 0.0) for s in savings_spends), 2),
+        "all_time_net_flow": round(
+            sum(float(t["amount"] or 0.0) for t in savings_transfers)
+            - sum(float(s["amount"] or 0.0) for s in savings_spends),
+            2,
+        ),
+    }
+
+    return jsonify({
+        "selected_month": selected_month,
+        "current_calendar_month": current_ym,
+        "available_months": list(reversed(chron_months)),
+        "chronological_months": chron_months,
+        "available_years": list(reversed(years_order)),
+        "kpis": kpis,
+        "savings_accounts": savings_accounts,
+        "all_accounts": all_accounts,
+        "partners": household_partners,
+        "monthly_history": list(reversed(monthly_chron)),
+        "monthly_chronological": monthly_chron,
+        "yearly_history": list(reversed(yearly_chron)),
+        "yearly_chronological": yearly_chron,
+        "account_series": account_series,
+        "savings_transfers": savings_transfers,
+        "savings_spends": savings_spends,
+    })
+
+
+@finance_bp.route("/savings/transfer", methods=["POST"])
+def log_savings_transfer():
+    """
+    Logs a transfer/deposit into a savings or brokerage account.
+    Optionally updates the target account's current balance and monthly snapshot.
+    """
+    data = request.get_json(silent=True) or {}
+    amount = float(data.get("amount") or 0.0)
+    if amount <= 0:
+        return jsonify({"error": "Positive transfer amount is required"}), 400
+
+    raw_acc_id = data.get("account_id")
+    account_id = int(raw_acc_id) if raw_acc_id and str(raw_acc_id).isdigit() and int(raw_acc_id) > 0 else None
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = data.get("partner_id") or (actor["id"] if actor else None)
+
+    tx_date = (data.get("date") or date.today().isoformat()).strip()
+    budget_month = (data.get("budget_month") or tx_date[:7]).strip()[:7]
+    source_name = (data.get("source_name") or "Transfer to Savings").strip()
+    notes = (data.get("notes") or "").strip()
+    update_balance = bool(data.get("update_account_balance", True))
+
+    db = get_db()
+    cur = db.execute(
+        """
+        INSERT INTO income_entries
+        (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
+        VALUES (?, ?, ?, ?, ?, ?, 0.0, 'transfer', '', 0, ?)
+        """,
+        (
+            int(partner_id) if partner_id else None,
+            account_id,
+            tx_date,
+            budget_month,
+            source_name,
+            round(amount, 2),
+            notes,
+        ),
+    )
+
+    if account_id and update_balance:
+        acc_row = db.execute("SELECT balance_current, balance_available FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        if acc_row:
+            new_curr = round(float(acc_row["balance_current"] or 0.0) + amount, 2)
+            new_avail = round(float(acc_row["balance_available"] or 0.0) + amount, 2)
+            db.execute(
+                "UPDATE accounts SET balance_current = ?, balance_available = ? WHERE id = ?",
+                (new_curr, new_avail, account_id),
+            )
+            _upsert_account_balance_snapshot(db, account_id, new_curr, budget_month, f"After +${amount:.2f} transfer")
+
+    db.commit()
+    row = dict(db.execute("SELECT * FROM income_entries WHERE id = ?", (cur.lastrowid,)).fetchone())
+    return jsonify(row), 201
+
+
+@finance_bp.route("/savings/spend", methods=["POST"])
+def log_savings_spend():
+    """
+    Logs a big purchase funded from savings (`is_savings_spend = 1`, `category = 'Spent from Savings'`).
+    Excluded from monthly living budgets, tracked in long-term Savings & Analytics.
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    amount = float(data.get("amount") or 0.0)
+    if not name or amount <= 0:
+        return jsonify({"error": "Purchase name and positive amount are required"}), 400
+
+    raw_acc_id = data.get("account_id")
+    account_id = int(raw_acc_id) if raw_acc_id and str(raw_acc_id).isdigit() and int(raw_acc_id) > 0 else None
+
+    raw_sav_id = data.get("savings_account_id") or raw_acc_id
+    savings_account_id = int(raw_sav_id) if raw_sav_id and str(raw_sav_id).isdigit() and int(raw_sav_id) > 0 else None
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = data.get("partner_id") or (actor["id"] if actor else None)
+
+    tx_date = (data.get("date") or date.today().isoformat()).strip()
+    budget_month = (data.get("budget_month") or tx_date[:7]).strip()[:7]
+    notes = (data.get("notes") or "").strip()
+    deduct_balance = bool(
+        data.get("deduct_from_account_balance") or data.get("update_account_balance")
+    )
+
+    db = get_db()
+    cur = db.execute(
+        """
+        INSERT INTO transactions
+        (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, 1)
+        """,
+        (
+            account_id,
+            savings_account_id,
+            tx_date,
+            budget_month,
+            name,
+            data.get("merchant_name") or name,
+            round(amount, 2),
+            SAVINGS_SPEND_CATEGORY,
+            int(partner_id) if partner_id else None,
+            notes,
+        ),
+    )
+
+    if savings_account_id and deduct_balance:
+        acc_row = db.execute("SELECT balance_current, balance_available FROM accounts WHERE id = ?", (savings_account_id,)).fetchone()
+        if acc_row:
+            new_curr = round(max(0.0, float(acc_row["balance_current"] or 0.0) - amount), 2)
+            new_avail = round(max(0.0, float(acc_row["balance_available"] or 0.0) - amount), 2)
+            db.execute(
+                "UPDATE accounts SET balance_current = ?, balance_available = ? WHERE id = ?",
+                (new_curr, new_avail, savings_account_id),
+            )
+            _upsert_account_balance_snapshot(db, savings_account_id, new_curr, budget_month, f"After -${amount:.2f} savings spend")
+
+    db.commit()
+    tx = dict(
+        db.execute(
+            """
+            SELECT t.*,
+                   a.name AS account_name, a.color AS account_color, a.mask AS account_mask,
+                   sa.name AS savings_account_name, sa.color AS savings_account_color
+            FROM transactions t
+            LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts sa ON t.savings_account_id = sa.id
+            WHERE t.id = ?
+            """,
+            (cur.lastrowid,),
+        ).fetchone()
+    )
+    tx["is_savings_spend"] = True
+    return jsonify(tx), 201
+
+
+@finance_bp.route("/savings/snapshots", methods=["POST", "PUT"])
+def upsert_savings_snapshot():
+    """
+    Records or updates a monthly balance snapshot for a savings or brokerage account.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_acc_id = data.get("account_id")
+    if not raw_acc_id or not str(raw_acc_id).isdigit():
+        return jsonify({"error": "Valid account_id is required"}), 400
+    account_id = int(raw_acc_id)
+
+    snapshot_month = (data.get("snapshot_month") or date.today().strftime("%Y-%m")).strip()[:7]
+    if len(snapshot_month) != 7:
+        return jsonify({"error": "Valid YYYY-MM snapshot_month is required"}), 400
+
+    try:
+        balance = round(float(data.get("balance", 0.0)), 2)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid balance amount"}), 400
+
+    notes = (data.get("notes") or "").strip()
+    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+
+    db = get_db()
+    _upsert_account_balance_snapshot(db, account_id, balance, snapshot_month, notes or "Manual snapshot")
+
+    # If updating the current month (or if update_current_balance is requested), sync live account balance
+    if snapshot_month == current_ym or data.get("update_current_balance"):
+        db.execute(
+            "UPDATE accounts SET balance_current = ?, balance_available = ? WHERE id = ?",
+            (balance, balance, account_id),
+        )
+    db.commit()
+    snap = dict(
+        db.execute(
+            "SELECT * FROM account_balance_snapshots WHERE account_id = ? AND snapshot_month = ?",
+            (account_id, snapshot_month),
+        ).fetchone()
+    )
+    return jsonify(snap), 201
+

@@ -66,6 +66,7 @@ GibsonFamily/
         ├── App.jsx                   # Responsive shell, Light/Dark theme toggle, mobile drawer + bottom nav
         ├── styles.css                # Dark & Light themes + mobile-first responsive breakpoints
         ├── components/
+        │   ├── ErrorBoundary.jsx     # Crash-resilient error boundary around modules & shell
         │   ├── LoginScreen.jsx       # Password & WebAuthn Passkey login screen
         │   ├── NotificationCenter.jsx# Notification bell + MobilePushPromptBanner (enable & test push)
         │   ├── OnboardingWizard.jsx  # 4-step first-time setup flow
@@ -74,6 +75,7 @@ GibsonFamily/
             ├── RequestsModule.jsx    # Partner financial requests (Pending, Under Review, Approved, Timeline, Denied)
             ├── FuturePurchasesModule.jsx # Shared future purchase savings roadmap
             ├── FinanceModule.jsx     # Plaid link, income & fluctuation tracker, monthly budgets & ledger
+            ├── SavingsModule.jsx     # Long-term Savings & Brokerage analytics (MoM, YoY, per-account & combined graphs, savings spend & transfers)
             └── CouplesHubModule.jsx  # Medical/admin docs, shared to-dos, groceries & module manager
 ```
 
@@ -149,6 +151,15 @@ GibsonFamily/
     - `only_this_month`: Applies a one-month adjustment to `selected_month` only.
 - **Historical Months View (`GET /api/finance/history`)**:
   - Returns month-by-month total income, income fluctuation delta/%, total spend, total budget, net cash flow, net budget variance, utilization %, and per-category breakdown across all historical and active months.
+- **Savings & Brokerage Long-Term Analytics & Spending from Savings (`SavingsModule.jsx`, `transactions.is_savings_spend`, `account_balance_snapshots`)**:
+  - **Spend from Savings (`is_savings_spend = 1` / `category = "Spent from Savings"`)**:
+    - Big purchases that were saved for can be marked as **Spent from Savings** (via the transaction row `☰` menu, category selector, `+ Log Expense`, or the **Savings & Analytics** module).
+    - Purchases marked as coming from savings are **completely excluded** from monthly budget spending (`total_monthly_spent`, `total_gross_spent`, `budgeted_categories_spent`, `untracked_categories`, and the Layered Budget Balance Bar), while tracked in `total_savings_spent` and analyzed in the dedicated **Savings & Analytics** module (`savings`).
+  - **Savings & Brokerage Account Classification (`accounts.is_savings_account`, `classify_savings_account`)**:
+    - Automatically classifies `savings`, `hysa`, `money market`, `cd` as Cash Savings (`savings`) and `investment`, `brokerage`, `ira`, `roth`, `401k`, `529`, `hsa` as Brokerage (`brokerage`), with manual user override via `PUT /api/finance/accounts/<id>` (`is_savings_account: true | false`).
+  - **Transfers In & Balance History (`GET /api/finance/savings`, `POST /api/finance/savings/transfer`, `POST /api/finance/savings/spend`, `POST /api/finance/savings/snapshots`)**:
+    - Tracks transfers into savings/brokerage accounts (`income_entries` on savings accounts or `income_type = 'transfer'`), purchases funded from savings, and monthly account balance snapshots (`account_balance_snapshots`).
+    - Renders **Month-over-Month (MoM)** and **Year-over-Year (YoY)** analytics, individual account balance graphs (`account_series`), a filterable **Combined View** (All Savings & Brokerage, Cash Savings Only, Brokerage Only, or custom account toggles), and a long-term savings flow ledger.
 
 ### 3.4 Purchase Request Lifecycle & Mobile Push Notifications
 - **Purchase Request Statuses (`purchase_requests.status`)**:

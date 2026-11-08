@@ -21,6 +21,7 @@ import {
   Link2,
   Menu,
   PieChart,
+  PiggyBank,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -146,7 +147,7 @@ function formatIncomeTypeBadge(type, category = '') {
   }
 }
 
-export default function FinanceModule({ activePartner, onDataChanged, syncVersion }) {
+export default function FinanceModule({ activePartner, onDataChanged, syncVersion, onNavigateTab }) {
   const rawCalendarMonth = new Date().toISOString().slice(0, 7);
   const currentCalendarMonth =
     rawCalendarMonth < STARTING_MONTH ? STARTING_MONTH : rawCalendarMonth;
@@ -655,6 +656,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         name: txName,
         amount: parseFloat(txAmount),
         category: chosenCategory,
+        is_savings_spend: chosenCategory === 'Spent from Savings',
         date: txDate,
         month_offset: parseInt(txMonthOffset, 10) || 0,
         partner_id: activePartner?.id || null,
@@ -679,10 +681,28 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
     await apiFetch(`/api/finance/transactions/${txId}`, {
       method: 'PUT',
-      body: JSON.stringify({ category: newCategory }),
+      body: JSON.stringify({
+        category: newCategory,
+        is_savings_spend: newCategory === 'Spent from Savings',
+      }),
     });
     setCustomCatTxId(null);
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleToggleSavingsSpend = async (tx) => {
+    const nextFlag = !tx.is_savings_spend;
+    setOpenMenuTxId(null);
+    await apiFetch(`/api/finance/transactions/${tx.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        is_savings_spend: nextFlag,
+        fallback_category: 'Shopping & Tech',
+      }),
+    });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
   };
 
   const handleSaveCustomCategoryOnTx = async (txId) => {
@@ -3138,6 +3158,38 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
         </div>
 
+        {Number(summary.total_savings_spent || 0) > 0 && (
+          <div
+            className="alert alert-info"
+            style={{
+              marginBottom: '0.85rem',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+              borderLeft: '4px solid #a855f7',
+            }}
+          >
+            <div>
+              <PiggyBank size={15} style={{ verticalAlign: 'middle', marginRight: '0.35rem', color: '#a855f7' }} />
+              <strong>Spent from Savings in {formatShortMonth(selectedMonth)}:</strong>{' '}
+              <span className="font-mono">${Number(summary.total_savings_spent).toFixed(2)}</span> across{' '}
+              <strong>{summary.savings_spend_count || 1}</strong> purchase(s) is marked as funded from savings and{' '}
+              <strong>completely excluded from your monthly budget</strong>.
+            </div>
+            {onNavigateTab && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => onNavigateTab('savings')}
+              >
+                <PiggyBank size={13} /> Open Savings & Analytics
+              </button>
+            )}
+          </div>
+        )}
+
         {summary.transactions.length === 0 ? (
           <div className="empty-state-box">
             <p className="text-muted">
@@ -3223,6 +3275,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               <Clock size={11} /> Pending
                             </span>
                           )}
+                          {Boolean(tx.is_savings_spend) && (
+                            <span
+                              className="pill pill-purple"
+                              style={{ fontSize: '0.68rem' }}
+                              title="Funded from savings — excluded from monthly budget spending"
+                            >
+                              <PiggyBank size={11} /> From Savings (Excl. Budget)
+                            </span>
+                          )}
                         </div>
                         {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
                       </td>
@@ -3267,24 +3328,40 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               value={tx.category}
                               onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
                             >
-                              {Array.from(new Set([...availableCategories, tx.category])).map(
-                                (cat) => (
-                                  <option key={cat} value={cat}>
-                                    {cat}
-                                  </option>
+                              <option value="Spent from Savings">
+                                🏦 Spent from Savings (Exclude from Budget)
+                              </option>
+                              {Array.from(
+                                new Set(
+                                  [...availableCategories, tx.category].filter(
+                                    (c) => c && c !== 'Spent from Savings'
+                                  )
                                 )
-                              )}
+                              ).map((cat) => (
+                                <option key={cat} value={cat}>
+                                  {cat}
+                                </option>
+                              ))}
                               <option value="__custom__">+ Custom Category...</option>
                             </select>
-                            {tx.is_category_tracked === false && (
-                              <button
-                                type="button"
-                                className="pill pill-amber tx-untracked-pill"
-                                onClick={() => handleQuickTrackCategory(tx.category)}
-                                title={`"${tx.category}" is not tracked in your monthly budget. Tap to set a budget limit.`}
+                            {Boolean(tx.is_savings_spend) ? (
+                              <span
+                                className="pill pill-purple"
+                                style={{ fontSize: '0.68rem', alignSelf: 'flex-start' }}
                               >
-                                <AlertTriangle size={11} /> Untracked — Set Budget
-                              </button>
+                                <PiggyBank size={11} /> Excluded from Monthly Budget
+                              </span>
+                            ) : (
+                              tx.is_category_tracked === false && (
+                                <button
+                                  type="button"
+                                  className="pill pill-amber tx-untracked-pill"
+                                  onClick={() => handleQuickTrackCategory(tx.category)}
+                                  title={`"${tx.category}" is not tracked in your monthly budget. Tap to set a budget limit.`}
+                                >
+                                  <AlertTriangle size={11} /> Untracked — Set Budget
+                                </button>
+                              )
                             )}
                           </div>
                         )}
@@ -3336,6 +3413,23 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   <X size={16} />
                                 </button>
                               </div>
+
+                              <button
+                                type="button"
+                                className="tx-popover-item"
+                                onClick={() => handleToggleSavingsSpend(tx)}
+                                style={{
+                                  fontWeight: 600,
+                                  color: tx.is_savings_spend ? '#06b6d4' : '#a855f7',
+                                }}
+                              >
+                                <PiggyBank size={14} />
+                                {tx.is_savings_spend
+                                  ? 'Restore to Monthly Budget (Unmark Savings Spend)'
+                                  : 'Mark as Spent from Savings (Exclude from Budget)'}
+                              </button>
+
+                              <div className="tx-popover-divider" />
 
                               {summary.accounts?.length > 0 && (
                                 <div className="tx-popover-month-picker">
@@ -5049,11 +5143,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     value={txCategory}
                     onChange={(e) => setTxCategory(e.target.value)}
                   >
-                    {availableCategories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
+                    <option value="Spent from Savings">
+                      🏦 Spent from Savings (Exclude from Monthly Budget)
+                    </option>
+                    {availableCategories
+                      .filter((c) => c !== 'Spent from Savings')
+                      .map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
                     <option value="__custom__">+ Enter Custom Category...</option>
                   </select>
                 </div>

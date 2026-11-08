@@ -104,7 +104,19 @@ CREATE TABLE IF NOT EXISTS accounts (
     owner_scope TEXT NOT NULL DEFAULT 'shared',
     institution_name TEXT NOT NULL DEFAULT 'Bank Account',
     color TEXT NOT NULL DEFAULT '#06b6d4',
+    is_savings_account INTEGER DEFAULT NULL,
     FOREIGN KEY (owner_partner_id) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    snapshot_month TEXT NOT NULL,
+    balance REAL NOT NULL DEFAULT 0.0,
+    notes TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, snapshot_month),
+    FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS deleted_accounts_blocklist (
@@ -121,6 +133,7 @@ CREATE TABLE IF NOT EXISTS deleted_accounts_blocklist (
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER,
+    savings_account_id INTEGER,
     plaid_transaction_id TEXT UNIQUE,
     date TEXT NOT NULL,
     budget_month TEXT NOT NULL DEFAULT '',
@@ -132,7 +145,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     is_shared INTEGER NOT NULL DEFAULT 1,
     notes TEXT,
     is_pending INTEGER NOT NULL DEFAULT 0,
+    is_savings_spend INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL,
+    FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
 
@@ -322,13 +337,22 @@ DEFAULT_MODULES = [
         2,
     ),
     (
+        "savings",
+        "Savings & Analytics",
+        "Track savings & brokerage accounts, transfers into savings, purchases funded from savings, and MoM/YoY balance analytics.",
+        "Financial",
+        "piggy-bank",
+        1,
+        3,
+    ),
+    (
         "future_plans",
         "Future Purchases & Goals",
         "Plan upcoming big purchases together with target dates, monthly contributions, and progress tracking.",
         "Financial",
         "calendar-clock",
         1,
-        3,
+        4,
     ),
     (
         "admin_docs",
@@ -337,7 +361,7 @@ DEFAULT_MODULES = [
         "Household & Admin",
         "file-heart",
         1,
-        4,
+        5,
     ),
     (
         "todos",
@@ -346,7 +370,7 @@ DEFAULT_MODULES = [
         "Household & Admin",
         "check-square",
         1,
-        5,
+        6,
     ),
     (
         "groceries",
@@ -355,7 +379,7 @@ DEFAULT_MODULES = [
         "Household & Admin",
         "shopping-cart",
         1,
-        6,
+        7,
     ),
 ]
 
@@ -398,8 +422,15 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE transactions ADD COLUMN budget_month TEXT NOT NULL DEFAULT ''")
     if "is_pending" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN is_pending INTEGER NOT NULL DEFAULT 0")
+    if "is_savings_spend" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN is_savings_spend INTEGER NOT NULL DEFAULT 0")
+    if "savings_account_id" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN savings_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL")
     db.execute(
         "UPDATE transactions SET budget_month = substr(date, 1, 7) WHERE budget_month IS NULL OR budget_month = ''"
+    )
+    db.execute(
+        "UPDATE transactions SET is_savings_spend = 1 WHERE LOWER(TRIM(category)) IN ('spent from savings', 'savings spend', 'from savings')"
     )
 
     inc_cols = [r["name"] for r in db.execute("PRAGMA table_info(income_entries)").fetchall()]
@@ -413,6 +444,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE accounts ADD COLUMN item_id TEXT")
     if "owner_partner_id" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN owner_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
+    if "is_savings_account" not in acc_cols:
+        db.execute("ALTER TABLE accounts ADD COLUMN is_savings_account INTEGER DEFAULT NULL")
     if "color" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN color TEXT NOT NULL DEFAULT '#06b6d4'")
         palette = ["#06b6d4", "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#a855f7", "#3b82f6", "#ef4444"]
@@ -422,6 +455,21 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
                 "UPDATE accounts SET color = ? WHERE id = ?",
                 (palette[idx % len(palette)], row["id"]),
             )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            snapshot_month TEXT NOT NULL,
+            balance REAL NOT NULL DEFAULT 0.0,
+            notes TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(account_id, snapshot_month),
+            FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
+        )
+        """
+    )
 
     plaid_cols = [r["name"] for r in db.execute("PRAGMA table_info(plaid_items)").fetchall()]
     if "cursor" not in plaid_cols:
@@ -525,6 +573,22 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
             """,
             DEFAULT_MODULES,
         )
+    else:
+        for mod in DEFAULT_MODULES:
+            existing_mod = db.execute("SELECT id FROM module_registry WHERE id = ?", (mod[0],)).fetchone()
+            if not existing_mod:
+                db.execute(
+                    """
+                    INSERT INTO module_registry (id, name, description, category, icon, enabled, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    mod,
+                )
+            else:
+                db.execute(
+                    "UPDATE module_registry SET sort_order = ?, icon = ? WHERE id = ?",
+                    (mod[6], mod[4], mod[0]),
+                )
     defaults = {
         "onboarding_completed": "0",
         "household_name": "Gibson Household",

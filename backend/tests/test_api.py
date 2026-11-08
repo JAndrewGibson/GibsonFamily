@@ -1467,6 +1467,216 @@ def test_plaid_resync_cursor_reset_update_mode_and_error_handling(client, app_in
         assert item_recheck["last_error_code"] == "ITEM_LOGIN_REQUIRED"
 
 
+def test_savings_module_spend_exclusion_transfers_and_mom_yoy_analytics(client):
+    """
+    Verifies:
+    1. 'savings' module is registered in /api/hub/modules.
+    2. Spending marked as coming from savings (is_savings_spend=True or category='Spent from Savings')
+       is completely excluded from monthly budget spending (total_monthly_spent, total_gross_spent,
+       category budgets, untracked_categories) while tracked in total_savings_spent and /api/finance/savings.
+    3. Transfers into savings/brokerage accounts (/api/finance/savings/transfer), savings purchases
+       (/api/finance/savings/spend), and balance snapshots (/api/finance/savings/snapshots) populate
+       Month-over-Month (monthly_history), Year-over-Year (yearly_history), and per-account series.
+    """
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "partners": [
+                {"name": "Alex", "email": "alex.sav@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan.sav@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    assert p_res.status_code == 201
+    p_data = p_res.get_json()
+    headers = {"Authorization": f"Bearer {p_data['token']}"}
+    month = "2026-11"
+
+    # 1. Verify 'savings' module exists in module registry
+    mods_res = client.get("/api/modules", headers=headers)
+    assert mods_res.status_code == 200
+    mod_keys = [m["id"] for m in mods_res.get_json()["modules"]]
+    assert "savings" in mod_keys
+
+    # 2. Create a High-Yield Savings Account and a Brokerage Account
+    hysa_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Ally High-Yield Savings",
+            "institution_name": "Ally Bank",
+            "type": "depository",
+            "subtype": "savings",
+            "mask": "8899",
+            "balance_current": 15000.0,
+            "balance_available": 15000.0,
+            "is_savings_account": True,
+        },
+    )
+    assert hysa_res.status_code == 201
+    hysa_id = hysa_res.get_json()["id"]
+
+    brok_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={
+            "name": "Fidelity Joint Brokerage",
+            "institution_name": "Fidelity",
+            "type": "investment",
+            "subtype": "brokerage",
+            "mask": "7744",
+            "balance_current": 42000.0,
+            "balance_available": 42000.0,
+            "is_savings_account": True,
+        },
+    )
+    assert brok_res.status_code == 201
+    brok_id = brok_res.get_json()["id"]
+
+    # 3. Set up a monthly budget for 'Shopping & Tech' ($500) and log a regular $120 purchase
+    client.post(
+        "/api/finance/budgets",
+        headers=headers,
+        json={"category": "Shopping & Tech", "monthly_limit": 500.0, "budget_month": month},
+    )
+    reg_tx = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Wireless Mouse",
+            "amount": 120.0,
+            "category": "Shopping & Tech",
+            "date": "2026-11-05",
+        },
+    )
+    assert reg_tx.status_code == 201
+
+    # 4. Log a big $2,400 purchase (New OLED TV) initially in 'Shopping & Tech', then mark it as Spent from Savings
+    big_tx = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "65-inch OLED TV",
+            "amount": 2400.0,
+            "category": "Shopping & Tech",
+            "date": "2026-11-07",
+        },
+    )
+    assert big_tx.status_code == 201
+    big_tx_id = big_tx.get_json()["id"]
+
+    # Before marking as savings spend, monthly spent is $2,520 ($120 + $2,400)
+    sum_before = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum_before["total_monthly_spent"] == 2520.0
+
+    # Mark the $2,400 purchase as coming from savings
+    toggle_res = client.put(
+        f"/api/finance/transactions/{big_tx_id}",
+        headers=headers,
+        json={"is_savings_spend": True, "savings_account_id": hysa_id},
+    )
+    assert toggle_res.status_code == 200
+    assert toggle_res.get_json()["is_savings_spend"] is True
+    assert toggle_res.get_json()["category"] == "Spent from Savings"
+
+    # After marking as Spent from Savings, monthly budget spend drops back to $120.0!
+    sum_after = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum_after["total_monthly_spent"] == 120.0
+    assert sum_after["total_gross_spent"] == 120.0
+    assert sum_after["total_savings_spent"] == 2400.0
+    assert sum_after["savings_spend_count"] == 1
+
+    # Verify 'Shopping & Tech' budget only has $120 spent ($380 remaining)
+    shop_budget = next(b for b in sum_after["budgets"] if b["category"] == "Shopping & Tech")
+    assert shop_budget["spent"] == 120.0
+    assert shop_budget["remaining"] == 380.0
+
+    # Verify 'Spent from Savings' is NOT flagged in untracked_categories
+    untracked_names = [u["name"] for u in sum_after["untracked_categories"]]
+    assert "Spent from Savings" not in untracked_names
+
+    # 5. Log a transfer into the savings account ($1,500) via POST /api/finance/savings/transfer
+    tr_res = client.post(
+        "/api/finance/savings/transfer",
+        headers=headers,
+        json={
+            "account_id": hysa_id,
+            "source_name": "Monthly HYSA Transfer",
+            "amount": 1500.0,
+            "date": "2026-11-08",
+            "budget_month": month,
+            "update_account_balance": True,
+        },
+    )
+    assert tr_res.status_code == 201
+
+    # 6. Log a direct purchase from savings ($600 Vacation Flights) via POST /api/finance/savings/spend
+    sp_res = client.post(
+        "/api/finance/savings/spend",
+        headers=headers,
+        json={
+            "name": "Anniversary Flights",
+            "amount": 600.0,
+            "savings_account_id": hysa_id,
+            "date": "2026-11-09",
+            "budget_month": month,
+            "update_account_balance": True,
+        },
+    )
+    assert sp_res.status_code == 201
+
+    # 7. Record a historical balance snapshot for 2025-11 to verify YoY and MoM analytics
+    snap_res = client.post(
+        "/api/finance/savings/snapshots",
+        headers=headers,
+        json={
+            "account_id": hysa_id,
+            "snapshot_month": "2025-11",
+            "balance": 10000.0,
+            "notes": "Last year HYSA balance",
+        },
+    )
+    assert snap_res.status_code in (200, 201)
+
+    # 8. Query GET /api/finance/savings and verify accounts, KPIs, MoM, YoY, transfers, and spends
+    sav_res = client.get("/api/finance/savings", headers=headers)
+    assert sav_res.status_code == 200
+    sav_data = sav_res.get_json()
+
+    # Both HYSA and Brokerage accounts appear in savings_accounts
+    sav_acc_ids = [a["id"] for a in sav_data["savings_accounts"]]
+    assert hysa_id in sav_acc_ids
+    assert brok_id in sav_acc_ids
+
+    # Check HYSA balance updated: $15,000 + $1,500 transfer - $600 direct spend = $15,900
+    hysa_obj = next(a for a in sav_data["savings_accounts"] if a["id"] == hysa_id)
+    assert hysa_obj["balance_current"] == 15900.0
+    assert hysa_obj["savings_bucket"] == "savings"
+
+    brok_obj = next(a for a in sav_data["savings_accounts"] if a["id"] == brok_id)
+    assert brok_obj["savings_bucket"] == "brokerage"
+
+    # Check KPIs
+    assert sav_data["kpis"]["total_savings_balance"] == 15900.0
+    assert sav_data["kpis"]["total_brokerage_balance"] == 42000.0
+    assert sav_data["kpis"]["total_combined_balance"] == 57900.0
+    assert sav_data["kpis"]["all_time_transfers_in"] == 1500.0
+    assert sav_data["kpis"]["all_time_savings_spent"] == 3000.0  # $2,400 TV + $600 Flights
+
+    # Check MoM row for 2026-11
+    nov_row = next(m for m in sav_data["monthly_history"] if m["month"] == "2026-11")
+    assert nov_row["transfers_in"] == 1500.0
+    assert nov_row["savings_spent"] == 3000.0
+    assert nov_row["net_flow"] == -1500.0
+
+    # Check YoY history includes 2025 and 2026
+    years = [y["year"] for y in sav_data["yearly_history"]]
+    assert "2025" in years
+    assert "2026" in years
+
+
+
 
 
 

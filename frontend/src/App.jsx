@@ -11,6 +11,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  PiggyBank,
   Radio,
   ShoppingCart,
   Sun,
@@ -26,6 +27,7 @@ import PasskeyLockScreen from './components/PasskeyLockScreen';
 import RequestsModule from './modules/RequestsModule';
 import FuturePurchasesModule from './modules/FuturePurchasesModule';
 import FinanceModule from './modules/FinanceModule';
+import SavingsModule from './modules/SavingsModule';
 import {
   AdminDocsSubModule,
   GroceriesSubModule,
@@ -35,6 +37,7 @@ import {
 
 const ICON_MAP = {
   wallet: Wallet,
+  'piggy-bank': PiggyBank,
   handshake: Handshake,
   'calendar-clock': CalendarClock,
   'file-heart': FileHeart,
@@ -298,6 +301,7 @@ export default function App() {
   const SHORT_TAB_LABELS = {
     requests: 'Requests',
     finance: 'Finances',
+    savings: 'Savings',
     future_plans: 'Plans',
     groceries: 'Groceries',
     todos: 'To-Dos',
@@ -534,6 +538,15 @@ export default function App() {
                   activePartner={activePartner}
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
+                  onNavigateTab={selectTab}
+                />
+              )}
+              {activeTab === 'savings' && (
+                <SavingsModule
+                  activePartner={activePartner}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                  onNavigateTab={selectTab}
                 />
               )}
               {activeTab === 'admin_docs' && (
