@@ -174,6 +174,12 @@ GibsonFamily/
   - Any account's owner or color can be updated via `PUT /api/finance/accounts/<id>` directly from the UI.
   - Accessible via the **"All Accounts & Balances by User"** modal in the top **Options** dropdown in `FinanceModule.jsx`.
   - Groups accounts by user (e.g., Alex, Jordan) and Shared/Household, subdividing each into **Checking Accounts**, **Savings Accounts**, **Credit Cards & Debt**, and **Other/Investments** with live balances, available balances, partner subtotals, and household aggregate KPIs.
+- **Plaid Re-Authentication (Update Mode), Force Full Re-Sync & Webhook Delivery**:
+  - **Item Error & Re-Authentication (`plaid_items.status`, `last_error_code`, Update Mode)**: When bank credentials expire or MFA is requested (`ITEM_LOGIN_REQUIRED`, `PENDING_EXPIRATION`, `ITEM_LOCKED`), Plaid pauses syncing transactions. The app detects these errors, flags `requires_reauth`, and allows partners to launch Plaid Link in **Update Mode** (`POST /api/finance/plaid/create_link_token` with `item_id`) to re-authenticate with 1 click without losing existing accounts or transaction histories.
+  - **Force Full Re-Sync (Cursor Reset, `reset_cursor: true`)**: If transactions get stuck in Plaid's cache or the incremental sync cursor becomes desynchronized, partners can trigger **"Force Full Re-Sync (Reset Cursor)"** via `POST /api/finance/plaid/sync` with `reset_cursor: true` to stream all transactions from November 2026 onwards from scratch.
+  - **Deduplication Account Mapping**: When duplicate Plaid accounts sharing `(institution_name, mask, subtype, name)` are linked, their Plaid account IDs map directly to `account_id_map` so transactions are never dropped.
+  - **Transaction Date Prioritization**: Uses `authorized_date` falling back to `date` so pending swipes and settled charges reflect the actual purchase date.
+  - **Public Webhook Receiver (`POST /api/finance/plaid/webhook`)**: Receives Plaid's asynchronous `TRANSACTIONS` updates (`SYNC_UPDATES_AVAILABLE`) and `ITEM` errors, triggering background syncs and real-time partner notification via `/api/sync-pulse`.
 
 ---
 

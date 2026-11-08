@@ -80,6 +80,11 @@ CREATE TABLE IF NOT EXISTS plaid_items (
     access_token TEXT NOT NULL,
     institution_name TEXT NOT NULL DEFAULT 'Plaid Bank',
     linked_by_partner_id INTEGER,
+    cursor TEXT,
+    status TEXT NOT NULL DEFAULT 'healthy',
+    last_error_code TEXT,
+    last_error TEXT,
+    last_synced_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (linked_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
@@ -417,6 +422,18 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
                 "UPDATE accounts SET color = ? WHERE id = ?",
                 (palette[idx % len(palette)], row["id"]),
             )
+
+    plaid_cols = [r["name"] for r in db.execute("PRAGMA table_info(plaid_items)").fetchall()]
+    if "cursor" not in plaid_cols:
+        db.execute("ALTER TABLE plaid_items ADD COLUMN cursor TEXT")
+    if "status" not in plaid_cols:
+        db.execute("ALTER TABLE plaid_items ADD COLUMN status TEXT NOT NULL DEFAULT 'healthy'")
+    if "last_error_code" not in plaid_cols:
+        db.execute("ALTER TABLE plaid_items ADD COLUMN last_error_code TEXT")
+    if "last_error" not in plaid_cols:
+        db.execute("ALTER TABLE plaid_items ADD COLUMN last_error TEXT")
+    if "last_synced_at" not in plaid_cols:
+        db.execute("ALTER TABLE plaid_items ADD COLUMN last_synced_at TEXT")
 
     db.execute(
         """

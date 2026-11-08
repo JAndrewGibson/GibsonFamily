@@ -290,7 +290,7 @@ def plaid_status():
     db = get_db()
     items = []
     for r in db.execute(
-        "SELECT id, item_id, institution_name, linked_by_partner_id, created_at FROM plaid_items ORDER BY id DESC"
+        "SELECT id, item_id, institution_name, linked_by_partner_id, cursor, status, last_error_code, last_error, last_synced_at, created_at FROM plaid_items ORDER BY id DESC"
     ).fetchall():
         item_dict = dict(r)
         acc_cnt = db.execute(
@@ -298,6 +298,18 @@ def plaid_status():
             (item_dict["item_id"], item_dict["institution_name"]),
         ).fetchone()["cnt"]
         item_dict["account_count"] = acc_cnt
+        item_dict["has_cursor"] = bool(item_dict.get("cursor"))
+        item_dict["requires_reauth"] = bool(
+            item_dict.get("status") == "error"
+            and item_dict.get("last_error_code") in [
+                "ITEM_LOGIN_REQUIRED",
+                "PENDING_EXPIRATION",
+                "ITEM_LOCKED",
+                "USER_PERMISSION_REVOKED",
+                "INVALID_CREDENTIALS",
+                "MFA_NOT_SUPPORTED",
+            ]
+        )
         items.append(item_dict)
 
     dismissed_row = db.execute(
@@ -313,6 +325,7 @@ def plaid_status():
         "base_url": base_url,
         "client_id_preview": f"{client_id[:6]}...{client_id[-4:]}" if len(client_id) >= 10 else ("configured" if client_id else ""),
         "linked_items": items,
+        "has_items_requiring_reauth": any(it.get("requires_reauth") for it in items),
         "banner_dismissed": banner_dismissed,
         "last_plaid_sync_at": last_sync_str,
         "hours_since_last_sync": elapsed_hours,
@@ -342,18 +355,34 @@ def create_link_token():
     data = request.get_json(silent=True) or {}
     actor = getattr(g, "current_partner", None)
     partner_id = str(actor["id"] if actor else data.get("partner_id", "1"))
+    target_item_id = data.get("item_id")
 
     base_payload = {
         "client_id": client_id,
         "secret": secret,
         "client_name": "GibsonFamily Financial Hub",
         "user": {"client_user_id": f"gibson-partner-{partner_id}"},
-        "products": ["transactions"],
         "country_codes": ["US"],
         "language": "en",
     }
 
+    db = get_db()
+    # If targeting an existing item, initialize Plaid Link in UPDATE MODE
+    if target_item_id:
+        item_row = db.execute("SELECT access_token FROM plaid_items WHERE item_id = ?", (target_item_id,)).fetchone()
+        if not item_row or not item_row["access_token"]:
+            return jsonify({"error": f"Plaid item '{target_item_id}' not found"}), 404
+        raw_access_token = decrypt_plaid_token(item_row["access_token"])
+        base_payload["access_token"] = raw_access_token
+        # In Plaid Update Mode, products array must NOT be included
+    else:
+        # Standard initial link mode
+        base_payload["products"] = ["transactions"]
+
     configured_uri = (current_app.config.get("PLAID_REDIRECT_URI") or "https://gibsonfamily.onrender.com").strip()
+    if configured_uri.startswith("https://"):
+        base_payload["webhook"] = f"{configured_uri.rstrip('/')}/api/finance/plaid/webhook"
+
     uri_candidates = []
     if configured_uri.startswith("https://"):
         no_slash = configured_uri.rstrip("/")
@@ -389,8 +418,12 @@ def create_link_token():
 
 
 def _sync_plaid_accounts_and_transactions(
-    access_token: str, institution_name: str, partner_id: int | None, item_id: str | None = None
-):
+    access_token: str,
+    institution_name: str,
+    partner_id: int | None,
+    item_id: str | None = None,
+    reset_cursor: bool = False,
+) -> tuple[int, int, str | None]:
     base_url, client_id, secret = _plaid_headers_and_auth()
     db = get_db()
 
@@ -400,6 +433,17 @@ def _sync_plaid_accounts_and_transactions(
         timeout=15,
     )
     acc_data = acc_resp.json()
+    if acc_resp.status_code != 200:
+        err_code = acc_data.get("error_code", "ACCOUNTS_GET_ERROR")
+        err_msg = acc_data.get("error_message", "Failed to retrieve accounts from Plaid")
+        if item_id:
+            db.execute(
+                "UPDATE plaid_items SET status = 'error', last_error_code = ?, last_error = ? WHERE item_id = ?",
+                (err_code, err_msg, item_id),
+            )
+            db.commit()
+        return 0, 0, f"{err_code}: {err_msg}"
+
     if not item_id and "item" in acc_data and "item_id" in acc_data["item"]:
         item_id = acc_data["item"]["item_id"]
 
@@ -453,7 +497,8 @@ def _sync_plaid_accounts_and_transactions(
             sig,
         ).fetchone()
         if dup_existing and dup_existing["plaid_account_id"] and dup_existing["plaid_account_id"] != plaid_acc_id:
-            # Map transactions to the existing primary account or skip so we don't double-count
+            # Map transactions to the existing primary account so we don't double-count accounts or drop transactions
+            account_id_map[plaid_acc_id] = dup_existing["id"]
             continue
 
         balances = acc.get("balances") or {}
@@ -491,238 +536,316 @@ def _sync_plaid_accounts_and_transactions(
             account_id_map[plaid_acc_id] = row["id"]
         imported_accounts += 1
 
-    tx_resp = requests.post(
-        f"{base_url}/transactions/sync",
-        json={"client_id": client_id, "secret": secret, "access_token": access_token},
-        timeout=15,
-    )
-    tx_data = tx_resp.json()
+    # Ensure account_id_map includes all known local accounts for mapping
+    for r in db.execute("SELECT id, plaid_account_id FROM accounts WHERE plaid_account_id IS NOT NULL").fetchall():
+        if r["plaid_account_id"] and r["plaid_account_id"] not in account_id_map:
+            account_id_map[r["plaid_account_id"]] = r["id"]
+
+    # 1. Ask Plaid for an on-demand transaction refresh from the financial institution
+    try:
+        requests.post(
+            f"{base_url}/transactions/refresh",
+            json={"client_id": client_id, "secret": secret, "access_token": access_token},
+            timeout=8,
+        )
+    except Exception:
+        pass
+
+    # 2. Retrieve last stored cursor for incremental sync (or None for initial pull / forced reset)
+    cursor = None
+    if reset_cursor and item_id:
+        db.execute("UPDATE plaid_items SET cursor = NULL WHERE item_id = ?", (item_id,))
+    elif item_id:
+        item_row = db.execute("SELECT cursor FROM plaid_items WHERE item_id = ?", (item_id,)).fetchone()
+        if item_row and item_row["cursor"]:
+            cursor = item_row["cursor"]
+
+    # 3. Paginate through all pages until has_more is False to reach the latest pending transactions
     imported_txs = 0
-    for tx in tx_data.get("added", [])[:100]:
-        local_acc_id = account_id_map.get(tx.get("account_id"))
-        if not local_acc_id:
-            # Skip transactions belonging to deleted or deduplicated accounts
-            continue
+    has_more = True
+    pages = 0
+    max_pages = 25  # up to 25 * 500 = 12,500 transactions
 
-        amount = float(tx.get("amount") or 0.0)
-        pfc = (tx.get("personal_finance_category") or {}).get("primary", "")
-        tx_date = tx.get("date") or date.today().isoformat()
-        tx_budget_month = tx_date[:7]
-        is_pending = 1 if tx.get("pending") else 0
-        pending_tx_id = tx.get("pending_transaction_id")
-
-        # Enforce November (STARTING_BUDGET_MONTH) starting point for synced transactions
-        if tx_budget_month < STARTING_BUDGET_MONTH:
-            continue
-
-        # In Plaid, negative amounts or INCOME primary category represent inflows/deposits
-        if amount < 0 or pfc == "INCOME":
-            inc_amt = round(abs(amount), 2)
-            if inc_amt > 0:
-                name_str = (tx.get("merchant_name") or tx.get("name") or "Plaid Deposit").strip()
-                name_lower = name_str.lower()
-                acc_row = db.execute("SELECT type, subtype FROM accounts WHERE id = ?", (local_acc_id,)).fetchone()
-                is_credit_acc = bool(acc_row and (acc_row["type"] == "credit" or "credit" in (acc_row["subtype"] or "").lower()))
-
-                category_map = {
-                    "FOOD_AND_DRINK": "Groceries & Dining",
-                    "GENERAL_MERCHANDISE": "Shopping & Tech",
-                    "ENTERTAINMENT": "Entertainment & Gaming",
-                    "MEDICAL": "Health & Medical",
-                    "RENT_AND_UTILITIES": "Housing & Utilities",
-                    "TRAVEL": "Travel & Experiences",
-                }
-                mapped_cat = category_map.get(pfc, "Shopping & Tech")
-
-                # Auto-classify inflow: Credit Card Payment, Return, Account Transfer, or Payroll
-                if is_credit_acc or any(w in name_lower for w in ["payment", "autopay", "thank you", "card payment", "bill pay"]):
-                    auto_income_type = "cc_payment"
-                    ret_cat = ""
-                elif any(w in name_lower for w in ["return", "refund", "reimbursement", "credit for return"]) or pfc in ["GENERAL_MERCHANDISE", "FOOD_AND_DRINK", "ENTERTAINMENT"]:
-                    auto_income_type = "return"
-                    ret_cat = mapped_cat
-                elif any(w in name_lower for w in ["transfer", "zelle", "venmo", "xfer", "wire", "deposit transfer", "internal transfer"]):
-                    auto_income_type = "transfer"
-                    ret_cat = ""
-                else:
-                    auto_income_type = "payroll"
-                    ret_cat = ""
-
-                # If this settled transaction replaces an earlier pending deposit, upgrade it in-place
-                if pending_tx_id:
-                    existing_pending_inc = db.execute(
-                        "SELECT id FROM income_entries WHERE plaid_transaction_id = ?",
-                        (pending_tx_id,),
-                    ).fetchone()
-                    if existing_pending_inc:
-                        db.execute(
-                            """
-                            UPDATE income_entries
-                            SET plaid_transaction_id = ?, date = ?, amount = ?, source_name = ?, is_pending = ?
-                            WHERE id = ?
-                            """,
-                            (tx.get("transaction_id"), tx_date, inc_amt, name_str, is_pending, existing_pending_inc["id"]),
-                        )
-                        continue
-
-                db.execute(
-                    """
-                    INSERT INTO income_entries
-                    (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes, is_pending)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid', ?)
-                    ON CONFLICT(plaid_transaction_id) DO UPDATE SET
-                        is_pending = excluded.is_pending,
-                        amount = excluded.amount,
-                        date = excluded.date,
-                        source_name = excluded.source_name
-                    """,
-                    (
-                        partner_id,
-                        local_acc_id,
-                        tx.get("transaction_id"),
-                        tx_date,
-                        tx_budget_month,
-                        name_str,
-                        inc_amt,
-                        inc_amt if auto_income_type == "payroll" else 0.0,
-                        auto_income_type,
-                        ret_cat,
-                        1 if auto_income_type == "payroll" else 0,
-                        is_pending,
-                    ),
-                )
-            continue
-
-        if amount == 0:
-            continue
-
-        category_map = {
-            "FOOD_AND_DRINK": "Groceries & Dining",
-            "GENERAL_MERCHANDISE": "Shopping & Tech",
-            "ENTERTAINMENT": "Entertainment & Gaming",
-            "MEDICAL": "Health & Medical",
-            "RENT_AND_UTILITIES": "Housing & Utilities",
-            "TRAVEL": "Travel & Experiences",
+    while has_more and pages < max_pages:
+        pages += 1
+        sync_payload = {
+            "client_id": client_id,
+            "secret": secret,
+            "access_token": access_token,
+            "count": 500,
+            "options": {
+                "include_personal_finance_category": True,
+            },
         }
-        mapped_cat = category_map.get(pfc, "Shopping & Tech")
+        if cursor:
+            sync_payload["cursor"] = cursor
 
-        # If this posted transaction replaces an earlier pending transaction, upgrade it in-place to preserve user's assigned category
-        if pending_tx_id:
-            existing_pending_tx = db.execute(
-                "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
-                (pending_tx_id,),
-            ).fetchone()
-            if existing_pending_tx:
+        tx_resp = requests.post(f"{base_url}/transactions/sync", json=sync_payload, timeout=20)
+        tx_data = tx_resp.json()
+        if tx_resp.status_code != 200:
+            err_code = tx_data.get("error_code", "SYNC_ERROR")
+            err_msg = tx_data.get("error_message", "Transactions sync failed")
+            # If cursor is invalid or pagination was mutated at the bank, reset cursor and retry from beginning
+            if cursor and err_code in ["TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION", "INVALID_CURSOR"]:
+                cursor = None
+                continue
+            if item_id:
                 db.execute(
-                    """
-                    UPDATE transactions
-                    SET plaid_transaction_id = ?,
-                        date = ?,
-                        amount = ?,
-                        name = ?,
-                        merchant_name = ?,
-                        is_pending = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        tx.get("transaction_id"),
-                        tx_date,
-                        round(amount, 2),
-                        tx.get("name", "Plaid Transaction"),
-                        tx.get("merchant_name") or tx.get("name"),
-                        is_pending,
-                        existing_pending_tx["id"],
-                    ),
+                    "UPDATE plaid_items SET status = 'error', last_error_code = ?, last_error = ? WHERE item_id = ?",
+                    (err_code, err_msg, item_id),
                 )
-                imported_txs += 1
+                db.commit()
+            return imported_accounts, imported_txs, f"{err_code}: {err_msg}"
+
+        has_more = bool(tx_data.get("has_more", False))
+        cursor = tx_data.get("next_cursor") or cursor
+
+        for tx in tx_data.get("added", []):
+            local_acc_id = account_id_map.get(tx.get("account_id"))
+            if not local_acc_id:
+                # Skip transactions belonging to deleted or deduplicated accounts
                 continue
 
-        db.execute(
-            """
-            INSERT INTO transactions
-            (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid', ?)
-            ON CONFLICT(plaid_transaction_id) DO UPDATE SET
-                is_pending = excluded.is_pending,
-                amount = excluded.amount,
-                date = excluded.date,
-                name = excluded.name,
-                merchant_name = excluded.merchant_name
-            """,
-            (
-                local_acc_id,
-                tx.get("transaction_id"),
-                tx_date,
-                tx_budget_month,
-                tx.get("name", "Plaid Transaction"),
-                tx.get("merchant_name") or tx.get("name"),
-                round(amount, 2),
-                mapped_cat,
-                partner_id,
-                is_pending,
-            ),
-        )
-        imported_txs += 1
+            amount = float(tx.get("amount") or 0.0)
+            pfc = (tx.get("personal_finance_category") or {}).get("primary", "")
+            tx_date = (
+                tx.get("authorized_date")
+                or tx.get("date")
+                or (tx.get("authorized_datetime") or "")[:10]
+                or (tx.get("datetime") or "")[:10]
+                or date.today().isoformat()
+            )
+            tx_budget_month = tx_date[:7]
+            is_pending = 1 if tx.get("pending") else 0
+            pending_tx_id = tx.get("pending_transaction_id")
 
-    # Process modified transactions (e.g., pending transitions to posted or amounts adjust)
-    for mtx in tx_data.get("modified", []):
-        m_plaid_id = mtx.get("transaction_id")
-        if not m_plaid_id:
-            continue
-        m_pending = 1 if mtx.get("pending") else 0
-        m_amt = float(mtx.get("amount") or 0.0)
-        m_date = mtx.get("date") or date.today().isoformat()
-        db.execute(
-            """
-            UPDATE transactions
-            SET is_pending = ?,
-                amount = ?,
-                date = ?,
-                name = COALESCE(?, name),
-                merchant_name = COALESCE(?, merchant_name)
-            WHERE plaid_transaction_id = ?
-            """,
-            (
-                m_pending,
-                round(m_amt, 2),
-                m_date,
-                mtx.get("name"),
-                mtx.get("merchant_name") or mtx.get("name"),
-                m_plaid_id,
-            ),
-        )
-        db.execute(
-            """
-            UPDATE income_entries
-            SET is_pending = ?,
-                amount = ?,
-                date = ?,
-                source_name = COALESCE(?, source_name)
-            WHERE plaid_transaction_id = ?
-            """,
-            (
-                m_pending,
-                round(abs(m_amt), 2),
-                m_date,
-                mtx.get("merchant_name") or mtx.get("name"),
-                m_plaid_id,
-            ),
-        )
+            # Enforce November (STARTING_BUDGET_MONTH) starting point for synced transactions
+            if tx_budget_month < STARTING_BUDGET_MONTH:
+                continue
 
-    # Process removed transactions (e.g., cancelled pending items)
-    for rtx in tx_data.get("removed", []):
-        r_id = rtx.get("transaction_id") if isinstance(rtx, dict) else rtx
-        if r_id:
-            db.execute("DELETE FROM transactions WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
-            db.execute("DELETE FROM income_entries WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
+            # In Plaid, negative amounts or INCOME primary category represent inflows/deposits
+            if amount < 0 or pfc == "INCOME":
+                inc_amt = round(abs(amount), 2)
+                if inc_amt > 0:
+                    name_str = (tx.get("merchant_name") or tx.get("name") or "Plaid Deposit").strip()
+                    name_lower = name_str.lower()
+                    acc_row = db.execute("SELECT type, subtype FROM accounts WHERE id = ?", (local_acc_id,)).fetchone()
+                    is_credit_acc = bool(acc_row and (acc_row["type"] == "credit" or "credit" in (acc_row["subtype"] or "").lower()))
+
+                    category_map = {
+                        "FOOD_AND_DRINK": "Groceries & Dining",
+                        "GENERAL_MERCHANDISE": "Shopping & Tech",
+                        "ENTERTAINMENT": "Entertainment & Gaming",
+                        "MEDICAL": "Health & Medical",
+                        "RENT_AND_UTILITIES": "Housing & Utilities",
+                        "TRAVEL": "Travel & Experiences",
+                    }
+                    mapped_cat = category_map.get(pfc, "Shopping & Tech")
+
+                    # Auto-classify inflow: Credit Card Payment, Return, Account Transfer, or Payroll
+                    if is_credit_acc or any(w in name_lower for w in ["payment", "autopay", "thank you", "card payment", "bill pay"]):
+                        auto_income_type = "cc_payment"
+                        ret_cat = ""
+                    elif any(w in name_lower for w in ["return", "refund", "reimbursement", "credit for return"]) or pfc in ["GENERAL_MERCHANDISE", "FOOD_AND_DRINK", "ENTERTAINMENT"]:
+                        auto_income_type = "return"
+                        ret_cat = mapped_cat
+                    elif any(w in name_lower for w in ["transfer", "zelle", "venmo", "xfer", "wire", "deposit transfer", "internal transfer"]):
+                        auto_income_type = "transfer"
+                        ret_cat = ""
+                    else:
+                        auto_income_type = "payroll"
+                        ret_cat = ""
+
+                    # If this settled transaction replaces an earlier pending deposit, upgrade it in-place
+                    if pending_tx_id:
+                        existing_pending_inc = db.execute(
+                            "SELECT id FROM income_entries WHERE plaid_transaction_id = ?",
+                            (pending_tx_id,),
+                        ).fetchone()
+                        if existing_pending_inc:
+                            db.execute(
+                                """
+                                UPDATE income_entries
+                                SET plaid_transaction_id = ?, date = ?, amount = ?, source_name = ?, is_pending = ?
+                                WHERE id = ?
+                                """,
+                                (tx.get("transaction_id"), tx_date, inc_amt, name_str, is_pending, existing_pending_inc["id"]),
+                            )
+                            continue
+
+                    db.execute(
+                        """
+                        INSERT INTO income_entries
+                        (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes, is_pending)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid', ?)
+                        ON CONFLICT(plaid_transaction_id) DO UPDATE SET
+                            is_pending = excluded.is_pending,
+                            amount = excluded.amount,
+                            date = excluded.date,
+                            source_name = excluded.source_name
+                        """,
+                        (
+                            partner_id,
+                            local_acc_id,
+                            tx.get("transaction_id"),
+                            tx_date,
+                            tx_budget_month,
+                            name_str,
+                            inc_amt,
+                            inc_amt if auto_income_type == "payroll" else 0.0,
+                            auto_income_type,
+                            ret_cat,
+                            1 if auto_income_type == "payroll" else 0,
+                            is_pending,
+                        ),
+                    )
+                continue
+
+            if amount == 0:
+                continue
+
+            category_map = {
+                "FOOD_AND_DRINK": "Groceries & Dining",
+                "GENERAL_MERCHANDISE": "Shopping & Tech",
+                "ENTERTAINMENT": "Entertainment & Gaming",
+                "MEDICAL": "Health & Medical",
+                "RENT_AND_UTILITIES": "Housing & Utilities",
+                "TRAVEL": "Travel & Experiences",
+            }
+            mapped_cat = category_map.get(pfc, "Shopping & Tech")
+
+            # If this posted transaction replaces an earlier pending transaction, upgrade it in-place to preserve user's assigned category
+            if pending_tx_id:
+                existing_pending_tx = db.execute(
+                    "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
+                    (pending_tx_id,),
+                ).fetchone()
+                if existing_pending_tx:
+                    db.execute(
+                        """
+                        UPDATE transactions
+                        SET plaid_transaction_id = ?,
+                            date = ?,
+                            amount = ?,
+                            name = ?,
+                            merchant_name = ?,
+                            is_pending = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            tx.get("transaction_id"),
+                            tx_date,
+                            round(amount, 2),
+                            tx.get("name", "Plaid Transaction"),
+                            tx.get("merchant_name") or tx.get("name"),
+                            is_pending,
+                            existing_pending_tx["id"],
+                        ),
+                    )
+                    imported_txs += 1
+                    continue
+
+            db.execute(
+                """
+                INSERT INTO transactions
+                (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid', ?)
+                ON CONFLICT(plaid_transaction_id) DO UPDATE SET
+                    is_pending = excluded.is_pending,
+                    amount = excluded.amount,
+                    date = excluded.date,
+                    name = excluded.name,
+                    merchant_name = excluded.merchant_name
+                """,
+                (
+                    local_acc_id,
+                    tx.get("transaction_id"),
+                    tx_date,
+                    tx_budget_month,
+                    tx.get("name", "Plaid Transaction"),
+                    tx.get("merchant_name") or tx.get("name"),
+                    round(amount, 2),
+                    mapped_cat,
+                    partner_id,
+                    is_pending,
+                ),
+            )
+            imported_txs += 1
+
+        # Process modified transactions (e.g., pending transitions to posted or amounts adjust)
+        for mtx in tx_data.get("modified", []):
+            m_plaid_id = mtx.get("transaction_id")
+            if not m_plaid_id:
+                continue
+            m_pending = 1 if mtx.get("pending") else 0
+            m_amt = float(mtx.get("amount") or 0.0)
+            m_date = (
+                mtx.get("authorized_date")
+                or mtx.get("date")
+                or (mtx.get("authorized_datetime") or "")[:10]
+                or (mtx.get("datetime") or "")[:10]
+                or date.today().isoformat()
+            )
+            db.execute(
+                """
+                UPDATE transactions
+                SET is_pending = ?,
+                    amount = ?,
+                    date = ?,
+                    name = COALESCE(?, name),
+                    merchant_name = COALESCE(?, merchant_name)
+                WHERE plaid_transaction_id = ?
+                """,
+                (
+                    m_pending,
+                    round(m_amt, 2),
+                    m_date,
+                    mtx.get("name"),
+                    mtx.get("merchant_name") or mtx.get("name"),
+                    m_plaid_id,
+                ),
+            )
+            db.execute(
+                """
+                UPDATE income_entries
+                SET is_pending = ?,
+                    amount = ?,
+                    date = ?,
+                    source_name = COALESCE(?, source_name)
+                WHERE plaid_transaction_id = ?
+                """,
+                (
+                    m_pending,
+                    round(abs(m_amt), 2),
+                    m_date,
+                    mtx.get("merchant_name") or mtx.get("name"),
+                    m_plaid_id,
+                ),
+            )
+
+        # Process removed transactions (e.g., cancelled pending items)
+        for rtx in tx_data.get("removed", []):
+            r_id = rtx.get("transaction_id") if isinstance(rtx, dict) else rtx
+            if r_id:
+                db.execute("DELETE FROM transactions WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
+                db.execute("DELETE FROM income_entries WHERE plaid_transaction_id = ? AND is_pending = 1", (r_id,))
+
+    # Save latest cursor for subsequent incremental syncs
+    if cursor and item_id:
+        db.execute("UPDATE plaid_items SET cursor = ? WHERE item_id = ?", (cursor, item_id))
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    if item_id:
+        db.execute(
+            "UPDATE plaid_items SET status = 'healthy', last_error_code = NULL, last_error = NULL, last_synced_at = ? WHERE item_id = ?",
+            (now_iso, item_id),
+        )
     db.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_plaid_sync_at', ?)",
         (now_iso,),
     )
     db.commit()
-    return imported_accounts, imported_txs
+    return imported_accounts, imported_txs, None
 
 
 @finance_bp.route("/plaid/exchange_public_token", methods=["POST"])
@@ -771,7 +894,7 @@ def exchange_public_token():
         )
         db.commit()
 
-        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
+        imported_accounts, imported_txs, _ = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
         return jsonify({
             "linked": True,
             "item_id": item_id,
@@ -840,7 +963,7 @@ def sandbox_quick_connect():
         )
         db.commit()
 
-        imported_accounts, imported_txs = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
+        imported_accounts, imported_txs, _ = _sync_plaid_accounts_and_transactions(access_token, institution_name, partner_id_int, item_id)
         return jsonify({
             "linked": True,
             "item_id": item_id,
@@ -854,27 +977,100 @@ def sandbox_quick_connect():
 
 @finance_bp.route("/plaid/sync", methods=["POST"])
 def sync_all_plaid_items():
+    data = request.get_json(silent=True) or {}
+    reset_cursor = bool(data.get("reset_cursor", False) or data.get("force", False))
+    target_item_id = data.get("item_id")
+
     db = get_db()
-    items = db.execute("SELECT * FROM plaid_items").fetchall()
+    if target_item_id:
+        items = db.execute("SELECT * FROM plaid_items WHERE item_id = ?", (target_item_id,)).fetchall()
+    else:
+        items = db.execute("SELECT * FROM plaid_items").fetchall()
+
     if not items:
         return jsonify({"error": "No Plaid bank items linked yet. Connect a bank first."}), 400
 
     total_acc = 0
     total_tx = 0
+    item_errors = []
     for item in items:
         raw_access_token = decrypt_plaid_token(item["access_token"])
-        acc_cnt, tx_cnt = _sync_plaid_accounts_and_transactions(
-            raw_access_token, item["institution_name"], item["linked_by_partner_id"], item["item_id"]
+        acc_cnt, tx_cnt, err = _sync_plaid_accounts_and_transactions(
+            raw_access_token,
+            item["institution_name"],
+            item["linked_by_partner_id"],
+            item["item_id"],
+            reset_cursor=reset_cursor,
         )
         total_acc += acc_cnt
         total_tx += tx_cnt
+        if err:
+            item_errors.append({
+                "item_id": item["item_id"],
+                "institution_name": item["institution_name"],
+                "error": err,
+                "requires_reauth": any(k in err for k in ["ITEM_LOGIN_REQUIRED", "PENDING_EXPIRATION", "ITEM_LOCKED", "USER_PERMISSION_REVOKED", "INVALID_CREDENTIALS"]),
+            })
 
     return jsonify({
         "synced": True,
         "updated_accounts": total_acc,
         "imported_transactions": total_tx,
+        "reset_cursor": reset_cursor,
+        "item_errors": item_errors,
         "last_plaid_sync_at": datetime.now(timezone.utc).isoformat(),
     })
+
+
+@finance_bp.route("/plaid/webhook", methods=["POST"])
+def plaid_webhook():
+    """
+    Public webhook receiver for Plaid asynchronous lifecycle events.
+    Handles TRANSACTIONS updates (SYNC_UPDATES_AVAILABLE, DEFAULT_UPDATE, etc.)
+    and ITEM errors (ITEM_LOGIN_REQUIRED).
+    """
+    data = request.get_json(silent=True) or {}
+    webhook_type = (data.get("webhook_type") or "").upper()
+    webhook_code = (data.get("webhook_code") or "").upper()
+    item_id = data.get("item_id")
+
+    if not item_id:
+        return jsonify({"received": True, "note": "No item_id provided"}), 200
+
+    db = get_db()
+    item = db.execute("SELECT * FROM plaid_items WHERE item_id = ?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"received": True, "note": "Item not found"}), 200
+
+    if webhook_type == "TRANSACTIONS":
+        raw_token = decrypt_plaid_token(item["access_token"])
+
+        def _bg_webhook_sync(app_ctx, token, inst, partner, i_id):
+            with app_ctx:
+                _sync_plaid_accounts_and_transactions(token, inst, partner, i_id)
+                bump_state_version(get_db())
+
+        app_obj = current_app._get_current_object()
+        threading.Thread(
+            target=_bg_webhook_sync,
+            args=(app_obj.app_context(), raw_token, item["institution_name"], item["linked_by_partner_id"], item_id),
+            daemon=True,
+        ).start()
+        return jsonify({"received": True, "action": "sync_dispatched", "webhook_code": webhook_code}), 200
+
+    elif webhook_type == "ITEM" and webhook_code == "ERROR":
+        err_obj = data.get("error") or {}
+        err_code = err_obj.get("error_code", "ITEM_ERROR")
+        err_msg = err_obj.get("error_message", "Item error reported by Plaid")
+        db.execute(
+            "UPDATE plaid_items SET status = 'error', last_error_code = ?, last_error = ? WHERE item_id = ?",
+            (err_code, err_msg, item_id),
+        )
+        bump_state_version(db)
+        db.commit()
+        return jsonify({"received": True, "action": "item_error_recorded", "error_code": err_code}), 200
+
+    return jsonify({"received": True, "unhandled_type": webhook_type}), 200
 
 
 @finance_bp.route("/plaid/auto-sync", methods=["POST"])
@@ -924,7 +1120,7 @@ def auto_sync_plaid_items():
             for item in items:
                 try:
                     raw_token = decrypt_plaid_token(item["access_token"])
-                    ac, tc = _sync_plaid_accounts_and_transactions(
+                    ac, tc, _ = _sync_plaid_accounts_and_transactions(
                         raw_token,
                         item["institution_name"],
                         item["linked_by_partner_id"],

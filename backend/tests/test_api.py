@@ -1305,6 +1305,169 @@ def test_pending_transactions_inclusion_and_posting_lifecycle(app_instance, clie
         assert db.execute("SELECT COUNT(*) AS cnt FROM transactions WHERE plaid_transaction_id = 'plaid_tx_pending_999'").fetchone()["cnt"] == 0
 
 
+def test_plaid_resync_cursor_reset_update_mode_and_error_handling(client, app_instance):
+    """
+    Tests:
+    1. Error tracking and reauth status: ITEM_LOGIN_REQUIRED marks item as needing re-authentication.
+    2. Plaid Link update mode: create_link_token with item_id includes access_token and excludes products.
+    3. Forced cursor reset in Plaid sync (sync with reset_cursor=True).
+    4. Plaid public webhook endpoint receiving ITEM errors.
+    """
+    from backend.database import get_db
+    from backend.security import encrypt_plaid_token
+    from backend.modules.finance import _sync_plaid_accounts_and_transactions
+    from unittest.mock import patch, MagicMock
+
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex.sync@gibson.test", "password": "PassAlex123!"},
+                {"name": "Jordan", "email": "jordan.sync@gibson.test", "password": "PassJordan123!"},
+            ],
+        },
+    )
+    headers = {"Authorization": f"Bearer {p_res.get_json()['token']}"}
+
+    with app_instance.app_context():
+        db = get_db()
+        p_row = db.execute("SELECT id FROM partners WHERE email = 'alex.sync@gibson.test'").fetchone()
+        partner_id = p_row["id"]
+        # Setup item and account with an existing cursor
+        db.execute(
+            "INSERT OR REPLACE INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id, cursor, status) VALUES ('item_test_1', ?, 'Chase Bank', ?, 'cursor_old_123', 'healthy')",
+            (encrypt_plaid_token("access_test_token"), partner_id),
+        )
+        db.commit()
+
+        # Step 1: Test error recording on ITEM_LOGIN_REQUIRED
+        with patch("requests.post") as mock_post:
+            resp_err = MagicMock()
+            resp_err.status_code = 400
+            resp_err.json.return_value = {
+                "error_type": "ITEM_ERROR",
+                "error_code": "ITEM_LOGIN_REQUIRED",
+                "error_message": "The login credentials for this item are no longer valid.",
+            }
+            mock_post.return_value = resp_err
+
+            accs, txs, err = _sync_plaid_accounts_and_transactions("access_test_token", "Chase Bank", partner_id, "item_test_1")
+            assert err is not None
+            assert "ITEM_LOGIN_REQUIRED" in err
+
+        item_row = db.execute("SELECT status, last_error_code FROM plaid_items WHERE item_id = 'item_test_1'").fetchone()
+        assert item_row["status"] == "error"
+        assert item_row["last_error_code"] == "ITEM_LOGIN_REQUIRED"
+
+    # Outside app_context: verify plaid_status returns requires_reauth
+    st_resp = client.get("/api/finance/plaid/status", headers=headers)
+    assert st_resp.status_code == 200
+    st_data = st_resp.get_json()
+    assert st_data["has_items_requiring_reauth"] is True
+    target_item = next(it for it in st_data["linked_items"] if it["item_id"] == "item_test_1")
+    assert target_item["requires_reauth"] is True
+
+    # Step 2: Test create_link_token in Update Mode
+    with patch("requests.post") as mock_post:
+        resp_token = MagicMock()
+        resp_token.status_code = 200
+        resp_token.json.return_value = {"link_token": "link-sandbox-update-12345"}
+        mock_post.return_value = resp_token
+
+        tok_res = client.post("/api/finance/plaid/create_link_token", headers=headers, json={"partner_id": partner_id, "item_id": "item_test_1"})
+        assert tok_res.status_code == 200
+        call_kwargs = mock_post.call_args[1]["json"]
+        assert call_kwargs["access_token"] == "access_test_token"
+        assert "products" not in call_kwargs  # Must be omitted in Update Mode
+        assert "webhook" in call_kwargs
+
+    # Step 3: Test Full Re-Sync with reset_cursor=True
+    mock_success_sync = {
+        "accounts": [{
+            "account_id": "acc_chase_main",
+            "name": "Total Checking",
+            "official_name": "Chase Total Checking",
+            "type": "depository",
+            "subtype": "checking",
+            "mask": "4321",
+            "balances": {"current": 4500.0, "available": 4500.0},
+        }],
+        "added": [{
+            "account_id": "acc_chase_main",
+            "transaction_id": "tx_new_today_1",
+            "date": "2026-11-08",
+            "authorized_date": "2026-11-08",
+            "name": "Whole Foods Market",
+            "amount": 85.50,
+            "pending": True,
+            "personal_finance_category": {"primary": "FOOD_AND_DRINK"},
+        }],
+        "modified": [],
+        "removed": [],
+        "has_more": False,
+        "next_cursor": "cursor_fresh_999",
+    }
+
+    with patch("requests.post") as mock_post:
+        def sync_side_effect(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "accounts/get" in url:
+                resp.json.return_value = {"accounts": mock_success_sync["accounts"]}
+            else:
+                resp.json.return_value = mock_success_sync
+            return resp
+        mock_post.side_effect = sync_side_effect
+
+        # Call /api/finance/plaid/sync with reset_cursor=True
+        sync_resp = client.post("/api/finance/plaid/sync", headers=headers, json={"reset_cursor": True, "force": True})
+        assert sync_resp.status_code == 200
+        sync_json = sync_resp.get_json()
+        assert sync_json["synced"] is True
+        assert sync_json["reset_cursor"] is True
+        assert sync_json["imported_transactions"] == 1
+
+    with app_instance.app_context():
+        db = get_db()
+        # Check cursor was updated to fresh cursor and status became healthy
+        updated_item = db.execute("SELECT status, cursor, last_error_code FROM plaid_items WHERE item_id = 'item_test_1'").fetchone()
+        assert updated_item["status"] == "healthy"
+        assert updated_item["cursor"] == "cursor_fresh_999"
+        assert updated_item["last_error_code"] is None
+
+        # Verify transaction was inserted with pending status
+        tx_row = db.execute("SELECT * FROM transactions WHERE plaid_transaction_id = 'tx_new_today_1'").fetchone()
+        assert tx_row is not None
+        assert tx_row["amount"] == 85.50
+        assert tx_row["is_pending"] == 1
+        assert tx_row["date"] == "2026-11-08"
+
+    # Step 4: Test public Plaid Webhook endpoint
+    hook_resp = client.post(
+        "/api/finance/plaid/webhook",
+        json={
+            "webhook_type": "ITEM",
+            "webhook_code": "ERROR",
+            "item_id": "item_test_1",
+            "error": {
+                "error_code": "ITEM_LOGIN_REQUIRED",
+                "error_message": "User credentials expired",
+            },
+        },
+    )
+    assert hook_resp.status_code == 200
+    hook_json = hook_resp.get_json()
+    assert hook_json["received"] is True
+
+    with app_instance.app_context():
+        db = get_db()
+        item_recheck = db.execute("SELECT status, last_error_code FROM plaid_items WHERE item_id = 'item_test_1'").fetchone()
+        assert item_recheck["status"] == "error"
+        assert item_recheck["last_error_code"] == "ITEM_LOGIN_REQUIRED"
+
+
+
 
 
 

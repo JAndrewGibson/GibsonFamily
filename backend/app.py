@@ -19,6 +19,7 @@ PUBLIC_API_PATHS = {
     "/api/auth/logout",
     "/api/auth/webauthn/authenticate/options",
     "/api/auth/webauthn/authenticate/verify",
+    "/api/finance/plaid/webhook",
 }
 
 LOCKED_ALLOWED_API_PATHS = PUBLIC_API_PATHS | {

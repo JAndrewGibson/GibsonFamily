@@ -17,6 +17,7 @@ import {
   DollarSign,
   Edit3,
   History,
+  Key,
   Link2,
   Menu,
   PieChart,
@@ -390,13 +391,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
   };
 
-  const handleOpenPlaidLinkUI = async () => {
+  const handleOpenPlaidLinkUI = async (targetItemId = null) => {
     setPlaidBusy(true);
     setPlaidBanner(null);
     try {
+      const tokenPayload = { partner_id: activePartner?.id || 1 };
+      if (targetItemId) {
+        tokenPayload.item_id = targetItemId;
+      }
       const tokenData = await apiFetch('/api/finance/plaid/create_link_token', {
         method: 'POST',
-        body: JSON.stringify({ partner_id: activePartner?.id || 1 }),
+        body: JSON.stringify(tokenPayload),
       });
 
       if (window.Plaid && tokenData.link_token) {
@@ -405,19 +410,31 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           token: tokenData.link_token,
           onSuccess: async (public_token, metadata) => {
             localStorage.removeItem('gibson_plaid_link_token');
-            const instName = metadata?.institution?.name || 'Plaid Linked Bank';
-            const exRes = await apiFetch('/api/finance/plaid/exchange_public_token', {
-              method: 'POST',
-              body: JSON.stringify({
-                public_token,
-                institution_name: instName,
-                partner_id: activePartner?.id || 1,
-              }),
-            });
-            setPlaidBanner({
-              type: 'success',
-              text: `Linked ${exRes.institution_name}! Synced ${exRes.imported_accounts} accounts and ${exRes.imported_transactions} transactions.`,
-            });
+            if (targetItemId) {
+              // Plaid Update Mode: re-sync immediately with reset_cursor to pull all missed transactions
+              const syncRes = await apiFetch('/api/finance/plaid/sync', {
+                method: 'POST',
+                body: JSON.stringify({ item_id: targetItemId, reset_cursor: true }),
+              });
+              setPlaidBanner({
+                type: 'success',
+                text: `Re-authenticated successfully! Synced ${syncRes.updated_accounts} accounts and ${syncRes.imported_transactions} transactions.`,
+              });
+            } else {
+              const instName = metadata?.institution?.name || 'Plaid Linked Bank';
+              const exRes = await apiFetch('/api/finance/plaid/exchange_public_token', {
+                method: 'POST',
+                body: JSON.stringify({
+                  public_token,
+                  institution_name: instName,
+                  partner_id: activePartner?.id || 1,
+                }),
+              });
+              setPlaidBanner({
+                type: 'success',
+                text: `Linked ${exRes.institution_name}! Synced ${exRes.imported_accounts} accounts and ${exRes.imported_transactions} transactions.`,
+              });
+            }
             await loadFinanceData();
             onDataChanged?.();
             setPlaidBusy(false);
@@ -436,15 +453,45 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
   };
 
-  const handleSyncPlaid = async () => {
+  const handleSyncPlaid = async (options = {}) => {
+    const isReset = Boolean(options.reset_cursor);
     setPlaidBusy(true);
     setPlaidBanner(null);
     try {
-      const res = await apiFetch('/api/finance/plaid/sync', { method: 'POST' });
-      setPlaidBanner({
-        type: 'success',
-        text: `Synced ${res.updated_accounts} accounts and ${res.imported_transactions} transactions from Plaid.`,
+      const res = await apiFetch('/api/finance/plaid/sync', {
+        method: 'POST',
+        body: JSON.stringify({
+          reset_cursor: isReset,
+          force: true,
+        }),
       });
+
+      if (res.item_errors?.length > 0) {
+        const reauthItem = res.item_errors.find((e) => e.requires_reauth);
+        if (reauthItem) {
+          setPlaidBanner({
+            type: 'error',
+            text: `⚠️ ${reauthItem.institution_name} requires re-authentication: Bank login session expired or security verification needed. Click 'Re-authenticate' below to restore live sync.`,
+            reauthItemId: reauthItem.item_id,
+          });
+        } else {
+          setPlaidBanner({
+            type: 'error',
+            text: `Plaid sync warning: ${res.item_errors.map((e) => `${e.institution_name}: ${e.error}`).join('; ')}`,
+          });
+        }
+      } else if (res.imported_transactions === 0 && !isReset) {
+        setPlaidBanner({
+          type: 'info',
+          text: `Synced ${res.updated_accounts} accounts (0 new updates from Plaid incremental sync). If newer settled or pending transactions are still missing, run a Force Full Re-Sync.`,
+          showForceSync: true,
+        });
+      } else {
+        setPlaidBanner({
+          type: 'success',
+          text: `${isReset ? 'Full re-sync complete! ' : ''}Synced ${res.updated_accounts} accounts and ${res.imported_transactions} transactions from Plaid.`,
+        });
+      }
       await loadFinanceData();
     } catch (err) {
       setPlaidBanner({ type: 'error', text: err.message });
@@ -1659,9 +1706,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     <div className="finance-option-copy">
                       <div className="request-badges">
                         <strong>Bank Connections (Plaid)</strong>
-                        <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>
-                          {plaidStatus?.linked_items?.length || 0} Linked
-                        </span>
+                        {plaidStatus?.has_items_requiring_reauth ? (
+                          <span className="pill pill-amber" style={{ fontSize: '0.68rem' }}>
+                            <AlertTriangle size={11} /> Re-auth Required
+                          </span>
+                        ) : (
+                          <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>
+                            {plaidStatus?.linked_items?.length || 0} Linked
+                          </span>
+                        )}
                       </div>
                       <small>Connect live banks via Plaid Link or re-sync transactions</small>
                     </div>
@@ -1674,8 +1727,35 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       </div>
 
       {plaidBanner && (
-        <div className={`alert ${plaidBanner.type === 'error' ? 'alert-error' : 'alert-success'}`}>
+        <div
+          className={`alert ${
+            plaidBanner.type === 'error'
+              ? 'alert-error'
+              : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
+          }`}
+          style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
+        >
           <span>{plaidBanner.text}</span>
+          {plaidBanner.reauthItemId && (
+            <button
+              type="button"
+              className="btn btn-xs btn-amber"
+              disabled={plaidBusy}
+              onClick={() => handleOpenPlaidLinkUI(plaidBanner.reauthItemId)}
+            >
+              <Key size={13} /> Re-authenticate Now
+            </button>
+          )}
+          {plaidBanner.showForceSync && (
+            <button
+              type="button"
+              className="btn btn-xs btn-outline"
+              disabled={plaidBusy}
+              onClick={() => handleSyncPlaid({ reset_cursor: true })}
+            >
+              <RefreshCw size={13} className={plaidBusy ? 'spin' : ''} /> Force Full Re-Sync
+            </button>
+          )}
           <button
             type="button"
             className="btn-icon-subtle"
@@ -3622,10 +3702,33 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               {plaidBanner && (
                 <div
                   className={`alert ${
-                    plaidBanner.type === 'error' ? 'alert-error' : 'alert-success'
+                    plaidBanner.type === 'error'
+                      ? 'alert-error'
+                      : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
                   }`}
+                  style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
                 >
-                  {plaidBanner.text}
+                  <span>{plaidBanner.text}</span>
+                  {plaidBanner.reauthItemId && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-amber"
+                      disabled={plaidBusy}
+                      onClick={() => handleOpenPlaidLinkUI(plaidBanner.reauthItemId)}
+                    >
+                      <Key size={13} /> Re-authenticate Now
+                    </button>
+                  )}
+                  {plaidBanner.showForceSync && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-outline"
+                      disabled={plaidBusy}
+                      onClick={() => handleSyncPlaid({ reset_cursor: true })}
+                    >
+                      <RefreshCw size={13} className={plaidBusy ? 'spin' : ''} /> Force Full Re-Sync
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -3634,20 +3737,33 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   type="button"
                   className="btn btn-primary"
                   disabled={plaidBusy || !plaidStatus?.configured}
-                  onClick={handleOpenPlaidLinkUI}
+                  onClick={() => handleOpenPlaidLinkUI()}
                 >
                   <Link2 size={16} /> Connect Bank via Plaid Link
                 </button>
 
                 {plaidStatus?.linked_items?.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    disabled={plaidBusy}
-                    onClick={handleSyncPlaid}
-                  >
-                    <RefreshCw size={15} className={plaidBusy ? 'spin' : ''} /> Re-Sync Linked Accounts & Transactions
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ flex: '1 1 auto' }}
+                      disabled={plaidBusy}
+                      onClick={() => handleSyncPlaid({ reset_cursor: false })}
+                    >
+                      <RefreshCw size={15} className={plaidBusy ? 'spin' : ''} /> Re-Sync Recent
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      style={{ flex: '1 1 auto' }}
+                      disabled={plaidBusy}
+                      onClick={() => handleSyncPlaid({ reset_cursor: true })}
+                      title="Resets cached Plaid cursors and re-streams all transactions from November 2026 to ensure no missed settled or pending transactions"
+                    >
+                      <RefreshCw size={15} className={plaidBusy ? 'spin' : ''} /> Force Full Re-Sync (Reset Cursor)
+                    </button>
+                  </div>
                 )}
 
                 {plaidStatus?.environment === 'sandbox' && (
@@ -3694,7 +3810,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           <div>
                             <div className="request-badges">
                               <strong>{item.institution_name || 'Linked Bank'}</strong>
-                              <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>Connected</span>
+                              {item.requires_reauth ? (
+                                <span className="pill pill-amber" style={{ fontSize: '0.68rem' }}>
+                                  <AlertTriangle size={11} /> Re-auth Required
+                                </span>
+                              ) : (
+                                <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>Connected</span>
+                              )}
                               {item.account_count > 0 && (
                                 <span className="pill pill-outline" style={{ fontSize: '0.68rem' }}>
                                   {item.account_count} Account{item.account_count === 1 ? '' : 's'}
@@ -3703,10 +3825,26 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             </div>
                             <small className="text-muted" style={{ display: 'block' }}>
                               Linked: {item.created_at ? item.created_at.slice(0, 10) : 'Active'} • ID: <code style={{ fontSize: '0.72rem' }}>{item.item_id ? item.item_id.slice(0, 12) : item.id}...</code>
+                              {item.last_error && (
+                                <span className="text-danger" style={{ display: 'block', marginTop: '0.15rem', wordBreak: 'break-word' }}>
+                                  ⚠️ {item.last_error}
+                                </span>
+                              )}
                             </small>
                           </div>
                         </div>
-                        <div className="topbar-right">
+                        <div className="topbar-right" style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                          {item.requires_reauth && (
+                            <button
+                              type="button"
+                              className="btn btn-amber btn-xs"
+                              disabled={plaidBusy}
+                              onClick={() => handleOpenPlaidLinkUI(item.item_id)}
+                              title="Re-authenticate bank login"
+                            >
+                              <Key size={13} /> Re-authenticate
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn btn-danger btn-xs"
