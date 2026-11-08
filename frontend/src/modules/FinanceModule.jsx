@@ -1354,13 +1354,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 title={`Set ledger color to ${hex}`}
               />
             ))}
-            <input
-              type="color"
-              className="account-custom-color-input"
-              value={cardColor}
-              onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
-              title="Choose custom account color"
-            />
+            <label className="account-custom-color-input" title="Choose custom account color">
+              <input
+                type="color"
+                value={cardColor}
+                onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
+              />
+            </label>
           </div>
         </div>
 
@@ -1754,7 +1754,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
 
           <div className="income-metric-box">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.35rem' }}>
+            <div className="income-metric-title-row">
               <span className="text-muted">Projected Income</span>
               <button
                 type="button"

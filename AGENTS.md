@@ -24,10 +24,12 @@ Because this application is used **99% of the time on mobile phones**, every vie
    - On viewports `<= 900px`, the desktop left `.sidebar` transforms into a slide-over drawer (`position: fixed`, toggled via `.mobile-menu-trigger`) with a dimmed `.sidebar-backdrop`.
    - Primary navigation is always reachable with one thumb via the fixed bottom bar (`.mobile-bottom-nav`) with `env(safe-area-inset-bottom)` padding, and `.content-scroll` reserves bottom padding so content is never obscured by the bottom bar.
 3. **iOS Safari Zoom Prevention**:
-   - All `<input>`, `<select>`, and `<textarea>` elements must have `font-size: 16px` (`1rem`) and `min-height: 42px` on `@media (max-width: 768px)` so iOS Safari never auto-zooms the page when a field is tapped.
-4. **Tables & Popovers on Mobile**:
+   - All `<input>`, `<select>`, and `<textarea>` elements must have `font-size: 16px !important` and `min-height: 42px !important` on `@media (max-width: 768px)` so iOS Safari never auto-zooms the page when a field is tapped.
+4. **Tables, Modals & Popovers on Mobile**:
    - Multi-column tables (such as `.tx-table` in `FinanceModule.jsx`) must transform into stacked mobile cards (`tr.tx-row` CSS grid) at `@media (max-width: 768px)`.
-   - Row action menus (`.tx-hamburger-popover`) and notification dropdowns (`.notif-dropdown-card`) must use fixed positioning (bottom sheet / centered card) on mobile so they are never clipped inside scroll containers.
+   - Modals (`.finance-modal-backdrop`, `.finance-modal-card`) transform into mobile-first bottom sheets with safe-area padding (`env(safe-area-inset-bottom)`), compact headers/bodies, and full-width buttons.
+   - Row action menus (`.tx-hamburger-popover`), options menus (`.finance-options-dropdown`), and notification dropdowns (`.notif-dropdown-card`) must use fixed positioning (bottom sheet / centered card) on mobile so they are never clipped inside scroll containers.
+   - Limit tags on layered horizontal bars (`.marker-tag.tag-top` on top, `.marker-tag.tag-max` on bottom) are vertically separated so markers never collide or overlap when budget limits approach 100%.
 
 ---
 
