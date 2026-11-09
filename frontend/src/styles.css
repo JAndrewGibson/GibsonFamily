@@ -1574,12 +1574,48 @@ body {
   display: inline-block;
 }
 
-/* Category Budgets Sort & Cancel Controls */
+/* Category Budgets Card Header & Responsive Controls */
+.category-budgets-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.category-budgets-title-block {
+  width: 100%;
+}
+
+.category-budgets-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.budget-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.budget-card-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
 .budget-sort-box {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  max-width: 100%;
+  flex: 1 1 180px;
+  min-width: 150px;
+  max-width: 250px;
   box-sizing: border-box;
 }
 
@@ -1588,9 +1624,8 @@ body {
 }
 
 .budget-sort-select {
-  width: auto;
-  min-width: 175px;
-  max-width: 100%;
+  width: 100%;
+  min-width: 0;
   cursor: pointer;
   box-sizing: border-box;
 }
@@ -2102,13 +2137,10 @@ body {
 
   /* Category Budgets Header & Sort Dropdown */
   .category-budgets-header {
-    flex-direction: column;
-    align-items: stretch;
     gap: 0.65rem;
     margin-bottom: 0.65rem;
   }
 
-  .category-budgets-header .topbar-right,
   .budget-card-controls {
     width: 100%;
     max-width: 100%;
@@ -2121,11 +2153,12 @@ body {
   .budget-sort-box {
     width: 100%;
     max-width: 100%;
+    flex: 1 1 100%;
     display: flex;
     align-items: center;
     gap: 0.45rem;
     box-sizing: border-box;
-    margin-bottom: 0.25rem;
+    margin-bottom: 0.15rem;
   }
 
   .budget-sort-box svg {
@@ -2138,6 +2171,18 @@ body {
     min-width: 0;
     max-width: 100%;
     box-sizing: border-box;
+  }
+
+  .budget-card-btn-group {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .budget-card-btn-group .btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .budget-row-top {

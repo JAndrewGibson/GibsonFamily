@@ -2263,15 +2263,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       <div className="finance-two-col">
         {/* LEFT COLUMN: Monthly Category Budgets with Persistent Sort Order */}
         <div className="card">
-          <div className="plan-card-header category-budgets-header">
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div className="category-budgets-header">
+            <div className="category-budgets-title-block">
+              <div className="category-budgets-title-row">
                 <h3 style={{ margin: 0 }}>{formatMonthLabel(selectedMonth)} Category Budgets</h3>
                 {dismissCategoryBalanceStrip && (
                   <button
                     type="button"
                     className="pill pill-outline"
-                    style={{ cursor: 'pointer', fontSize: '0.72rem', padding: '0.15rem 0.5rem' }}
+                    style={{ cursor: 'pointer', fontSize: '0.72rem', padding: '0.15rem 0.5rem', whiteSpace: 'nowrap' }}
                     onClick={handleShowCategoryBalanceStrip}
                     title="Click to view budget balance status banner"
                   >
@@ -2291,11 +2291,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   </button>
                 )}
               </div>
-              <small className="text-muted" style={{ display: 'block', marginTop: '0.2rem' }}>
+              <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
                 Adjust or cancel categories for {formatShortMonth(selectedMonth)} without altering prior months
               </small>
             </div>
-            <div className="topbar-right budget-card-controls">
+            <div className="budget-card-controls">
               <div className="budget-sort-box" title="Sort order is saved in your browser cookie">
                 <ArrowUpDown size={13} className="text-muted" />
                 <select
@@ -2311,26 +2311,28 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   ))}
                 </select>
               </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleOpenAndScrollToCategoryManager()}
-                title="Open Category Manager modal"
-              >
-                <Tags size={14} /> Categories
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={() => {
-                  setBudgetCat('');
-                  setBudgetLimit('500');
-                  setBudgetScope('this_and_future');
-                  setShowBudgetModal(true);
-                }}
-              >
-                <Plus size={14} /> Add / Adjust
-              </button>
+              <div className="budget-card-btn-group">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleOpenAndScrollToCategoryManager()}
+                  title="Open Category Manager modal"
+                >
+                  <Tags size={14} /> Categories
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    setBudgetCat('');
+                    setBudgetLimit('500');
+                    setBudgetScope('this_and_future');
+                    setShowBudgetModal(true);
+                  }}
+                >
+                  <Plus size={14} /> Add / Adjust
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2453,7 +2455,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         : `$${b.remaining.toFixed(2)} remaining for ${formatShortMonth(selectedMonth)}`}
                       {b.returns_credited > 0 && (
                         <span className="text-cyan" style={{ marginLeft: '0.45rem', display: 'inline-block' }}>
-                          • +${b.returns_credited.toFixed(2)} return credited ($${b.gross_spent.toFixed(2)} gross)
+                          • +${b.returns_credited.toFixed(2)} return credited (${b.gross_spent.toFixed(2)} gross)
                         </span>
                       )}
                     </small>
