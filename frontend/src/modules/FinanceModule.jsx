@@ -230,6 +230,29 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [txMonthOffset, setTxMonthOffset] = useState('0');
   const [txNotes, setTxNotes] = useState('');
 
+  // Dismissable Category Budgets Balance Strip
+  const [dismissCategoryBalanceStrip, setDismissCategoryBalanceStrip] = useState(() => {
+    const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
+    const clamped = saved < STARTING_MONTH ? STARTING_MONTH : saved;
+    return getCookie(`gibson_dismiss_balance_strip_${clamped}`, '0') === '1';
+  });
+
+  useEffect(() => {
+    setDismissCategoryBalanceStrip(
+      getCookie(`gibson_dismiss_balance_strip_${selectedMonth}`, '0') === '1'
+    );
+  }, [selectedMonth]);
+
+  const handleDismissCategoryBalanceStrip = () => {
+    setDismissCategoryBalanceStrip(true);
+    setCookie(`gibson_dismiss_balance_strip_${selectedMonth}`, '1', 365);
+  };
+
+  const handleShowCategoryBalanceStrip = () => {
+    setDismissCategoryBalanceStrip(false);
+    setCookie(`gibson_dismiss_balance_strip_${selectedMonth}`, '0', 365);
+  };
+
   // Add / Adjust Month Budget Floating Modal State
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetCat, setBudgetCat] = useState('');
@@ -2240,14 +2263,39 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       <div className="finance-two-col">
         {/* LEFT COLUMN: Monthly Category Budgets with Persistent Sort Order */}
         <div className="card">
-          <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
+          <div className="plan-card-header category-budgets-header">
             <div>
-              <h3>{formatMonthLabel(selectedMonth)} Category Budgets</h3>
-              <small className="text-muted">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0 }}>{formatMonthLabel(selectedMonth)} Category Budgets</h3>
+                {dismissCategoryBalanceStrip && (
+                  <button
+                    type="button"
+                    className="pill pill-outline"
+                    style={{ cursor: 'pointer', fontSize: '0.72rem', padding: '0.15rem 0.5rem' }}
+                    onClick={handleShowCategoryBalanceStrip}
+                    title="Click to view budget balance status banner"
+                  >
+                    {budgetExceedsProjected ? (
+                      <span className="text-danger" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <AlertTriangle size={11} /> Over-Budget Info
+                      </span>
+                    ) : spentDippingIntoSavings ? (
+                      <span className="text-amber" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <AlertTriangle size={11} /> Savings Warning
+                      </span>
+                    ) : (
+                      <span className="text-green" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <CheckCircle2 size={11} /> Balanced Info
+                      </span>
+                    )}
+                  </button>
+                )}
+              </div>
+              <small className="text-muted" style={{ display: 'block', marginTop: '0.2rem' }}>
                 Adjust or cancel categories for {formatShortMonth(selectedMonth)} without altering prior months
               </small>
             </div>
-            <div className="topbar-right" style={{ flexWrap: 'wrap' }}>
+            <div className="topbar-right budget-card-controls">
               <div className="budget-sort-box" title="Sort order is saved in your browser cookie">
                 <ArrowUpDown size={13} className="text-muted" />
                 <select
@@ -2287,45 +2335,56 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
 
           {/* Obvious Budgeted vs. Projected Income Status Bar inside Category Budgets Card */}
-          <div
-            className={`category-budgets-balance-strip ${
-              budgetExceedsProjected
-                ? 'strip-danger'
-                : spentDippingIntoSavings
-                ? 'strip-warn'
-                : 'strip-balanced'
-            }`}
-          >
-            <div className="balance-strip-left">
-              {budgetExceedsProjected ? (
-                <AlertTriangle size={16} className="text-danger" />
-              ) : spentDippingIntoSavings ? (
-                <AlertTriangle size={16} className="text-amber" />
-              ) : (
-                <CheckCircle2 size={16} className="text-green" />
-              )}
-              <div>
-                <strong>
-                  {budgetExceedsProjected
-                    ? `Over-Budgeted! Categories Exceed Projected Income by +$${budgetOverProjectedAmt.toFixed(2)}`
-                    : spentDippingIntoSavings
-                    ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
-                    : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
-                </strong>
-                <small className="text-muted" style={{ display: 'block' }}>
-                  Total Budgeted: <strong>${totalBudget.toFixed(2)}</strong> ($
-                  {expenseBudgetLimit.toFixed(0)} spending + ${savingsBudgetLimit.toFixed(0)}{' '}
-                  savings) vs. Projected Income: <strong>${projectedIncome.toFixed(2)}</strong>
-                  {Number(summary.total_monthly_returns || 0) > 0 && (
-                    <span className="text-cyan" style={{ display: 'block', marginTop: '0.2rem' }}>
-                      ⚖️ <strong>Financial Equilibrium</strong>: +$
-                      {Number(summary.total_monthly_returns).toFixed(2)} in store returns credited back to category budgets (offsets spend without inflating income).
-                    </span>
-                  )}
-                </small>
+          {!dismissCategoryBalanceStrip && (
+            <div
+              className={`category-budgets-balance-strip ${
+                budgetExceedsProjected
+                  ? 'strip-danger'
+                  : spentDippingIntoSavings
+                  ? 'strip-warn'
+                  : 'strip-balanced'
+              }`}
+            >
+              <div className="balance-strip-left">
+                {budgetExceedsProjected ? (
+                  <AlertTriangle size={16} className="text-danger" />
+                ) : spentDippingIntoSavings ? (
+                  <AlertTriangle size={16} className="text-amber" />
+                ) : (
+                  <CheckCircle2 size={16} className="text-green" />
+                )}
+                <div>
+                  <strong>
+                    {budgetExceedsProjected
+                      ? `Over-Budgeted! Categories Exceed Projected Income by +$${budgetOverProjectedAmt.toFixed(2)}`
+                      : spentDippingIntoSavings
+                      ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
+                      : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
+                  </strong>
+                  <small className="text-muted" style={{ display: 'block' }}>
+                    Total Budgeted: <strong>${totalBudget.toFixed(2)}</strong> ($
+                    {expenseBudgetLimit.toFixed(0)} spending + ${savingsBudgetLimit.toFixed(0)}{' '}
+                    savings) vs. Projected Income: <strong>${projectedIncome.toFixed(2)}</strong>
+                    {Number(summary.total_monthly_returns || 0) > 0 && (
+                      <span className="text-cyan" style={{ display: 'block', marginTop: '0.2rem' }}>
+                        ⚖️ <strong>Financial Equilibrium</strong>: +$
+                        {Number(summary.total_monthly_returns).toFixed(2)} in store returns credited back to category budgets (offsets spend without inflating income).
+                      </span>
+                    )}
+                  </small>
+                </div>
               </div>
+              <button
+                type="button"
+                className="btn-icon-subtle balance-strip-close"
+                onClick={handleDismissCategoryBalanceStrip}
+                aria-label="Dismiss status banner"
+                title="Dismiss status banner"
+              >
+                <X size={16} />
+              </button>
             </div>
-          </div>
+          )}
 
           {sortedBudgets.length === 0 ? (
             <div className="empty-state-box">
