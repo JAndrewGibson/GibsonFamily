@@ -72,16 +72,22 @@ const CHART_VIEWS = [
 ];
 
 const PIE_PALETTE = [
-  '#6366f1',
-  '#06b6d4',
-  '#10b981',
-  '#f59e0b',
-  '#ec4899',
-  '#a855f7',
-  '#3b82f6',
-  '#14b8a6',
-  '#f97316',
-  '#ef4444',
+  '#6366f1', // Indigo
+  '#06b6d4', // Cyan
+  '#10b981', // Emerald
+  '#f59e0b', // Amber
+  '#ec4899', // Pink
+  '#8b5cf6', // Violet
+  '#3b82f6', // Blue
+  '#14b8a6', // Teal
+  '#f97316', // Orange
+  '#ef4444', // Red
+  '#84cc16', // Lime
+  '#0ea5e9', // Sky Blue
+  '#d946ef', // Fuchsia
+  '#eab308', // Yellow
+  '#22c55e', // Green
+  '#64748b', // Slate
 ];
 
 const ACCOUNT_COLOR_PALETTE = [
@@ -309,9 +315,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   ) => {
     if (!silent) setLoading(true);
     try {
-      const query = `?month=${encodeURIComponent(monthOverride)}${
-        allMonthsOverride ? '&include_all_months=true' : ''
-      }`;
+      const query = `?month=${encodeURIComponent(monthOverride)}${allMonthsOverride ? '&include_all_months=true' : ''
+        }`;
       const [sumData, pStatus, hist] = await Promise.all([
         apiFetch(`/api/finance/summary${query}`),
         apiFetch('/api/finance/plaid/status'),
@@ -338,7 +343,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     apiFetch('/api/finance/plaid/auto-sync', {
       method: 'POST',
       body: JSON.stringify({ background: true }),
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   // Real-time partner reactivity
@@ -840,8 +845,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       summary?.custom_projected_income != null
         ? Number(summary.custom_projected_income).toFixed(2)
         : summary?.projected_monthly_income != null
-        ? Number(summary.projected_monthly_income).toFixed(2)
-        : '';
+          ? Number(summary.projected_monthly_income).toFixed(2)
+          : '';
     setCustomProjInput(initialVal);
     setShowProjectionModal(true);
   };
@@ -977,13 +982,13 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     new Set(
       summary.all_categories && summary.all_categories.length > 0
         ? [
-            ...summary.all_categories,
-            ...(summary.budgets || []).map((b) => b.category),
-          ]
+          ...summary.all_categories,
+          ...(summary.budgets || []).map((b) => b.category),
+        ]
         : [
-            ...(summary.budgets || []).map((b) => b.category),
-            ...DEFAULT_CATEGORIES,
-          ]
+          ...(summary.budgets || []).map((b) => b.category),
+          ...DEFAULT_CATEGORIES,
+        ]
     )
   );
 
@@ -1042,9 +1047,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   // Separate explicit savings budgets (e.g. "Future Purchase Savings") from spending category budgets
   const savingsBudgetLimit = Number(
     summary.savings_budget_limit ??
-      (summary.budgets || [])
-        .filter((b) => /saving/i.test(b.category || ''))
-        .reduce((acc, b) => acc + Number(b.monthly_limit || 0), 0)
+    (summary.budgets || [])
+      .filter((b) => /saving/i.test(b.category || ''))
+      .reduce((acc, b) => acc + Number(b.monthly_limit || 0), 0)
   );
   const expenseBudgetLimit = Math.max(0, totalBudget - savingsBudgetLimit);
   const unallocatedProjectedSavings = Math.max(0, projectedIncome - totalBudget);
@@ -1241,7 +1246,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     cumulativePercent += pct;
     return {
       ...item,
-      color: item.color || PIE_PALETTE[idx % PIE_PALETTE.length],
+      color: PIE_PALETTE[idx % PIE_PALETTE.length],
       pct,
       startPct,
     };
@@ -1369,10 +1374,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     const clusterClass = isCredit
       ? 'account-card-credit'
       : isSav
-      ? 'account-card-savings'
-      : isChk
-      ? 'account-card-checking'
-      : 'account-card-other';
+        ? 'account-card-savings'
+        : isChk
+          ? 'account-card-checking'
+          : 'account-card-other';
     const isUpdating = updatingAccountId === acc.id;
     const isConfirmingDelete = confirmDeleteAccId === acc.id;
     const cardColor = acc.color || '#06b6d4';
@@ -1441,9 +1446,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             {isCredit ? 'Current Balance (Debt)' : 'Current Balance'}
           </div>
           <div
-            className={`account-balance-figure ${
-              isCredit ? 'text-amber' : isSav ? 'text-green' : 'text-cyan'
-            }`}
+            className={`account-balance-figure ${isCredit ? 'text-amber' : isSav ? 'text-green' : 'text-cyan'
+              }`}
           >
             $
             {Number(acc.balance_current || 0).toLocaleString('en-US', {
@@ -1470,9 +1474,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <button
                 key={hex}
                 type="button"
-                className={`account-color-swatch-btn ${
-                  cardColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''
-                }`}
+                className={`account-color-swatch-btn ${cardColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''
+                  }`}
                 style={{ backgroundColor: hex }}
                 onClick={() => handleUpdateAccountColor(acc.id, hex)}
                 title={`Set ledger color to ${hex}`}
@@ -1611,9 +1614,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           <div className="finance-options-wrapper">
             <button
               type="button"
-              className={`btn btn-secondary finance-options-trigger ${
-                showOptionsMenu ? 'active' : ''
-              }`}
+              className={`btn btn-secondary finance-options-trigger ${showOptionsMenu ? 'active' : ''
+                }`}
               onClick={() => setShowOptionsMenu(!showOptionsMenu)}
               aria-expanded={showOptionsMenu}
             >
@@ -1804,11 +1806,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
       {plaidBanner && (
         <div
-          className={`alert ${
-            plaidBanner.type === 'error'
+          className={`alert ${plaidBanner.type === 'error'
               ? 'alert-error'
               : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
-          }`}
+            }`}
           style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
         >
           <span>{plaidBanner.text}</span>
@@ -1847,11 +1848,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           1. TOP OF PAGE: MONTHLY INCOME, LAYERED BALANCE BAR & FLUCTUATION TRACKER
          ===================================================================== */}
       <div
-        className={`card income-fluctuation-card ${
-          budgetExceedsProjected || spentExceedsProjected
+        className={`card income-fluctuation-card ${budgetExceedsProjected || spentExceedsProjected
             ? 'card-overbudget-alert'
             : ''
-        }`}
+          }`}
       >
         <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
           <div>
@@ -1980,9 +1980,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
 
           <div
-            className={`income-metric-box ${
-              budgetExceedsProjected ? 'metric-box-danger' : ''
-            }`}
+            className={`income-metric-box ${budgetExceedsProjected ? 'metric-box-danger' : ''
+              }`}
           >
             <span className="text-muted">
               {budgetExceedsProjected
@@ -1994,17 +1993,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 budgetExceedsProjected
                   ? 'text-danger'
                   : Number(summary.projected_unallocated_income || 0) >= 0
-                  ? 'text-green'
-                  : 'text-amber'
+                    ? 'text-green'
+                    : 'text-amber'
               }
             >
               {budgetExceedsProjected
                 ? `Over by +$${budgetOverProjectedAmt.toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                  })}`
+                  minimumFractionDigits: 2,
+                })}`
                 : `+$${totalGreySavings.toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                  })} Savings`}
+                  minimumFractionDigits: 2,
+                })} Savings`}
             </strong>
             <small className="text-muted">
               Budgeted: ${totalBudget.toFixed(0)} / Projected: ${projectedIncome.toFixed(0)}
@@ -2039,8 +2038,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   {budgetExceedsProjected && spentExceedsProjected
                     ? `Budget +$${budgetOverProjectedAmt.toFixed(0)} & Spend +$${spentOverProjectedAmt.toFixed(0)} Over Projected Max!`
                     : budgetExceedsProjected
-                    ? `Budget Exceeds Projected Max by +$${budgetOverProjectedAmt.toFixed(2)}`
-                    : `Spending Exceeds Projected Max by +$${spentOverProjectedAmt.toFixed(2)}`}
+                      ? `Budget Exceeds Projected Max by +$${budgetOverProjectedAmt.toFixed(2)}`
+                      : `Spending Exceeds Projected Max by +$${spentOverProjectedAmt.toFixed(2)}`}
                 </span>
               </div>
             )}
@@ -2096,11 +2095,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 {/* Safe Spending Portion (Before Grey Savings Zone) */}
                 {safeSpentWidthPct > 0 && (
                   <div
-                    className={`layer-spend-fill ${
-                      spentExceedsExpenseBudget
+                    className={`layer-spend-fill ${spentExceedsExpenseBudget
                         ? 'spend-fill-warn'
                         : 'spend-fill-ok'
-                    }`}
+                      }`}
                     style={{
                       left: '0%',
                       width: `${safeSpentWidthPct}%`,
@@ -2131,7 +2129,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               {expenseBudgetLimit > 0 && (
                 <div
                   className="layer-limit-marker marker-expense-budget"
-                  style={{ left: `${ Math.min(99.5, expenseBudgetPct) }%` }}
+                  style={{ left: `${Math.min(99.5, expenseBudgetPct)}%` }}
                   title={`Spending Categories Limit: $${expenseBudgetLimit.toFixed(2)}`}
                 >
                   <span className="marker-tag tag-top">
@@ -2206,9 +2204,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               {overlapFlags.map((flag) => (
                 <div
                   key={flag.id}
-                  className={`overlap-warning-card ${
-                    flag.severity === 'danger' ? 'overlap-danger' : 'overlap-warn'
-                  }`}
+                  className={`overlap-warning-card ${flag.severity === 'danger' ? 'overlap-danger' : 'overlap-warn'
+                    }`}
                 >
                   <AlertTriangle size={17} className="overlap-warn-icon" />
                   <div className="overlap-warn-copy">
@@ -2339,13 +2336,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           {/* Obvious Budgeted vs. Projected Income Status Bar inside Category Budgets Card */}
           {!dismissCategoryBalanceStrip && (
             <div
-              className={`category-budgets-balance-strip ${
-                budgetExceedsProjected
+              className={`category-budgets-balance-strip ${budgetExceedsProjected
                   ? 'strip-danger'
                   : spentDippingIntoSavings
-                  ? 'strip-warn'
-                  : 'strip-balanced'
-              }`}
+                    ? 'strip-warn'
+                    : 'strip-balanced'
+                }`}
             >
               <div className="balance-strip-left">
                 {budgetExceedsProjected ? (
@@ -2360,8 +2356,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     {budgetExceedsProjected
                       ? `Over-Budgeted! Categories Exceed Projected Income by +$${budgetOverProjectedAmt.toFixed(2)}`
                       : spentDippingIntoSavings
-                      ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
-                      : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
+                        ? `Spending Dipping $${spentDippingIntoSavingsAmt.toFixed(2)} Into Savings!`
+                        : `Balanced Budget — $${totalGreySavings.toFixed(2)} Preserved for Savings`}
                   </strong>
                   <small className="text-muted" style={{ display: 'block' }}>
                     Total Budgeted: <strong>${totalBudget.toFixed(2)}</strong> ($
@@ -2442,10 +2438,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     </div>
                     <div className="progress-track">
                       <div
-                        className={`progress-fill ${over ? 'fill-danger' : ''}`}
+                        className={`progress-fill ${over ? 'fill-danger' : 'fill-success'}`}
                         style={{
                           width: `${Math.min(100, b.utilization_pct)}%`,
-                          background: over ? '#ef4444' : b.color,
+                          background: over ? '#ef4444' : '#10b981',
                         }}
                       />
                     </div>
@@ -2575,9 +2571,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <button
                           key={m.budget_month}
                           type="button"
-                          className={`multi-month-col ${
-                            m.budget_month === selectedMonth ? 'selected' : ''
-                          }`}
+                          className={`multi-month-col ${m.budget_month === selectedMonth ? 'selected' : ''
+                            }`}
                           onClick={() => setSelectedMonth(m.budget_month)}
                           title={`${formatMonthLabel(m.budget_month)}: Projected $${Number(
                             m.projected_income || 0
@@ -2721,10 +2716,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         </div>
                         <div className="hbar-dual-track">
                           <div
-                            className="hbar-fill"
+                            className={`hbar-fill ${isOver ? 'fill-danger' : 'fill-success'}`}
                             style={{
                               width: `${Math.min(100, pct)}%`,
-                              background: isOver ? '#ef4444' : b.color || '#6366f1',
+                              background: isOver ? '#ef4444' : '#10b981',
                             }}
                           />
                         </div>
@@ -2762,9 +2757,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     return (
                       <div
                         key={m.budget_month}
-                        className={`cashflow-trend-row ${
-                          m.budget_month === selectedMonth ? 'active' : ''
-                        }`}
+                        className={`cashflow-trend-row ${m.budget_month === selectedMonth ? 'active' : ''
+                          }`}
                         onClick={() => setSelectedMonth(m.budget_month)}
                       >
                         <div className="cashflow-trend-meta">
@@ -2776,9 +2770,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           </div>
                           <div className="topbar-right">
                             <span
-                              className={`font-mono ${
-                                net >= 0 ? 'text-green' : 'text-danger'
-                              }`}
+                              className={`font-mono ${net >= 0 ? 'text-green' : 'text-danger'
+                                }`}
                             >
                               <strong>
                                 {net >= 0 ? '+' : '-'}${Math.abs(net).toFixed(2)}
@@ -2786,9 +2779,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             </span>
                             {inc > 0 && (
                               <span
-                                className={`pill ${
-                                  savingsRate >= 0 ? 'pill-green' : 'pill-red'
-                                }`}
+                                className={`pill ${savingsRate >= 0 ? 'pill-green' : 'pill-red'
+                                  }`}
                                 style={{ fontSize: '0.68rem' }}
                               >
                                 {savingsRate}% saved
@@ -2826,14 +2818,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <div>
                 <strong>
                   {untrackedWithSpend.length > 0
-                    ? `${untrackedWithSpend.length} Categor${
-                        untrackedWithSpend.length === 1 ? 'y has' : 'ies have'
-                      } $${Number(summary.untracked_monthly_spent || 0).toFixed(
-                        2
-                      )} in Untracked Spending for ${formatShortMonth(selectedMonth)}`
-                    : `${untrackedCategories.length} Categor${
-                        untrackedCategories.length === 1 ? 'y is' : 'ies are'
-                      } Not Tracked in ${formatShortMonth(selectedMonth)}'s Budget`}
+                    ? `${untrackedWithSpend.length} Categor${untrackedWithSpend.length === 1 ? 'y has' : 'ies have'
+                    } $${Number(summary.untracked_monthly_spent || 0).toFixed(
+                      2
+                    )} in Untracked Spending for ${formatShortMonth(selectedMonth)}`
+                    : `${untrackedCategories.length} Categor${untrackedCategories.length === 1 ? 'y is' : 'ies are'
+                    } Not Tracked in ${formatShortMonth(selectedMonth)}'s Budget`}
                 </strong>
                 <p className="text-muted" style={{ fontSize: '0.82rem' }}>
                   These pre-loaded or custom categories do not have a monthly budget limit set for{' '}
@@ -2970,21 +2960,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   },
                   {
                     id: 'untracked',
-                    label: `⚠️ Not Tracked (${
-                      catalogList.filter((c) => !c.is_tracked && !c.is_archived).length
-                    })`,
+                    label: `⚠️ Not Tracked (${catalogList.filter((c) => !c.is_tracked && !c.is_archived).length
+                      })`,
                   },
                   {
                     id: 'preloaded',
-                    label: `Pre-Loaded (${
-                      catalogList.filter((c) => c.is_preloaded && !c.is_archived).length
-                    })`,
+                    label: `Pre-Loaded (${catalogList.filter((c) => c.is_preloaded && !c.is_archived).length
+                      })`,
                   },
                   {
                     id: 'custom',
-                    label: `Custom (${
-                      catalogList.filter((c) => c.is_custom && !c.is_archived).length
-                    })`,
+                    label: `Custom (${catalogList.filter((c) => c.is_custom && !c.is_archived).length
+                      })`,
                   },
                   {
                     id: 'archived',
@@ -3014,9 +3001,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     return (
                       <div
                         key={cat.name}
-                        className={`category-manager-item ${
-                          !cat.is_tracked && !cat.is_archived ? 'untracked-item' : ''
-                        }`}
+                        className={`category-manager-item ${!cat.is_tracked && !cat.is_archived ? 'untracked-item' : ''
+                          }`}
                       >
                         <div className="category-manager-main">
                           <div className="category-manager-info">
@@ -3316,9 +3302,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 backgroundColor: `${txAccColor}1f`,
                                 color: txAccColor,
                               }}
-                              title={`Paid with ${tx.account_name}${
-                                tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
-                              }`}
+                              title={`Paid with ${tx.account_name}${tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
+                                }`}
                             >
                               <span
                                 className="tx-account-color-dot"
@@ -3436,9 +3421,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       <td className="text-right tx-hamburger-cell">
                         <button
                           type="button"
-                          className={`btn btn-secondary btn-xs tx-hamburger-btn ${
-                            isMenuOpen ? 'active' : ''
-                          }`}
+                          className={`btn btn-secondary btn-xs tx-hamburger-btn ${isMenuOpen ? 'active' : ''
+                            }`}
                           onClick={() =>
                             setOpenMenuTxId(isMenuOpen ? null : tx.id)
                           }
@@ -3678,9 +3662,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       <button
                         key={ym}
                         type="button"
-                        className={`month-ribbon-pill ${isSelected ? 'active' : ''} ${
-                          isCurrent ? 'current-calendar' : ''
-                        }`}
+                        className={`month-ribbon-pill ${isSelected ? 'active' : ''} ${isCurrent ? 'current-calendar' : ''
+                          }`}
                         onClick={() => {
                           setSelectedMonth(ym);
                           setShowPeriodModal(false);
@@ -3711,9 +3694,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       return (
                         <div
                           key={mItem.budget_month}
-                          className={`card history-month-card ${
-                            mItem.budget_month === selectedMonth ? 'selected-month-card' : ''
-                          }`}
+                          className={`card history-month-card ${mItem.budget_month === selectedMonth ? 'selected-month-card' : ''
+                            }`}
                         >
                           <div className="plan-card-header">
                             <div>
@@ -3889,11 +3871,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
               {plaidBanner && (
                 <div
-                  className={`alert ${
-                    plaidBanner.type === 'error'
+                  className={`alert ${plaidBanner.type === 'error'
                       ? 'alert-error'
                       : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
-                  }`}
+                    }`}
                   style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
                 >
                   <span>{plaidBanner.text}</span>
@@ -5653,13 +5634,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             <SlidersHorizontal size={12} /> Reclassify
                           </button>
                           <strong
-                            className={`font-mono ${
-                              inc.income_type === 'return'
+                            className={`font-mono ${inc.income_type === 'return'
                                 ? 'text-cyan'
                                 : isEarned
-                                ? 'text-green'
-                                : 'text-muted'
-                            }`}
+                                  ? 'text-green'
+                                  : 'text-muted'
+                              }`}
                           >
                             {isEarned ? '+' : ''}$
                             {Number(inc.amount).toLocaleString('en-US', {

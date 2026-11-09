@@ -684,6 +684,14 @@ body {
   transition: width 0.3s ease;
 }
 
+.progress-fill.fill-success {
+  background: #10b981;
+}
+
+.progress-fill.fill-danger {
+  background: #ef4444;
+}
+
 .decision-note-banner {
   font-size: 0.84rem;
   color: #e5e7eb;
@@ -3610,6 +3618,14 @@ html[data-theme='light'] .history-cat-row {
   height: 100%;
   border-radius: 999px;
   transition: width 0.3s ease;
+}
+
+.hbar-fill.fill-success {
+  background: #10b981;
+}
+
+.hbar-fill.fill-danger {
+  background: #ef4444;
 }
 
 html[data-theme='light'] .chart-tab-btn.active {
