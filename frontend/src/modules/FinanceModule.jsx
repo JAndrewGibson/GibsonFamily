@@ -1168,6 +1168,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   };
 
   const handleQuickTrackCategory = (catName) => {
+    if (!catName || ['split', 'spent from savings', 'credit card payment', 'split category'].includes(catName.trim().toLowerCase())) {
+      return;
+    }
     setBudgetCat(catName);
     setBudgetLimit('300');
     setBudgetScope('this_and_future');
@@ -1254,10 +1257,37 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           ...DEFAULT_CATEGORIES,
         ]
     )
-  );
+  ).filter((c) => {
+    const lower = (c || '').trim().toLowerCase();
+    return (
+      lower &&
+      lower !== 'split' &&
+      lower !== 'spent from savings' &&
+      lower !== 'credit card payment' &&
+      lower !== 'split category'
+    );
+  });
 
-  const catalogList = summary.categories_catalog || [];
-  const untrackedCategories = summary.untracked_categories || [];
+  const catalogList = (summary.categories_catalog || []).filter((c) => {
+    const lower = (c.name || '').trim().toLowerCase();
+    return (
+      lower &&
+      lower !== 'split' &&
+      lower !== 'spent from savings' &&
+      lower !== 'credit card payment' &&
+      lower !== 'split category'
+    );
+  });
+  const untrackedCategories = (summary.untracked_categories || []).filter((c) => {
+    const lower = (c.name || '').trim().toLowerCase();
+    return (
+      lower &&
+      lower !== 'split' &&
+      lower !== 'spent from savings' &&
+      lower !== 'credit card payment' &&
+      lower !== 'split category'
+    );
+  });
   const untrackedWithSpend = untrackedCategories.filter((c) => c.month_spent > 0);
   const filteredCatalog = catalogList.filter((c) => {
     if (catFilter === 'untracked') return !c.is_tracked && !c.is_archived;
@@ -6185,7 +6215,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         onChange={(e) => handleUpdateSplitRow(idx, 'category', e.target.value)}
                         required
                       >
-                        {Array.from(new Set([...availableCategories, row.category].filter(Boolean))).map((cat) => (
+                        {Array.from(new Set([...availableCategories, row.category].filter((c) => {
+                          const lower = (c || '').trim().toLowerCase();
+                          return lower && lower !== 'split' && lower !== 'spent from savings' && lower !== 'credit card payment' && lower !== 'split category';
+                        }))).map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>

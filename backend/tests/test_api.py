@@ -1817,6 +1817,20 @@ def test_transaction_cc_payment_and_split_categories(client):
     assert groc_b["spent"] == 100.0
     assert shop_b["spent"] == 50.0
 
+    # Ensure 'Split' is never treated as an untracked category or registered in category catalog
+    assert not any(c["name"].lower() == "split" for c in sum4.get("untracked_categories", []))
+    assert not any(c["name"].lower() == "split" for c in sum4.get("categories_catalog", []))
+    assert not any(c.lower() == "split" for c in sum4.get("all_categories", []))
+
+    # Reject trying to track or budget 'Split' as a category
+    bad_cat_res = client.post(
+        "/api/finance/categories",
+        headers=headers,
+        json={"name": "Split", "monthly_limit": 100.0, "month": month},
+    )
+    assert bad_cat_res.status_code == 400
+    assert "status" in bad_cat_res.get_json()["error"]
+
     # Edit the split: 3 ways ($70 Groceries, $50 Shopping, $30 Baby & Family)
     edit_split = client.post(
         f"/api/finance/transactions/{target_tx_id}/split",

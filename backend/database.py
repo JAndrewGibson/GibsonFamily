@@ -455,6 +455,15 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     db.execute("UPDATE transactions SET notes = '' WHERE TRIM(notes) = 'Synced from Plaid'")
     db.execute("UPDATE income_entries SET notes = '' WHERE TRIM(notes) = 'Synced from Plaid'")
     db.execute(
+        "DELETE FROM category_catalog WHERE LOWER(TRIM(name)) IN ('split', 'spent from savings', 'credit card payment', 'split category', 'split transaction')"
+    )
+    db.execute(
+        "DELETE FROM monthly_budgets WHERE LOWER(TRIM(category)) IN ('split', 'spent from savings', 'credit card payment')"
+    )
+    db.execute(
+        "DELETE FROM budgets WHERE LOWER(TRIM(category)) IN ('split', 'spent from savings', 'credit card payment')"
+    )
+    db.execute(
         """
         CREATE TABLE IF NOT EXISTS transaction_splits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

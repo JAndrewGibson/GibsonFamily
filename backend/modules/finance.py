@@ -56,6 +56,12 @@ SAVINGS_SPEND_ALIASES = {"spent from savings", "savings spend", "from savings", 
 CC_PAYMENT_CATEGORY = "Credit Card Payment"
 CC_PAYMENT_ALIASES = {"credit card payment", "cc payment", "card payment"}
 
+SPLIT_CATEGORY = "Split"
+SPLIT_CATEGORY_ALIASES = {"split", "split category", "split transaction"}
+
+# Special status pseudo-categories that must NEVER be treated as trackable budget categories
+NON_BUDGET_CATEGORIES = SAVINGS_SPEND_ALIASES | CC_PAYMENT_ALIASES | SPLIT_CATEGORY_ALIASES
+
 SAVINGS_SUBTYPES = {
     "savings",
     "hysa",
@@ -211,7 +217,7 @@ def _shift_year_month(ym: str, delta_months: int) -> str:
 
 def _ensure_category_in_catalog(db, name: str, is_preloaded: int = 0, unarchive: bool = True) -> None:
     clean = (name or "").strip()
-    if not clean:
+    if not clean or clean.lower() in NON_BUDGET_CATEGORIES:
         return
     db.execute(
         """
@@ -228,6 +234,7 @@ def _sync_category_catalog(db) -> list[dict]:
     """
     Ensures pre-loaded DEFAULT_CATEGORIES and any custom categories from budgets/transactions
     are registered in `category_catalog` without resurrecting categories the user archived/removed.
+    Never registers status categories like 'Split', 'Credit Card Payment', or 'Spent from Savings'.
     """
     for def_cat in DEFAULT_CATEGORIES:
         db.execute(
@@ -244,12 +251,14 @@ def _sync_category_catalog(db) -> list[dict]:
         UNION
         SELECT DISTINCT category FROM monthly_budgets WHERE is_active = 1
         UNION
-        SELECT DISTINCT category FROM transactions
+        SELECT DISTINCT category FROM transactions WHERE is_split = 0
+        UNION
+        SELECT DISTINCT category FROM transaction_splits
         """
     ).fetchall()
     for r in discovered:
         cat_name = (r["category"] or "").strip()
-        if cat_name:
+        if cat_name and cat_name.lower() not in NON_BUDGET_CATEGORIES:
             db.execute(
                 """
                 INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color)
@@ -257,12 +266,18 @@ def _sync_category_catalog(db) -> list[dict]:
                 """,
                 (cat_name, 1 if cat_name in DEFAULT_CATEGORIES else 0),
             )
+
+    # Purge any non-budget pseudo-categories that might have previously slipped into category_catalog
+    for non_b_cat in NON_BUDGET_CATEGORIES:
+        db.execute("DELETE FROM category_catalog WHERE LOWER(TRIM(name)) = ?", (non_b_cat,))
+
     db.commit()
     return [
         dict(r)
         for r in db.execute(
             "SELECT * FROM category_catalog ORDER BY is_archived ASC, is_preloaded DESC, name ASC"
         ).fetchall()
+        if r["name"].strip().lower() not in NON_BUDGET_CATEGORIES
     ]
 
 
@@ -288,12 +303,12 @@ def _build_category_management_payload(
         if tx.get("is_split") and tx.get("splits"):
             for sp in tx["splits"]:
                 sp_cat = (sp.get("category") or "").strip()
-                if sp_cat:
+                if sp_cat and sp_cat.lower() not in NON_BUDGET_CATEGORIES:
                     month_spend_map[sp_cat] = month_spend_map.get(sp_cat, 0.0) + float(sp.get("amount") or 0.0)
                     month_cnt_map[sp_cat] = month_cnt_map.get(sp_cat, 0) + 1
-        else:
+        elif not tx.get("is_split"):
             cat = (tx.get("category") or "").strip()
-            if cat:
+            if cat and cat.lower() not in NON_BUDGET_CATEGORIES:
                 month_spend_map[cat] = month_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
                 month_cnt_map[cat] = month_cnt_map.get(cat, 0) + 1
 
@@ -305,19 +320,19 @@ def _build_category_management_payload(
         if tx.get("is_split") and tx.get("splits"):
             for sp in tx["splits"]:
                 sp_cat = (sp.get("category") or "").strip()
-                if sp_cat:
+                if sp_cat and sp_cat.lower() not in NON_BUDGET_CATEGORIES:
                     all_spend_map[sp_cat] = all_spend_map.get(sp_cat, 0.0) + float(sp.get("amount") or 0.0)
                     all_cnt_map[sp_cat] = all_cnt_map.get(sp_cat, 0) + 1
-        else:
+        elif not tx.get("is_split"):
             cat = (tx.get("category") or "").strip()
-            if cat:
+            if cat and cat.lower() not in NON_BUDGET_CATEGORIES:
                 all_spend_map[cat] = all_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
                 all_cnt_map[cat] = all_cnt_map.get(cat, 0) + 1
 
     enriched_catalog = []
     for row in catalog_rows:
         cat_name = row["name"]
-        if cat_name.strip().lower() in SAVINGS_SPEND_ALIASES or cat_name.strip().lower() in CC_PAYMENT_ALIASES:
+        if cat_name.strip().lower() in NON_BUDGET_CATEGORIES:
             continue
         is_tracked = cat_name in tracked_map
         b_row = tracked_map.get(cat_name)
@@ -345,7 +360,8 @@ def _build_category_management_payload(
     active_categories = [
         c["name"]
         for c in enriched_catalog
-        if not c["is_archived"] or c["is_tracked"]
+        if (not c["is_archived"] or c["is_tracked"])
+        and c["name"].strip().lower() not in NON_BUDGET_CATEGORIES
     ]
 
     # Untracked categories: active (or having spend in selected_month) but NO active budget in selected_month
@@ -353,7 +369,7 @@ def _build_category_management_payload(
         c
         for c in enriched_catalog
         if not c["is_tracked"]
-        and c["name"].strip().lower() not in SAVINGS_SPEND_ALIASES
+        and c["name"].strip().lower() not in NON_BUDGET_CATEGORIES
         and (not c["is_archived"] or c["month_tx_count"] > 0)
     ]
     untracked_categories.sort(
@@ -1528,9 +1544,9 @@ def finance_summary():
         if not tx["is_savings_spend"] and not tx["is_cc_payment"]:
             if tx["is_split"] and tx_splits:
                 for sp in tx_splits:
-                    if sp.get("category"):
+                    if sp.get("category") and sp.get("category").strip().lower() not in NON_BUDGET_CATEGORIES:
                         tx_categories.add(sp["category"])
-            elif tx.get("category"):
+            elif tx.get("category") and tx.get("category").strip().lower() not in NON_BUDGET_CATEGORIES:
                 tx_categories.add(tx["category"])
 
     # Also include any months from monthly_budgets and income_entries (>= STARTING_BUDGET_MONTH)
@@ -1704,10 +1720,12 @@ def finance_summary():
         if tx.get("is_split") and tx.get("splits"):
             for sp in tx["splits"]:
                 sp_cat = sp["category"]
-                spend_by_category[sp_cat] = spend_by_category.get(sp_cat, 0.0) + float(sp["amount"])
-        else:
-            cat = tx["category"]
-            spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
+                if sp_cat and sp_cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                    spend_by_category[sp_cat] = spend_by_category.get(sp_cat, 0.0) + float(sp["amount"])
+        elif not tx.get("is_split"):
+            cat = tx.get("category") or ""
+            if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
 
     enriched_budgets = []
     total_budget_limit = 0.0
@@ -1742,8 +1760,11 @@ def finance_summary():
     for tx in all_transactions:
         if tx["is_savings_spend"] or tx["is_cc_payment"]:
             tx["is_category_tracked"] = True
-        elif tx.get("is_split") and tx.get("splits"):
-            tx["is_category_tracked"] = all(sp.get("category") in tracked_cat_names for sp in tx["splits"])
+        elif tx.get("is_split"):
+            if tx.get("splits"):
+                tx["is_category_tracked"] = all(sp.get("category") in tracked_cat_names for sp in tx["splits"])
+            else:
+                tx["is_category_tracked"] = True
         else:
             tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
 
@@ -1987,10 +2008,12 @@ def finance_history():
             if tx.get("is_split") and tx.get("splits"):
                 for sp in tx["splits"]:
                     cat = sp["category"]
-                    spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(sp["amount"])
-            else:
-                cat = tx["category"]
-                spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
+                    if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                        spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(sp["amount"])
+            elif not tx.get("is_split"):
+                cat = tx.get("category") or ""
+                if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                    spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
 
         cat_returns_map = {}
         for r_inc in m_incomes:
@@ -2864,6 +2887,8 @@ def revert_split_transaction(tx_id: int):
             fallback_cat = first_sp["category"]
         else:
             fallback_cat = "General"
+    if fallback_cat.strip().lower() in NON_BUDGET_CATEGORIES:
+        fallback_cat = "General"
 
     db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
     _ensure_category_in_catalog(db, fallback_cat, unarchive=True)
@@ -2903,6 +2928,8 @@ def upsert_budget():
     monthly_limit = float(data.get("monthly_limit", 0))
     if not category or monthly_limit <= 0:
         return jsonify({"error": "Category and positive monthly_limit are required"}), 400
+    if category.lower() in NON_BUDGET_CATEGORIES:
+        return jsonify({"error": f"'{category}' is a transaction status and cannot be budgeted as a category."}), 400
 
     color = data.get("color", "#6366f1")
     target_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
@@ -3030,6 +3057,8 @@ def create_or_restore_category():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Category name is required"}), 400
+    if name.lower() in NON_BUDGET_CATEGORIES:
+        return jsonify({"error": f"'{name}' is a transaction status and cannot be tracked as a category."}), 400
 
     color = (data.get("color") or "#06b6d4").strip()
     monthly_limit = float(data.get("monthly_limit") or 0.0)
@@ -3106,6 +3135,8 @@ def rename_or_merge_category():
     new_name = (data.get("new_name") or "").strip()
     if not old_name or not new_name:
         return jsonify({"error": "Both old_name and new_name are required"}), 400
+    if new_name.lower() in NON_BUDGET_CATEGORIES:
+        return jsonify({"error": f"Cannot rename category to '{new_name}' (reserved transaction status)"}), 400
 
     db = get_db()
     _sync_category_catalog(db)
