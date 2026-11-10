@@ -159,6 +159,7 @@ GibsonFamily/
   - Allows any transaction (e.g. Target, Costco, Amazon) to be allocated across multiple spending categories with per-category amounts and optional notes.
   - Includes interactive Split Modal with total amount validation, remaining allocation helper, and exact match calculation.
   - Each split amount accurately increments its respective category budget and spending charts, while preserving total gross spend and net cashflow.
+  - **Status Exclusion (`NON_BUDGET_CATEGORIES`)**: "Split" is strictly a transaction status flag, never a category. It is excluded from catalog discovery, `category_catalog`, untracked categories calculation, and category budget prompts.
   - Displays interactive split pills and chips in the ledger, with full ability to re-edit the split or revert to a single-category transaction at any time.
 - **Savings & Brokerage Long-Term Analytics & Spending from Savings (`SavingsModule.jsx`, `transactions.is_savings_spend`, `account_balance_snapshots`)**:
   - **Spend from Savings (`is_savings_spend = 1` / `category = "Spent from Savings"`)**:
