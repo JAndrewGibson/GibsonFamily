@@ -53,6 +53,9 @@ NON_INCOME_TYPES = {"cc_payment", "credit_card_payment", "transfer", "account_tr
 SAVINGS_SPEND_CATEGORY = "Spent from Savings"
 SAVINGS_SPEND_ALIASES = {"spent from savings", "savings spend", "from savings", "savings withdrawal"}
 
+CC_PAYMENT_CATEGORY = "Credit Card Payment"
+CC_PAYMENT_ALIASES = {"credit card payment", "cc payment", "card payment"}
+
 SAVINGS_SUBTYPES = {
     "savings",
     "hysa",
@@ -93,6 +96,13 @@ def is_tx_savings_spend(tx: dict) -> bool:
         return True
     cat = (tx.get("category") or "").strip().lower()
     return cat in SAVINGS_SPEND_ALIASES
+
+
+def is_tx_cc_payment(tx: dict) -> bool:
+    if bool(tx.get("is_cc_payment")):
+        return True
+    cat = (tx.get("category") or "").strip().lower()
+    return cat in CC_PAYMENT_ALIASES
 
 
 def classify_savings_account(acc: dict) -> dict:
@@ -273,27 +283,41 @@ def _build_category_management_payload(
     month_spend_map = {}
     month_cnt_map = {}
     for tx in month_transactions:
-        if is_tx_savings_spend(tx):
+        if is_tx_savings_spend(tx) or is_tx_cc_payment(tx):
             continue
-        cat = (tx.get("category") or "").strip()
-        if cat:
-            month_spend_map[cat] = month_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
-            month_cnt_map[cat] = month_cnt_map.get(cat, 0) + 1
+        if tx.get("is_split") and tx.get("splits"):
+            for sp in tx["splits"]:
+                sp_cat = (sp.get("category") or "").strip()
+                if sp_cat:
+                    month_spend_map[sp_cat] = month_spend_map.get(sp_cat, 0.0) + float(sp.get("amount") or 0.0)
+                    month_cnt_map[sp_cat] = month_cnt_map.get(sp_cat, 0) + 1
+        else:
+            cat = (tx.get("category") or "").strip()
+            if cat:
+                month_spend_map[cat] = month_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
+                month_cnt_map[cat] = month_cnt_map.get(cat, 0) + 1
 
     all_spend_map = {}
     all_cnt_map = {}
     for tx in all_transactions:
-        if is_tx_savings_spend(tx):
+        if is_tx_savings_spend(tx) or is_tx_cc_payment(tx):
             continue
-        cat = (tx.get("category") or "").strip()
-        if cat:
-            all_spend_map[cat] = all_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
-            all_cnt_map[cat] = all_cnt_map.get(cat, 0) + 1
+        if tx.get("is_split") and tx.get("splits"):
+            for sp in tx["splits"]:
+                sp_cat = (sp.get("category") or "").strip()
+                if sp_cat:
+                    all_spend_map[sp_cat] = all_spend_map.get(sp_cat, 0.0) + float(sp.get("amount") or 0.0)
+                    all_cnt_map[sp_cat] = all_cnt_map.get(sp_cat, 0) + 1
+        else:
+            cat = (tx.get("category") or "").strip()
+            if cat:
+                all_spend_map[cat] = all_spend_map.get(cat, 0.0) + float(tx.get("amount") or 0.0)
+                all_cnt_map[cat] = all_cnt_map.get(cat, 0) + 1
 
     enriched_catalog = []
     for row in catalog_rows:
         cat_name = row["name"]
-        if cat_name.strip().lower() in SAVINGS_SPEND_ALIASES:
+        if cat_name.strip().lower() in SAVINGS_SPEND_ALIASES or cat_name.strip().lower() in CC_PAYMENT_ALIASES:
             continue
         is_tracked = cat_name in tracked_map
         b_row = tracked_map.get(cat_name)
@@ -816,7 +840,7 @@ def _sync_plaid_accounts_and_transactions(
                         """
                         INSERT INTO income_entries
                         (partner_id, account_id, plaid_transaction_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes, is_pending)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Synced from Plaid', ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
                         ON CONFLICT(plaid_transaction_id) DO UPDATE SET
                             is_pending = excluded.is_pending,
                             amount = excluded.amount,
@@ -888,7 +912,7 @@ def _sync_plaid_accounts_and_transactions(
                 """
                 INSERT INTO transactions
                 (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Synced from Plaid', ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?)
                 ON CONFLICT(plaid_transaction_id) DO UPDATE SET
                     is_pending = excluded.is_pending,
                     amount = excluded.amount,
@@ -1476,6 +1500,18 @@ def finance_summary():
         ]
         if m >= STARTING_BUDGET_MONTH
     }
+    splits_by_tx = {}
+    for sr in db.execute(
+        "SELECT id, transaction_id, category, amount, notes FROM transaction_splits ORDER BY id ASC"
+    ).fetchall():
+        splits_by_tx.setdefault(sr["transaction_id"], []).append({
+            "id": sr["id"],
+            "transaction_id": sr["transaction_id"],
+            "category": sr["category"],
+            "amount": round(float(sr["amount"]), 2),
+            "notes": sr["notes"] or "",
+        })
+
     tx_categories = set()
     for tx in all_transactions:
         tx["budget_month"] = tx["effective_budget_month"]
@@ -1483,10 +1519,19 @@ def finance_summary():
         tx["previous_budget_month"] = _shift_year_month(tx["budget_month"], -1)
         tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
         tx["is_savings_spend"] = is_tx_savings_spend(tx)
+        tx["is_cc_payment"] = is_tx_cc_payment(tx)
+        tx_splits = splits_by_tx.get(tx["id"], [])
+        tx["splits"] = tx_splits
+        tx["is_split"] = bool(tx.get("is_split")) or len(tx_splits) > 0
         if tx["budget_month"] and tx["budget_month"] >= STARTING_BUDGET_MONTH:
             month_set.add(tx["budget_month"])
-        if tx.get("category") and not tx["is_savings_spend"]:
-            tx_categories.add(tx["category"])
+        if not tx["is_savings_spend"] and not tx["is_cc_payment"]:
+            if tx["is_split"] and tx_splits:
+                for sp in tx_splits:
+                    if sp.get("category"):
+                        tx_categories.add(sp["category"])
+            elif tx.get("category"):
+                tx_categories.add(tx["category"])
 
     # Also include any months from monthly_budgets and income_entries (>= STARTING_BUDGET_MONTH)
     for mb_row in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
@@ -1642,10 +1687,13 @@ def finance_summary():
         tx for tx in all_transactions if tx["budget_month"] == selected_month
     ]
     budget_month_transactions = [
-        tx for tx in month_transactions if not tx["is_savings_spend"]
+        tx for tx in month_transactions if not tx["is_savings_spend"] and not tx["is_cc_payment"]
     ]
     savings_month_transactions = [
         tx for tx in month_transactions if tx["is_savings_spend"]
+    ]
+    cc_payment_transactions = [
+        tx for tx in month_transactions if tx["is_cc_payment"]
     ]
 
     total_cash = sum(a["balance_current"] for a in accounts if a["type"] == "depository")
@@ -1653,8 +1701,13 @@ def finance_summary():
 
     spend_by_category = {}
     for tx in budget_month_transactions:
-        cat = tx["category"]
-        spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
+        if tx.get("is_split") and tx.get("splits"):
+            for sp in tx["splits"]:
+                sp_cat = sp["category"]
+                spend_by_category[sp_cat] = spend_by_category.get(sp_cat, 0.0) + float(sp["amount"])
+        else:
+            cat = tx["category"]
+            spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
 
     enriched_budgets = []
     total_budget_limit = 0.0
@@ -1687,10 +1740,16 @@ def finance_summary():
     # Mark each transaction with whether its category is currently tracked in its budget month
     tracked_cat_names = {b["category"] for b in enriched_budgets}
     for tx in all_transactions:
-        tx["is_category_tracked"] = True if tx["is_savings_spend"] else (tx.get("category") in tracked_cat_names)
+        if tx["is_savings_spend"] or tx["is_cc_payment"]:
+            tx["is_category_tracked"] = True
+        elif tx.get("is_split") and tx.get("splits"):
+            tx["is_category_tracked"] = all(sp.get("category") in tracked_cat_names for sp in tx["splits"])
+        else:
+            tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
 
     total_gross_spent = round(sum(float(t["amount"]) for t in budget_month_transactions), 2)
     total_savings_spent = round(sum(float(t["amount"]) for t in savings_month_transactions), 2)
+    total_cc_payments_spent = round(sum(float(t["amount"]) for t in cc_payment_transactions), 2)
     # Net monthly spent subtracts returns so equilibrium is strictly maintained and returns offset spending
     total_monthly_spent = round(max(0.0, total_gross_spent - total_monthly_returns), 2)
     net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
@@ -1784,6 +1843,8 @@ def finance_summary():
         "savings_transactions": savings_month_transactions,
         "total_monthly_returns": total_monthly_returns,
         "total_cc_payments": total_cc_payments,
+        "total_cc_payments_spent": total_cc_payments_spent,
+        "cc_payment_spend_count": len(cc_payment_transactions),
         "total_transfers": total_transfers,
         "budgeted_categories_spent": round(total_budget_spent, 2),
         "total_monthly_income": total_monthly_income,
@@ -1852,6 +1913,24 @@ def finance_history():
         ).fetchall()
     ]
 
+    splits_by_tx = {}
+    for sr in db.execute(
+        "SELECT id, transaction_id, category, amount, notes FROM transaction_splits ORDER BY id ASC"
+    ).fetchall():
+        splits_by_tx.setdefault(sr["transaction_id"], []).append({
+            "id": sr["id"],
+            "category": sr["category"],
+            "amount": round(float(sr["amount"]), 2),
+            "notes": sr["notes"] or "",
+        })
+
+    for tx in all_txs:
+        tx_splits = splits_by_tx.get(tx["id"], [])
+        tx["splits"] = tx_splits
+        tx["is_split"] = bool(tx.get("is_split")) or len(tx_splits) > 0
+        tx["is_savings_spend"] = is_tx_savings_spend(tx)
+        tx["is_cc_payment"] = is_tx_cc_payment(tx)
+
     months_set = {
         max(current_ym, STARTING_BUDGET_MONTH),
     }
@@ -1898,14 +1977,20 @@ def finance_history():
     for ym in sorted_months:
         m_budgets = _ensure_monthly_budgets_for_month(db, ym)
         m_txs = [tx for tx in all_txs if tx["effective_budget_month"] == ym]
-        budget_m_txs = [tx for tx in m_txs if not is_tx_savings_spend(tx)]
+        budget_m_txs = [tx for tx in m_txs if not is_tx_savings_spend(tx) and not is_tx_cc_payment(tx)]
         savings_m_txs = [tx for tx in m_txs if is_tx_savings_spend(tx)]
+        cc_payment_m_txs = [tx for tx in m_txs if is_tx_cc_payment(tx)]
         m_incomes = [inc for inc in all_incomes if inc["effective_budget_month"] == ym]
 
         spend_by_cat = {}
         for tx in budget_m_txs:
-            cat = tx["category"]
-            spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
+            if tx.get("is_split") and tx.get("splits"):
+                for sp in tx["splits"]:
+                    cat = sp["category"]
+                    spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(sp["amount"])
+            else:
+                cat = tx["category"]
+                spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
 
         cat_returns_map = {}
         for r_inc in m_incomes:
@@ -2436,13 +2521,17 @@ def create_transaction():
     if is_savings_spend:
         category = SAVINGS_SPEND_CATEGORY
 
+    is_cc_payment = 1 if (bool(data.get("is_cc_payment")) or category.lower() in CC_PAYMENT_ALIASES) else 0
+    if is_cc_payment:
+        category = CC_PAYMENT_CATEGORY
+
     db = get_db()
-    if not is_savings_spend:
+    if not is_savings_spend and not is_cc_payment and category.lower() != "split":
         _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     cur = db.execute(
         """
-        INSERT INTO transactions (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend, is_cc_payment, is_split)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(account_id) if account_id else None,
@@ -2458,8 +2547,11 @@ def create_transaction():
             data.get("notes", ""),
             is_pending,
             is_savings_spend,
+            is_cc_payment,
+            0,
         ),
     )
+    new_id = cur.lastrowid
     db.commit()
     tx = dict(
         db.execute(
@@ -2472,10 +2564,13 @@ def create_transaction():
             LEFT JOIN accounts sa ON t.savings_account_id = sa.id
             WHERE t.id = ?
             """,
-            (cur.lastrowid,),
+            (new_id,),
         ).fetchone()
     )
     tx["is_savings_spend"] = is_tx_savings_spend(tx)
+    tx["is_cc_payment"] = is_tx_cc_payment(tx)
+    tx["splits"] = []
+    tx["is_split"] = False
     return jsonify(tx), 201
 
 
@@ -2494,10 +2589,16 @@ def update_transaction(tx_id: int):
     if not new_category:
         return jsonify({"error": "Category cannot be empty"}), 400
 
+    new_is_split = int(existing["is_split"] or 0)
+
+    # 1. Savings Spend Handling
     if "is_savings_spend" in data:
         if bool(data["is_savings_spend"]):
             new_is_savings_spend = 1
             new_category = SAVINGS_SPEND_CATEGORY
+            new_is_cc_payment = 0
+            new_is_split = 0
+            db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
         else:
             new_is_savings_spend = 0
             if new_category.lower() in SAVINGS_SPEND_ALIASES:
@@ -2507,12 +2608,48 @@ def update_transaction(tx_id: int):
             if new_category.lower() in SAVINGS_SPEND_ALIASES:
                 new_is_savings_spend = 1
                 new_category = SAVINGS_SPEND_CATEGORY
+                new_is_cc_payment = 0
+                new_is_split = 0
+                db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
             else:
                 new_is_savings_spend = 0
         else:
             new_is_savings_spend = int(existing["is_savings_spend"] or 0)
             if new_category.lower() in SAVINGS_SPEND_ALIASES:
                 new_is_savings_spend = 1
+
+    # 2. CC Payment Handling
+    if "is_cc_payment" in data:
+        if bool(data["is_cc_payment"]):
+            new_is_cc_payment = 1
+            new_category = CC_PAYMENT_CATEGORY
+            new_is_savings_spend = 0
+            new_is_split = 0
+            db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+        else:
+            new_is_cc_payment = 0
+            if new_category.lower() in CC_PAYMENT_ALIASES:
+                new_category = (data.get("fallback_category") or "General").strip()
+    else:
+        if "category" in data:
+            if new_category.lower() in CC_PAYMENT_ALIASES:
+                new_is_cc_payment = 1
+                new_category = CC_PAYMENT_CATEGORY
+                new_is_savings_spend = 0
+                new_is_split = 0
+                db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+            else:
+                new_is_cc_payment = 0
+        else:
+            new_is_cc_payment = int(existing["is_cc_payment"] or 0)
+            if new_category.lower() in CC_PAYMENT_ALIASES:
+                new_is_cc_payment = 1
+
+    # 3. Split reset if user sets a regular category
+    if "category" in data and data["category"].strip().lower() not in ("split", ""):
+        if not new_is_savings_spend and not new_is_cc_payment:
+            db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+            new_is_split = 0
 
     if "allocate_direction" in data:
         direction = data["allocate_direction"]
@@ -2545,12 +2682,12 @@ def update_transaction(tx_id: int):
 
     new_is_pending = (1 if data["is_pending"] else 0) if "is_pending" in data else existing["is_pending"]
 
-    if not new_is_savings_spend:
+    if not new_is_savings_spend and not new_is_cc_payment and new_category.lower() != "split":
         _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
-        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, savings_account_id = ?, is_pending = ?, is_savings_spend = ?
+        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, savings_account_id = ?, is_pending = ?, is_savings_spend = ?, is_cc_payment = ?, is_split = ?
         WHERE id = ?
         """,
         (
@@ -2562,6 +2699,8 @@ def update_transaction(tx_id: int):
             new_savings_account_id,
             new_is_pending,
             new_is_savings_spend,
+            new_is_cc_payment,
+            new_is_split,
             tx_id,
         ),
     )
@@ -2582,7 +2721,165 @@ def update_transaction(tx_id: int):
         ).fetchone()
     )
     updated["is_savings_spend"] = is_tx_savings_spend(updated)
+    updated["is_cc_payment"] = is_tx_cc_payment(updated)
+    split_rows = db.execute(
+        "SELECT id, transaction_id, category, amount, notes FROM transaction_splits WHERE transaction_id = ? ORDER BY id ASC",
+        (tx_id,),
+    ).fetchall()
+    updated["splits"] = [
+        {
+            "id": r["id"],
+            "transaction_id": r["transaction_id"],
+            "category": r["category"],
+            "amount": round(float(r["amount"]), 2),
+            "notes": r["notes"] or "",
+        }
+        for r in split_rows
+    ]
+    updated["is_split"] = bool(updated.get("is_split")) or len(updated["splits"]) > 0
     return jsonify(updated)
+
+
+@finance_bp.route("/transactions/<int:tx_id>/split", methods=["POST"])
+def split_transaction(tx_id: int):
+    data = request.get_json(silent=True) or {}
+    splits = data.get("splits")
+    if not isinstance(splits, list) or len(splits) == 0:
+        return jsonify({"error": "Splits array must contain at least one item"}), 400
+
+    db = get_db()
+    existing = db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Transaction not found"}), 404
+
+    tx_amount = round(float(existing["amount"]), 2)
+
+    # If only 1 split provided, treat as reverting to single category
+    if len(splits) == 1:
+        cat = (splits[0].get("category") or "General").strip()
+        db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+        _ensure_category_in_catalog(db, cat, unarchive=True)
+        db.execute(
+            "UPDATE transactions SET category = ?, is_split = 0, is_cc_payment = 0, is_savings_spend = 0 WHERE id = ?",
+            (cat, tx_id),
+        )
+        db.commit()
+        return jsonify({
+            "message": "Transaction reverted to single category",
+            "id": tx_id,
+            "category": cat,
+            "is_split": False,
+            "splits": [],
+        })
+
+    # Validate each split item and sum
+    sum_amounts = 0.0
+    cleaned_splits = []
+    for sp in splits:
+        cat = (sp.get("category") or "").strip()
+        if not cat:
+            return jsonify({"error": "Every split must have a selected category"}), 400
+        try:
+            amt = round(float(sp.get("amount") or 0.0), 2)
+        except (ValueError, TypeError):
+            return jsonify({"error": f"Invalid amount for category '{cat}'"}), 400
+        if amt <= 0:
+            return jsonify({"error": f"Split amount for '{cat}' must be greater than $0.00"}), 400
+        sum_amounts += amt
+        cleaned_splits.append({
+            "category": cat,
+            "amount": amt,
+            "notes": (sp.get("notes") or "").strip(),
+        })
+
+    sum_amounts = round(sum_amounts, 2)
+    # Allow 1 cent rounding difference and auto-adjust last split if needed
+    diff = round(tx_amount - sum_amounts, 2)
+    if abs(diff) > 0.01:
+        return (
+            jsonify({
+                "error": f"Total split amounts (${sum_amounts:.2f}) must equal transaction amount (${tx_amount:.2f}). Difference: ${diff:.2f}"
+            }),
+            400,
+        )
+    if diff != 0.0:
+        cleaned_splits[-1]["amount"] = round(cleaned_splits[-1]["amount"] + diff, 2)
+
+    # Delete previous splits
+    db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+
+    # Insert new splits & ensure categories exist in catalog
+    for sp in cleaned_splits:
+        _ensure_category_in_catalog(db, sp["category"], unarchive=True)
+        db.execute(
+            """
+            INSERT INTO transaction_splits (transaction_id, category, amount, notes)
+            VALUES (?, ?, ?, ?)
+            """,
+            (tx_id, sp["category"], sp["amount"], sp["notes"]),
+        )
+
+    db.execute(
+        """
+        UPDATE transactions
+        SET is_split = 1, is_cc_payment = 0, is_savings_spend = 0, category = 'Split'
+        WHERE id = ?
+        """,
+        (tx_id,),
+    )
+    db.commit()
+
+    saved_splits = [
+        dict(r)
+        for r in db.execute(
+            "SELECT id, transaction_id, category, amount, notes FROM transaction_splits WHERE transaction_id = ? ORDER BY id ASC",
+            (tx_id,),
+        ).fetchall()
+    ]
+    return jsonify({
+        "message": "Transaction split successfully",
+        "id": tx_id,
+        "is_split": True,
+        "category": "Split",
+        "splits": saved_splits,
+    })
+
+
+@finance_bp.route("/transactions/<int:tx_id>/split", methods=["DELETE"])
+def revert_split_transaction(tx_id: int):
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    existing = db.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if not existing:
+        return jsonify({"error": "Transaction not found"}), 404
+
+    # Determine fallback category: user specified, or first split category, or 'General'
+    fallback_cat = (data.get("category") or "").strip()
+    if not fallback_cat:
+        first_sp = db.execute(
+            "SELECT category FROM transaction_splits WHERE transaction_id = ? ORDER BY id ASC LIMIT 1",
+            (tx_id,),
+        ).fetchone()
+        if first_sp and first_sp["category"]:
+            fallback_cat = first_sp["category"]
+        else:
+            fallback_cat = "General"
+
+    db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+    _ensure_category_in_catalog(db, fallback_cat, unarchive=True)
+    db.execute(
+        "UPDATE transactions SET is_split = 0, category = ? WHERE id = ?",
+        (fallback_cat, tx_id),
+    )
+    db.commit()
+
+    return jsonify({
+        "message": "Transaction split removed, reverted to single category",
+        "id": tx_id,
+        "is_split": False,
+        "category": fallback_cat,
+        "splits": [],
+    })
 
 
 @finance_bp.route("/transactions/<int:tx_id>", methods=["DELETE"])
@@ -2826,6 +3123,7 @@ def rename_or_merge_category():
 
     # Reassign transactions, purchase_requests, and future_purchases
     db.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE transaction_splits SET category = ? WHERE category = ?", (new_name, old_name))
     db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (new_name, old_name))
     db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (new_name, old_name))
 
@@ -2890,6 +3188,7 @@ def delete_or_archive_category():
             unarchive=True,
         )
         db.execute("UPDATE transactions SET category = ? WHERE category = ?", (reassign_to, name))
+        db.execute("UPDATE transaction_splits SET category = ? WHERE category = ?", (reassign_to, name))
         db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (reassign_to, name))
         db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (reassign_to, name))
 

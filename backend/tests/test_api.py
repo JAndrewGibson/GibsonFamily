@@ -1676,6 +1676,184 @@ def test_savings_module_spend_exclusion_transfers_and_mom_yoy_analytics(client):
     assert "2026" in years
 
 
+def test_transaction_cc_payment_and_split_categories(client):
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "partners": [
+                {"name": "Alex", "email": "alex.split@gibson.local", "password": "ValidPassword123!"},
+                {"name": "Jordan", "email": "jordan.split@gibson.local", "password": "ValidPassword123!"},
+            ],
+        },
+    )
+    assert p_res.status_code == 201
+    p_data = p_res.get_json()
+    headers = {"Authorization": f"Bearer {p_data['token']}"}
+    month = "2026-11"
+
+    # Setup checking account
+    acc_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={"name": "Premier Checking", "type": "depository", "subtype": "checking", "balance_current": 5000.0, "mask": "1122"},
+    )
+    acc_id = acc_res.get_json()["id"]
+
+    # Set up budgets for Groceries & Dining ($800) and Shopping & Tech ($500)
+    client.post(
+        "/api/finance/categories",
+        headers=headers,
+        json={"name": "Groceries & Dining", "monthly_limit": 800.0, "month": month, "apply_scope": "only_this_month"},
+    )
+    client.post(
+        "/api/finance/categories",
+        headers=headers,
+        json={"name": "Shopping & Tech", "monthly_limit": 500.0, "month": month, "apply_scope": "only_this_month"},
+    )
+
+    # 1. TEST CC PAYMENT TOGGLE
+    # Log an expense: $650 Chase Card Payment on Checking
+    cc_tx_res = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "account_id": acc_id,
+            "name": "Chase Credit Card AutoPay",
+            "amount": 650.0,
+            "category": "General",
+            "date": "2026-11-05",
+            "budget_month": month,
+        },
+    )
+    assert cc_tx_res.status_code == 201
+    cc_tx_id = cc_tx_res.get_json()["id"]
+
+    sum1 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum1["total_gross_spent"] == 650.0
+
+    # Mark as CC Payment
+    put_cc_res = client.put(
+        f"/api/finance/transactions/{cc_tx_id}",
+        headers=headers,
+        json={"is_cc_payment": True},
+    )
+    assert put_cc_res.status_code == 200
+    cc_updated = put_cc_res.get_json()
+    assert cc_updated["is_cc_payment"] is True
+    assert cc_updated["category"] == "Credit Card Payment"
+
+    # Verify excluded from budget spend!
+    sum2 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum2["total_gross_spent"] == 0.0
+    assert sum2["total_monthly_spent"] == 0.0
+    assert sum2["total_cc_payments_spent"] == 650.0
+
+    # Verify unmarking restores to budget
+    unmark_res = client.put(
+        f"/api/finance/transactions/{cc_tx_id}",
+        headers=headers,
+        json={"is_cc_payment": False, "category": "General"},
+    )
+    assert unmark_res.status_code == 200
+    assert unmark_res.get_json()["is_cc_payment"] is False
+    sum3 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum3["total_gross_spent"] == 650.0
+
+    # Re-mark as CC payment so it doesn't interfere with next split test
+    client.put(f"/api/finance/transactions/{cc_tx_id}", headers=headers, json={"is_cc_payment": True})
+
+    # 2. TEST SPLIT TRANSACTION
+    # Create a $150 Target transaction
+    split_tx_res = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "account_id": acc_id,
+            "name": "Target Superstore",
+            "amount": 150.0,
+            "category": "General",
+            "date": "2026-11-06",
+            "budget_month": month,
+        },
+    )
+    target_tx_id = split_tx_res.get_json()["id"]
+
+    # Attempt invalid split (sum doesn't match total)
+    bad_split = client.post(
+        f"/api/finance/transactions/{target_tx_id}/split",
+        headers=headers,
+        json={
+            "splits": [
+                {"category": "Groceries & Dining", "amount": 80.0},
+                {"category": "Shopping & Tech", "amount": 50.0},
+            ]
+        },
+    )
+    assert bad_split.status_code == 400
+    assert "must equal transaction amount" in bad_split.get_json()["error"]
+
+    # Valid split: $100 Groceries, $50 Shopping
+    good_split = client.post(
+        f"/api/finance/transactions/{target_tx_id}/split",
+        headers=headers,
+        json={
+            "splits": [
+                {"category": "Groceries & Dining", "amount": 100.0, "notes": "Weekly produce & snacks"},
+                {"category": "Shopping & Tech", "amount": 50.0, "notes": "USB cable & household bins"},
+            ]
+        },
+    )
+    assert good_split.status_code == 200
+    split_res_data = good_split.get_json()
+    assert split_res_data["is_split"] is True
+    assert len(split_res_data["splits"]) == 2
+
+    # Check summary: Groceries & Dining spent = $100, Shopping & Tech spent = $50, total spent = $150
+    sum4 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    assert sum4["total_gross_spent"] == 150.0
+    groc_b = next(b for b in sum4["budgets"] if b["category"] == "Groceries & Dining")
+    shop_b = next(b for b in sum4["budgets"] if b["category"] == "Shopping & Tech")
+    assert groc_b["spent"] == 100.0
+    assert shop_b["spent"] == 50.0
+
+    # Edit the split: 3 ways ($70 Groceries, $50 Shopping, $30 Baby & Family)
+    edit_split = client.post(
+        f"/api/finance/transactions/{target_tx_id}/split",
+        headers=headers,
+        json={
+            "splits": [
+                {"category": "Groceries & Dining", "amount": 70.0},
+                {"category": "Shopping & Tech", "amount": 50.0},
+                {"category": "Baby & Family", "amount": 30.0},
+            ]
+        },
+    )
+    assert edit_split.status_code == 200
+    assert len(edit_split.get_json()["splits"]) == 3
+
+    sum5 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    groc_b5 = next(b for b in sum5["budgets"] if b["category"] == "Groceries & Dining")
+    assert groc_b5["spent"] == 70.0
+
+    # Revert split to single category via DELETE /api/finance/transactions/<id>/split
+    revert_res = client.delete(
+        f"/api/finance/transactions/{target_tx_id}/split",
+        headers=headers,
+        json={"category": "Groceries & Dining"},
+    )
+    assert revert_res.status_code == 200
+    rev_data = revert_res.get_json()
+    assert rev_data["is_split"] is False
+    assert rev_data["category"] == "Groceries & Dining"
+
+    sum6 = client.get(f"/api/finance/summary?month={month}", headers=headers).get_json()
+    groc_b6 = next(b for b in sum6["budgets"] if b["category"] == "Groceries & Dining")
+    shop_b6 = next(b for b in sum6["budgets"] if b["category"] == "Shopping & Tech")
+    assert groc_b6["spent"] == 150.0
+    assert shop_b6["spent"] == 0.0
+
+
 
 
 

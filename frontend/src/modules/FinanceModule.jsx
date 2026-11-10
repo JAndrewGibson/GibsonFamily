@@ -16,6 +16,7 @@ import {
   CreditCard,
   DollarSign,
   Edit3,
+  FileText,
   History,
   Key,
   Link2,
@@ -25,6 +26,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Scissors,
   SlidersHorizontal,
   Tags,
   Target,
@@ -297,6 +299,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [editingIncomeEntry, setEditingIncomeEntry] = useState(null);
   const [editIncType, setEditIncType] = useState('payroll');
   const [editIncCategory, setEditIncCategory] = useState('');
+
+  // Split Category Transaction Modal State
+  const [splittingTx, setSplittingTx] = useState(null);
+  const [splitRows, setSplitRows] = useState([]);
+  const [splitError, setSplitError] = useState('');
+  const [splitSaving, setSplitSaving] = useState(false);
+
+  // Transaction Note Modal State
+  const [editingNoteTx, setEditingNoteTx] = useState(null);
+  const [noteInput, setNoteInput] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
 
   // Manual Account Form State (Floating Modal)
   const [accName, setAccName] = useState('');
@@ -685,6 +698,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         amount: parseFloat(txAmount),
         category: chosenCategory,
         is_savings_spend: chosenCategory === 'Spent from Savings',
+        is_cc_payment: chosenCategory === 'Credit Card Payment',
         date: txDate,
         month_offset: parseInt(txMonthOffset, 10) || 0,
         partner_id: activePartner?.id || null,
@@ -707,11 +721,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       setCustomCatInput('');
       return;
     }
+    if (newCategory === '__split__') {
+      const tx = summary.transactions.find((t) => t.id === txId);
+      if (tx) handleOpenSplitModal(tx);
+      return;
+    }
     await apiFetch(`/api/finance/transactions/${txId}`, {
       method: 'PUT',
       body: JSON.stringify({
         category: newCategory,
         is_savings_spend: newCategory === 'Spent from Savings',
+        is_cc_payment: newCategory === 'Credit Card Payment',
       }),
     });
     setCustomCatTxId(null);
@@ -731,6 +751,250 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     });
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
     onDataChanged?.();
+  };
+
+  const handleToggleCcPayment = async (tx) => {
+    const nextFlag = !tx.is_cc_payment;
+    setOpenMenuTxId(null);
+    await apiFetch(`/api/finance/transactions/${tx.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        is_cc_payment: nextFlag,
+        fallback_category: 'General',
+      }),
+    });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleOpenSplitModal = (tx) => {
+    setOpenMenuTxId(null);
+    setSplittingTx(tx);
+    setSplitError('');
+    if (tx.splits && tx.splits.length > 0) {
+      setSplitRows(
+        tx.splits.map((s) => ({
+          category: s.category || availableCategories[0] || 'General',
+          amount: String(s.amount != null ? s.amount : ''),
+          notes: s.notes || '',
+        }))
+      );
+    } else {
+      const half = (Number(tx.amount || 0) / 2).toFixed(2);
+      const remainder = (Number(tx.amount || 0) - Number(half)).toFixed(2);
+      const cat1 =
+        tx.category &&
+        tx.category !== 'General' &&
+        tx.category !== 'Credit Card Payment' &&
+        tx.category !== 'Spent from Savings'
+          ? tx.category
+          : availableCategories[0] || 'Groceries & Dining';
+      const cat2 =
+        availableCategories.find(
+          (c) =>
+            c !== cat1 &&
+            c !== 'Credit Card Payment' &&
+            c !== 'Spent from Savings'
+        ) || 'Shopping & Tech';
+      setSplitRows([
+        { category: cat1, amount: half, notes: '' },
+        { category: cat2, amount: remainder, notes: '' },
+      ]);
+    }
+  };
+
+  const handleCloseSplitModal = () => {
+    setSplittingTx(null);
+    setSplitRows([]);
+    setSplitError('');
+    setSplitSaving(false);
+  };
+
+  const handleAddSplitRow = () => {
+    const totalTxAmt = Number(splittingTx?.amount || 0);
+    const allocatedSum = splitRows.reduce(
+      (sum, r) => sum + (Number(r.amount) || 0),
+      0
+    );
+    const remaining = Math.max(
+      0,
+      Number((totalTxAmt - allocatedSum).toFixed(2))
+    );
+    const unusedCat =
+      availableCategories.find((c) => !splitRows.some((r) => r.category === c)) ||
+      availableCategories[0] ||
+      'General';
+    setSplitRows([
+      ...splitRows,
+      {
+        category: unusedCat,
+        amount: remaining > 0 ? remaining.toFixed(2) : '',
+        notes: '',
+      },
+    ]);
+  };
+
+  const handleRemoveSplitRow = (index) => {
+    if (splitRows.length <= 1) {
+      setSplitError(
+        'A split must have at least one category, or click Revert to Single Category.'
+      );
+      return;
+    }
+    setSplitRows(splitRows.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateSplitRow = (index, field, value) => {
+    setSplitError('');
+    setSplitRows(
+      splitRows.map((r, i) => (i === index ? { ...r, [field]: value } : r))
+    );
+  };
+
+  const handleAutoAllocateRemainder = (index) => {
+    const totalTxAmt = Number(splittingTx?.amount || 0);
+    const otherSum = splitRows.reduce(
+      (sum, r, i) => (i === index ? sum : sum + (Number(r.amount) || 0)),
+      0
+    );
+    const remainder = Number((totalTxAmt - otherSum).toFixed(2));
+    if (remainder > 0) {
+      handleUpdateSplitRow(index, 'amount', remainder.toFixed(2));
+    }
+  };
+
+  const handleSaveSplit = async (e) => {
+    e?.preventDefault();
+    if (!splittingTx) return;
+    setSplitError('');
+
+    const totalTxAmt = Number(splittingTx.amount || 0);
+    let sumAmts = 0;
+    const cleaned = [];
+
+    for (const r of splitRows) {
+      const cat = (r.category || '').trim();
+      const amt = Number(r.amount);
+      if (!cat) {
+        setSplitError('Please select a category for each split row.');
+        return;
+      }
+      if (isNaN(amt) || amt <= 0) {
+        setSplitError(`Split amount for "${cat}" must be greater than $0.00.`);
+        return;
+      }
+      sumAmts += amt;
+      cleaned.push({
+        category: cat,
+        amount: Number(amt.toFixed(2)),
+        notes: (r.notes || '').trim(),
+      });
+    }
+
+    sumAmts = Number(sumAmts.toFixed(2));
+    const diff = Number((totalTxAmt - sumAmts).toFixed(2));
+    if (Math.abs(diff) > 0.01) {
+      setSplitError(
+        `Split amounts ($${sumAmts.toFixed(2)}) must exactly equal the transaction total ($${totalTxAmt.toFixed(2)}). Difference: $${diff.toFixed(2)}`
+      );
+      return;
+    }
+
+    setSplitSaving(true);
+    try {
+      const res = await apiFetch(
+        `/api/finance/transactions/${splittingTx.id}/split`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ splits: cleaned }),
+        }
+      );
+      if (res && res.error) {
+        setSplitError(res.error);
+        return;
+      }
+      handleCloseSplitModal();
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      setSplitError(err.message || 'Failed to save split allocation');
+    } finally {
+      setSplitSaving(false);
+    }
+  };
+
+  const handleRevertSplit = async (tx) => {
+    const targetTx = tx || splittingTx;
+    if (!targetTx) return;
+    const fallback =
+      targetTx.splits?.[0]?.category || targetTx.category || 'General';
+    const confirmed = window.confirm(
+      `Revert this split transaction back to a single category ("${fallback}")?`
+    );
+    if (!confirmed) return;
+
+    setOpenMenuTxId(null);
+    setSplitSaving(true);
+    try {
+      await apiFetch(`/api/finance/transactions/${targetTx.id}/split`, {
+        method: 'DELETE',
+        body: JSON.stringify({ category: fallback }),
+      });
+      handleCloseSplitModal();
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      setSplitError(err.message || 'Failed to revert split');
+    } finally {
+      setSplitSaving(false);
+    }
+  };
+
+  const handleOpenNoteModal = (tx) => {
+    setOpenMenuTxId(null);
+    setEditingNoteTx(tx);
+    const existing =
+      tx.notes && tx.notes.trim() !== 'Synced from Plaid' ? tx.notes.trim() : '';
+    setNoteInput(existing);
+  };
+
+  const handleCloseNoteModal = () => {
+    setEditingNoteTx(null);
+    setNoteInput('');
+    setNoteSaving(false);
+  };
+
+  const handleSaveNote = async (e) => {
+    e?.preventDefault();
+    if (!editingNoteTx) return;
+    setNoteSaving(true);
+    try {
+      await apiFetch(`/api/finance/transactions/${editingNoteTx.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: noteInput.trim() }),
+      });
+      handleCloseNoteModal();
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const handleClearNote = async () => {
+    if (!editingNoteTx) return;
+    setNoteSaving(true);
+    try {
+      await apiFetch(`/api/finance/transactions/${editingNoteTx.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: '' }),
+      });
+      handleCloseNoteModal();
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } finally {
+      setNoteSaving(false);
+    }
   };
 
   const handleSaveCustomCategoryOnTx = async (txId) => {

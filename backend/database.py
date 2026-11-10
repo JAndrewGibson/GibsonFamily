@@ -146,10 +146,23 @@ CREATE TABLE IF NOT EXISTS transactions (
     notes TEXT,
     is_pending INTEGER NOT NULL DEFAULT 0,
     is_savings_spend INTEGER NOT NULL DEFAULT 0,
+    is_cc_payment INTEGER NOT NULL DEFAULT 0,
+    is_split INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS transaction_splits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    amount REAL NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_transaction_splits_txid ON transaction_splits(transaction_id);
 
 CREATE TABLE IF NOT EXISTS budgets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -424,6 +437,10 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE transactions ADD COLUMN is_pending INTEGER NOT NULL DEFAULT 0")
     if "is_savings_spend" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN is_savings_spend INTEGER NOT NULL DEFAULT 0")
+    if "is_cc_payment" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN is_cc_payment INTEGER NOT NULL DEFAULT 0")
+    if "is_split" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN is_split INTEGER NOT NULL DEFAULT 0")
     if "savings_account_id" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN savings_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL")
     db.execute(
@@ -432,6 +449,25 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE transactions SET is_savings_spend = 1 WHERE LOWER(TRIM(category)) IN ('spent from savings', 'savings spend', 'from savings')"
     )
+    db.execute(
+        "UPDATE transactions SET is_cc_payment = 1 WHERE LOWER(TRIM(category)) IN ('credit card payment', 'cc payment', 'card payment')"
+    )
+    db.execute("UPDATE transactions SET notes = '' WHERE TRIM(notes) = 'Synced from Plaid'")
+    db.execute("UPDATE income_entries SET notes = '' WHERE TRIM(notes) = 'Synced from Plaid'")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transaction_splits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            amount REAL NOT NULL,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS idx_transaction_splits_txid ON transaction_splits(transaction_id)")
 
     inc_cols = [r["name"] for r in db.execute("PRAGMA table_info(income_entries)").fetchall()]
     if "category" not in inc_cols:

@@ -151,6 +151,15 @@ GibsonFamily/
     - `only_this_month`: Applies a one-month adjustment to `selected_month` only.
 - **Historical Months View (`GET /api/finance/history`)**:
   - Returns month-by-month total income, income fluctuation delta/%, total spend, total budget, net cash flow, net budget variance, utilization %, and per-category breakdown across all historical and active months.
+- **Credit Card Payment Marking (`transactions.is_cc_payment`)**:
+  - Outgoing payments from checking or depository accounts paying off credit cards can be marked as **Credit Card Payment** (via the transaction row `☰` menu or category selector, `is_cc_payment = 1` / `category = "Credit Card Payment"`).
+  - Completely excludes the debt payoff transaction from monthly budget spending (`total_monthly_spent`, `total_gross_spent`, category limits, and the Layered Budget Balance Bar) so credit card payoffs never double-count expenses already recorded on the card.
+  - Can be unmarked / restored to the budget at any time.
+- **Split Category Transactions (`transactions.is_split`, `transaction_splits` table, `POST/DELETE /api/finance/transactions/<id>/split`)**:
+  - Allows any transaction (e.g. Target, Costco, Amazon) to be allocated across multiple spending categories with per-category amounts and optional notes.
+  - Includes interactive Split Modal with total amount validation, remaining allocation helper, and exact match calculation.
+  - Each split amount accurately increments its respective category budget and spending charts, while preserving total gross spend and net cashflow.
+  - Displays interactive split pills and chips in the ledger, with full ability to re-edit the split or revert to a single-category transaction at any time.
 - **Savings & Brokerage Long-Term Analytics & Spending from Savings (`SavingsModule.jsx`, `transactions.is_savings_spend`, `account_balance_snapshots`)**:
   - **Spend from Savings (`is_savings_spend = 1` / `category = "Spent from Savings"`)**:
     - Big purchases that were saved for can be marked as **Spent from Savings** (via the transaction row `☰` menu, category selector, `+ Log Expense`, or the **Savings & Analytics** module).
