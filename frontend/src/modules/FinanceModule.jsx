@@ -3594,13 +3594,59 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               <PiggyBank size={11} /> From Savings (Excl. Budget)
                             </span>
                           )}
+                          {Boolean(tx.is_cc_payment) && (
+                            <span
+                              className="pill pill-amber"
+                              style={{ fontSize: '0.68rem', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+                              title="Credit card payoff — excluded from monthly budget spending"
+                            >
+                              <CreditCard size={11} /> CC Payment (Excl. Budget)
+                            </span>
+                          )}
+                          {Boolean(tx.is_split) && (
+                            <span
+                              className="pill pill-cyan"
+                              style={{ fontSize: '0.68rem', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', borderColor: 'rgba(6, 182, 212, 0.3)', cursor: 'pointer' }}
+                              onClick={() => handleOpenSplitModal(tx)}
+                              title="Click to view or edit category splits"
+                            >
+                              <Scissors size={11} /> Split ({tx.splits?.length || 2})
+                            </span>
+                          )}
                         </div>
-                        {tx.notes && <small className="tx-note"> — {tx.notes}</small>}
+                        {Boolean(tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid') && (
+                          <small className="tx-note"> — {tx.notes.trim()}</small>
+                        )}
                       </td>
 
                       {/* Reassignable Category Column */}
                       <td className="tx-cell-cat">
-                        {isEditingCustomCat ? (
+                        {tx.is_split ? (
+                          <div className="tx-split-display">
+                            <button
+                              type="button"
+                              className="tx-split-badge-btn"
+                              onClick={() => handleOpenSplitModal(tx)}
+                              title="Click to edit or adjust category split"
+                            >
+                              <Scissors size={12} />
+                              <span>Split ({tx.splits?.length || 0})</span>
+                              <Edit3 size={11} style={{ opacity: 0.7 }} />
+                            </button>
+                            <div className="tx-split-chips-list">
+                              {tx.splits?.map((sp, idx) => (
+                                <span
+                                  key={sp.id || idx}
+                                  className="tx-split-chip"
+                                  title={sp.notes ? `${sp.category}: $${Number(sp.amount).toFixed(2)} (${sp.notes})` : `${sp.category}: $${Number(sp.amount).toFixed(2)}`}
+                                >
+                                  <span className="tx-split-chip-cat">{sp.category}</span>:
+                                  <span className="tx-split-chip-amt">${Number(sp.amount).toFixed(2)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : isEditingCustomCat ? (
                           <div className="inline-custom-cat-box">
                             <input
                               type="text"
@@ -3638,13 +3684,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               value={tx.category}
                               onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
                             >
+                              <option value="Credit Card Payment">
+                                💳 Credit Card Payment (Exclude from Budget)
+                              </option>
                               <option value="Spent from Savings">
                                 🏦 Spent from Savings (Exclude from Budget)
                               </option>
                               {Array.from(
                                 new Set(
                                   [...availableCategories, tx.category].filter(
-                                    (c) => c && c !== 'Spent from Savings'
+                                    (c) => c && c !== 'Spent from Savings' && c !== 'Credit Card Payment' && c !== 'Split'
                                   )
                                 )
                               ).map((cat) => (
@@ -3652,9 +3701,17 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   {cat}
                                 </option>
                               ))}
+                              <option value="__split__">✂️ Split across categories...</option>
                               <option value="__custom__">+ Custom Category...</option>
                             </select>
-                            {Boolean(tx.is_savings_spend) ? (
+                            {Boolean(tx.is_cc_payment) ? (
+                              <span
+                                className="pill pill-amber"
+                                style={{ fontSize: '0.68rem', alignSelf: 'flex-start', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+                              >
+                                <CreditCard size={11} /> CC Payoff — Excluded from Budget
+                              </span>
+                            ) : Boolean(tx.is_savings_spend) ? (
                               <span
                                 className="pill pill-purple"
                                 style={{ fontSize: '0.68rem', alignSelf: 'flex-start' }}
@@ -3722,6 +3779,62 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   <X size={16} />
                                 </button>
                               </div>
+
+                              {/* Mark as CC Payment */}
+                              <button
+                                type="button"
+                                className="tx-popover-item"
+                                onClick={() => handleToggleCcPayment(tx)}
+                                style={{
+                                  fontWeight: 600,
+                                  color: tx.is_cc_payment ? '#10b981' : '#f59e0b',
+                                }}
+                              >
+                                <CreditCard size={14} />
+                                {tx.is_cc_payment
+                                  ? 'Restore to Monthly Budget (Unmark CC Payment)'
+                                  : 'Mark as CC Payment (Exclude from Budget)'}
+                              </button>
+
+                              {/* Split category transaction */}
+                              <button
+                                type="button"
+                                className="tx-popover-item"
+                                onClick={() => handleOpenSplitModal(tx)}
+                                style={{
+                                  fontWeight: 600,
+                                  color: tx.is_split ? '#06b6d4' : 'var(--text-main)',
+                                }}
+                              >
+                                <Scissors size={14} />
+                                {tx.is_split
+                                  ? `Edit Split Categories (${tx.splits?.length || 2})`
+                                  : 'Split Category Transaction'}
+                              </button>
+
+                              {Boolean(tx.is_split) && (
+                                <button
+                                  type="button"
+                                  className="tx-popover-item tx-popover-danger"
+                                  onClick={() => handleRevertSplit(tx)}
+                                >
+                                  <RotateCcw size={14} />
+                                  Revert to Single Category
+                                </button>
+                              )}
+
+                              {/* Add / Edit Note */}
+                              <button
+                                type="button"
+                                className="tx-popover-item"
+                                onClick={() => handleOpenNoteModal(tx)}
+                                style={{ fontWeight: 500 }}
+                              >
+                                <FileText size={14} className="text-cyan" />
+                                {tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid'
+                                  ? 'Edit Note'
+                                  : 'Add Note'}
+                              </button>
 
                               <button
                                 type="button"
@@ -5259,129 +5372,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       )}
 
       {/* =====================================================================
-          FLOATING MODAL: RECLASSIFY INFLOW / DEPOSIT
-         ===================================================================== */}
-      {editingIncomeEntry && (
-        <div
-          className="finance-modal-backdrop"
-          onClick={() => setEditingIncomeEntry(null)}
-        >
-          <div
-            className="finance-modal-card"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="finance-modal-header">
-              <div>
-                <h3>
-                  <SlidersHorizontal size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
-                  Reclassify Inflow / Deposit
-                </h3>
-                <p className="text-muted">
-                  Choose whether this is true earned income, a return offsetting a category, or an excluded card payment/transfer.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn-icon-subtle"
-                onClick={() => setEditingIncomeEntry(null)}
-                aria-label="Close modal"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form className="finance-modal-body" onSubmit={handleSaveReclassify}>
-              <div className="reclassify-source-summary">
-                <div>
-                  <strong>{editingIncomeEntry.source_name}</strong>
-                  <div className="text-muted" style={{ fontSize: '0.78rem' }}>
-                    {editingIncomeEntry.date}
-                    {editingIncomeEntry.notes ? ` • ${editingIncomeEntry.notes}` : ''}
-                  </div>
-                </div>
-                <strong className="font-mono text-green" style={{ fontSize: '1.1rem' }}>
-                  ${Number(editingIncomeEntry.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                </strong>
-              </div>
-
-              <div className="form-group" style={{ marginTop: '0.9rem' }}>
-                <label>Inflow Classification *</label>
-                <select
-                  className="input"
-                  value={editIncType}
-                  onChange={(e) => {
-                    setEditIncType(e.target.value);
-                    if (e.target.value === 'return' && !editIncCategory) {
-                      setEditIncCategory(availableCategories[0] || 'Shopping & Tech');
-                    }
-                  }}
-                >
-                  <optgroup label="Real Earned Income (Counts Toward Monthly Income)">
-                    <option value="payroll">Payroll / Salary (Actual Earned Income)</option>
-                    <option value="variable">Variable / Commission / Hourly</option>
-                    <option value="bonus">Bonus / Lump Sum Payout</option>
-                    <option value="side_income">Side Income / Freelance</option>
-                    <option value="other">Other Earned Deposit</option>
-                  </optgroup>
-                  <optgroup label="Store Returns / Refunds (Offsets Category Spend & Restores Budget)">
-                    <option value="return">Return / Refund (Offsets Category Spend)</option>
-                  </optgroup>
-                  <optgroup label="Non-Income Inflows (Excluded from Income)">
-                    <option value="cc_payment">Credit Card Payment (Debt Payoff - Excluded)</option>
-                    <option value="transfer">Account Transfer (Moving Funds - Excluded)</option>
-                  </optgroup>
-                </select>
-              </div>
-
-              {editIncType === 'return' && (
-                <div className="form-group" style={{ marginTop: '0.85rem' }}>
-                  <label>Category to Credit & Offset *</label>
-                  <select
-                    className="input"
-                    value={editIncCategory}
-                    onChange={(e) => setEditIncCategory(e.target.value)}
-                    required
-                  >
-                    <option value="">-- Choose Category to Offset --</option>
-                    {availableCategories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                  <small className="text-muted" style={{ display: 'block', marginTop: '0.35rem' }}>
-                    ⚖️ <strong>Financial Equilibrium</strong>: Crediting this category subtracts $
-                    {Number(editingIncomeEntry.amount).toFixed(2)} from your category's net spend and restores it to your remaining budget, without inflating your total income ceiling.
-                  </small>
-                </div>
-              )}
-
-              {(editIncType === 'cc_payment' || editIncType === 'transfer') && (
-                <div className="alert alert-info" style={{ marginTop: '0.85rem' }}>
-                  <span>
-                    ℹ️ Marking this entry as <strong>{editIncType === 'cc_payment' ? 'Credit Card Payment' : 'Account Transfer'}</strong> ensures it is completely excluded from your monthly earned income, preventing overstated income.
-                  </span>
-                </div>
-              )}
-
-              <div className="form-actions" style={{ marginTop: '1.2rem' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setEditingIncomeEntry(null)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Apply Classification
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
           FLOATING MODAL 6: LOG EXPENSE
          ===================================================================== */}
       {showAddTx && (
@@ -5935,6 +5925,474 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: RECLASSIFY INFLOW / DEPOSIT (Secondary Modal)
+         ===================================================================== */}
+      {editingIncomeEntry && (
+        <div
+          className="finance-modal-backdrop finance-modal-backdrop-secondary"
+          onClick={() => setEditingIncomeEntry(null)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <SlidersHorizontal size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                  Reclassify Inflow / Deposit
+                </h3>
+                <p className="text-muted">
+                  Choose whether this is true earned income, a return offsetting a category, or an excluded card payment/transfer.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setEditingIncomeEntry(null)}
+                aria-label="Close modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveReclassify}>
+              <div className="reclassify-source-summary">
+                <div>
+                  <strong>{editingIncomeEntry.source_name}</strong>
+                  <div className="text-muted" style={{ fontSize: '0.78rem' }}>
+                    {editingIncomeEntry.date}
+                    {editingIncomeEntry.notes ? ` • ${editingIncomeEntry.notes}` : ''}
+                  </div>
+                </div>
+                <strong className="font-mono text-green" style={{ fontSize: '1.1rem' }}>
+                  ${Number(editingIncomeEntry.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </strong>
+              </div>
+
+              <div className="form-group" style={{ marginTop: '0.9rem' }}>
+                <label>Inflow Classification *</label>
+                <select
+                  className="input"
+                  value={editIncType}
+                  onChange={(e) => {
+                    setEditIncType(e.target.value);
+                    if (e.target.value === 'return' && !editIncCategory) {
+                      setEditIncCategory(availableCategories[0] || 'Shopping & Tech');
+                    }
+                  }}
+                >
+                  <optgroup label="Real Earned Income (Counts Toward Monthly Income)">
+                    <option value="payroll">Payroll / Salary (Actual Earned Income)</option>
+                    <option value="variable">Variable / Commission / Hourly</option>
+                    <option value="bonus">Bonus / Lump Sum Payout</option>
+                    <option value="side_income">Side Income / Freelance</option>
+                    <option value="other">Other Earned Deposit</option>
+                  </optgroup>
+                  <optgroup label="Store Returns / Refunds (Offsets Category Spend & Restores Budget)">
+                    <option value="return">Return / Refund (Offsets Category Spend)</option>
+                  </optgroup>
+                  <optgroup label="Non-Income Inflows (Excluded from Income)">
+                    <option value="cc_payment">Credit Card Payment (Debt Payoff - Excluded)</option>
+                    <option value="transfer">Account Transfer (Moving Funds - Excluded)</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              {editIncType === 'return' && (
+                <div className="form-group" style={{ marginTop: '0.85rem' }}>
+                  <label>Category to Credit & Offset *</label>
+                  <select
+                    className="input"
+                    value={editIncCategory}
+                    onChange={(e) => setEditIncCategory(e.target.value)}
+                    required
+                  >
+                    <option value="">-- Choose Category to Offset --</option>
+                    {availableCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="text-muted" style={{ display: 'block', marginTop: '0.35rem' }}>
+                    ⚖️ <strong>Financial Equilibrium</strong>: Crediting this category subtracts $
+                    {Number(editingIncomeEntry.amount).toFixed(2)} from your category's net spend and restores it to your remaining budget, without inflating your total income ceiling.
+                  </small>
+                </div>
+              )}
+
+              {(editIncType === 'cc_payment' || editIncType === 'transfer') && (
+                <div className="alert alert-info" style={{ marginTop: '0.85rem' }}>
+                  <span>
+                    ℹ️ Marking this entry as <strong>{editIncType === 'cc_payment' ? 'Credit Card Payment' : 'Account Transfer'}</strong> ensures it is completely excluded from your monthly earned income, preventing overstated income.
+                  </span>
+                </div>
+              )}
+
+              <div className="form-actions" style={{ marginTop: '1.2rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEditingIncomeEntry(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Apply Classification
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: SPLIT TRANSACTION CATEGORIES (Secondary Modal)
+         ===================================================================== */}
+      {splittingTx && (
+        <div
+          className="finance-modal-backdrop finance-modal-backdrop-secondary"
+          onClick={handleCloseSplitModal}
+        >
+          <div
+            className="finance-modal-card split-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <Scissors size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} className="text-cyan" />
+                  Split Category Transaction
+                </h3>
+                <p className="text-muted">
+                  Allocate this single transaction across one or more spending categories.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={handleCloseSplitModal}
+                aria-label="Close split modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveSplit}>
+              {/* Transaction Summary Hero */}
+              <div className="split-hero-banner">
+                <div className="split-hero-meta">
+                  <span className="split-hero-name">{splittingTx.name}</span>
+                  <span className="split-hero-sub">
+                    {splittingTx.date}
+                    {splittingTx.account_name ? ` • ${splittingTx.account_name}` : ''}
+                    {splittingTx.account_mask ? ` (•••• ${splittingTx.account_mask})` : ''}
+                  </span>
+                </div>
+                <div className="split-hero-total">
+                  ${Number(splittingTx.amount || 0).toFixed(2)}
+                </div>
+              </div>
+
+              {/* Allocation Stats */}
+              {(() => {
+                const totalAmt = Number(splittingTx.amount || 0);
+                const allocated = splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+                const remaining = Number((totalAmt - allocated).toFixed(2));
+                const isExact = Math.abs(remaining) <= 0.005;
+                const isOver = remaining < -0.005;
+
+                return (
+                  <>
+                    <div className="split-summary-bar">
+                      <div className="split-summary-col">
+                        <span className="split-summary-label">Total Amount</span>
+                        <span className="split-summary-val font-mono">${totalAmt.toFixed(2)}</span>
+                      </div>
+                      <div className="split-summary-col">
+                        <span className="split-summary-label">Allocated</span>
+                        <span
+                          className="split-summary-val font-mono"
+                          style={{ color: isExact ? '#10b981' : isOver ? '#ef4444' : '#f59e0b' }}
+                        >
+                          ${allocated.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="split-summary-col">
+                        <span className="split-summary-label">Remaining</span>
+                        <span
+                          className="split-summary-val font-mono"
+                          style={{ color: isExact ? '#10b981' : isOver ? '#ef4444' : '#f59e0b' }}
+                        >
+                          ${Math.abs(remaining).toFixed(2)} {isOver ? 'over' : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className={`split-status-alert ${isExact ? 'alert-match' : isOver ? 'alert-over' : 'alert-unallocated'}`}>
+                      <span>
+                        {isExact ? (
+                          <>
+                            <CheckCircle2 size={15} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                            Exact match! All <strong>${totalAmt.toFixed(2)}</strong> allocated across {splitRows.length} categories.
+                          </>
+                        ) : isOver ? (
+                          <>
+                            <AlertTriangle size={15} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                            Over-allocated by <strong>${Math.abs(remaining).toFixed(2)}</strong>. Please decrease split amounts.
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle size={15} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
+                            <strong>${remaining.toFixed(2)}</strong> remaining to be allocated.
+                          </>
+                        )}
+                      </span>
+                      {!isExact && remaining > 0 && splitRows.length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => handleAutoAllocateRemainder(splitRows.length - 1)}
+                        >
+                          Auto-fill on last row
+                        </button>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+
+              {splitError && (
+                <div className="alert alert-danger" style={{ marginBottom: '1rem' }}>
+                  <AlertTriangle size={15} /> {splitError}
+                </div>
+              )}
+
+              {/* Split Category Rows */}
+              <div className="split-rows-container">
+                {splitRows.map((row, idx) => (
+                  <div key={idx} className="split-row-card">
+                    <div className="split-row-cat">
+                      <select
+                        className="input input-sm"
+                        value={row.category}
+                        onChange={(e) => handleUpdateSplitRow(idx, 'category', e.target.value)}
+                        required
+                      >
+                        {Array.from(new Set([...availableCategories, row.category].filter(Boolean))).map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="split-row-amt">
+                      <div className="split-amt-wrapper">
+                        <span className="split-amt-prefix">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          className="input input-sm split-amt-input"
+                          placeholder="0.00"
+                          value={row.amount}
+                          onChange={(e) => handleUpdateSplitRow(idx, 'amount', e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div className="split-row-notes">
+                      <input
+                        type="text"
+                        className="input input-sm"
+                        placeholder="Optional note / label..."
+                        value={row.notes}
+                        onChange={(e) => handleUpdateSplitRow(idx, 'notes', e.target.value)}
+                      />
+                    </div>
+
+                    <div className="split-row-del">
+                      <button
+                        type="button"
+                        className="btn-icon-subtle text-danger"
+                        onClick={() => handleRemoveSplitRow(idx)}
+                        title="Remove category split"
+                        disabled={splitRows.length <= 1}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '0.25rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleAddSplitRow}
+                >
+                  <Plus size={14} /> Add Another Category Split
+                </button>
+              </div>
+
+              <div className="finance-modal-footer" style={{ marginTop: '1.25rem', padding: '0.85rem 0 0 0' }}>
+                {Boolean(splittingTx.is_split) && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    style={{ marginRight: 'auto' }}
+                    onClick={() => handleRevertSplit(splittingTx)}
+                    disabled={splitSaving}
+                  >
+                    <RotateCcw size={14} /> Revert to Single Category
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleCloseSplitModal}
+                  disabled={splitSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  disabled={
+                    splitSaving ||
+                    Math.abs(
+                      Number(splittingTx.amount || 0) -
+                        splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+                    ) > 0.01
+                  }
+                >
+                  {splitSaving ? 'Saving Split...' : 'Save Split Allocation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: TRANSACTION NOTE (Secondary Modal)
+         ===================================================================== */}
+      {editingNoteTx && (
+        <div
+          className="finance-modal-backdrop finance-modal-backdrop-secondary"
+          onClick={handleCloseNoteModal}
+        >
+          <div
+            className="finance-modal-card note-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3>
+                  <FileText
+                    size={18}
+                    style={{ verticalAlign: 'middle', marginRight: '0.35rem' }}
+                    className="text-cyan"
+                  />
+                  {editingNoteTx.notes &&
+                  editingNoteTx.notes.trim() &&
+                  editingNoteTx.notes.trim() !== 'Synced from Plaid'
+                    ? 'Edit Transaction Note'
+                    : 'Add Transaction Note'}
+                </h3>
+                <p className="text-muted">
+                  Add context, receipt details, or notes to this transaction.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={handleCloseNoteModal}
+                aria-label="Close note modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveNote}>
+              <div className="split-hero-banner" style={{ marginBottom: '1rem' }}>
+                <div className="split-hero-meta">
+                  <span className="split-hero-name">{editingNoteTx.name}</span>
+                  <span className="split-hero-sub">
+                    {editingNoteTx.date}
+                    {editingNoteTx.account_name ? ` • ${editingNoteTx.account_name}` : ''}
+                    {editingNoteTx.category ? ` • ${editingNoteTx.category}` : ''}
+                  </span>
+                </div>
+                <div className="split-hero-total">
+                  ${Number(editingNoteTx.amount || 0).toFixed(2)}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Note</label>
+                <textarea
+                  className="input"
+                  rows={3}
+                  placeholder="e.g., Target run for diapers & cleaning supplies..."
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  autoFocus
+                  style={{ resize: 'vertical', minHeight: '80px', lineHeight: 1.4 }}
+                />
+                <small
+                  className="text-muted"
+                  style={{ display: 'block', marginTop: '0.35rem' }}
+                >
+                  This note will appear in italics next to the transaction in your ledger.
+                </small>
+              </div>
+
+              <div
+                className="finance-modal-footer"
+                style={{ marginTop: '1.25rem', padding: '0.75rem 0 0 0' }}
+              >
+                {Boolean(
+                  editingNoteTx.notes &&
+                    editingNoteTx.notes.trim() &&
+                    editingNoteTx.notes.trim() !== 'Synced from Plaid'
+                ) && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    style={{ marginRight: 'auto' }}
+                    onClick={handleClearNote}
+                    disabled={noteSaving}
+                  >
+                    Clear Note
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleCloseNoteModal}
+                  disabled={noteSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  disabled={noteSaving}
+                >
+                  {noteSaving ? 'Saving...' : 'Save Note'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
