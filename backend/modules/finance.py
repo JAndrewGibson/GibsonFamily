@@ -215,32 +215,135 @@ def _shift_year_month(ym: str, delta_months: int) -> str:
         return date.today().strftime("%Y-%m")
 
 
-def _ensure_category_in_catalog(db, name: str, is_preloaded: int = 0, unarchive: bool = True) -> None:
+def _generate_month_range(start_ym: str, end_ym: str) -> list[str]:
+    """Generates a chronological list of YYYY-MM strings from start_ym to end_ym inclusive."""
+    if not start_ym or not end_ym:
+        return [end_ym or start_ym or date.today().strftime("%Y-%m")]
+    if start_ym > end_ym:
+        return [end_ym]
+    result = []
+    curr = start_ym
+    safety = 0
+    while curr <= end_ym and safety < 240:
+        result.append(curr)
+        curr = _shift_year_month(curr, 1)
+        safety += 1
+    return result
+
+
+def is_spending_money_category(name: str) -> bool:
+    clean = (name or "").replace("’", "'").replace("‘", "'").strip().lower()
+    return "spending money" in clean
+
+
+def resolve_partner_spending_money_category(
+    db, partner_name: str, existing_names: list[str] | None = None
+) -> str:
+    """
+    Resolves the partner's dedicated '{user}'s Spending Money' category name.
+    If the user has already manually created a matching category (e.g. "Andrew's Spending Money"),
+    reuses that exact category name; otherwise defaults to "{FirstName}'s Spending Money".
+    """
+    full_name = (partner_name or "").strip()
+    first_name = full_name.split()[0] if full_name else "Partner"
+    if existing_names is None:
+        rows = db.execute(
+            """
+            SELECT DISTINCT category AS name FROM budgets
+            UNION
+            SELECT DISTINCT category AS name FROM monthly_budgets
+            UNION
+            SELECT DISTINCT name FROM category_catalog
+            UNION
+            SELECT DISTINCT category AS name FROM transactions WHERE is_split = 0
+            UNION
+            SELECT DISTINCT category AS name FROM transaction_splits
+            """
+        ).fetchall()
+        existing_names = [(r["name"] or "").strip() for r in rows if (r["name"] or "").strip()]
+
+    fn_lower = full_name.replace("’", "'").replace("‘", "'").lower()
+    first_lower = first_name.replace("’", "'").replace("‘", "'").lower()
+    candidates_exact = {
+        f"{fn_lower}'s spending money",
+        f"{first_lower}'s spending money",
+        f"{fn_lower}s spending money",
+        f"{first_lower}s spending money",
+        f"{fn_lower} spending money",
+        f"{first_lower} spending money",
+    }
+    for existing in existing_names:
+        norm = existing.replace("’", "'").replace("‘", "'").strip().lower()
+        if norm in candidates_exact:
+            return existing
+    for existing in existing_names:
+        norm = existing.replace("’", "'").replace("‘", "'").strip().lower()
+        if first_lower and first_lower in norm and "spending money" in norm:
+            return existing
+    return f"{first_name}'s Spending Money"
+
+
+def _ensure_category_in_catalog(
+    db,
+    name: str,
+    is_preloaded: int = 0,
+    unarchive: bool = True,
+    allow_rollover: int | None = None,
+    color: str | None = None,
+) -> None:
     clean = (name or "").strip()
     if not clean or clean.lower() in NON_BUDGET_CATEGORIES:
         return
-    db.execute(
-        """
-        INSERT INTO category_catalog (name, is_preloaded, is_archived, color)
-        VALUES (?, ?, 0, ?)
-        ON CONFLICT(name) DO UPDATE SET
-            is_archived = CASE WHEN ? THEN 0 ELSE category_catalog.is_archived END
-        """,
-        (clean, 1 if is_preloaded else 0, "#6366f1" if is_preloaded else "#06b6d4", 1 if unarchive else 0),
-    )
+    default_rollover = 1 if is_spending_money_category(clean) else 0
+    insert_rollover = default_rollover if allow_rollover is None else (1 if allow_rollover else 0)
+    insert_color = color or ("#6366f1" if is_preloaded else "#06b6d4")
+    if allow_rollover is not None:
+        db.execute(
+            """
+            INSERT INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+            VALUES (?, ?, 0, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                is_archived = CASE WHEN ? THEN 0 ELSE category_catalog.is_archived END,
+                allow_rollover = excluded.allow_rollover
+            """,
+            (
+                clean,
+                1 if is_preloaded else 0,
+                insert_color,
+                insert_rollover,
+                1 if unarchive else 0,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            INSERT INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+            VALUES (?, ?, 0, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                is_archived = CASE WHEN ? THEN 0 ELSE category_catalog.is_archived END
+            """,
+            (
+                clean,
+                1 if is_preloaded else 0,
+                insert_color,
+                insert_rollover,
+                1 if unarchive else 0,
+            ),
+        )
 
 
 def _sync_category_catalog(db) -> list[dict]:
     """
-    Ensures pre-loaded DEFAULT_CATEGORIES and any custom categories from budgets/transactions
-    are registered in `category_catalog` without resurrecting categories the user archived/removed.
+    Ensures pre-loaded DEFAULT_CATEGORIES, each partner's '{user}'s Spending Money' category,
+    and any custom categories from budgets/transactions are registered in `category_catalog`
+    without resurrecting categories the user archived/removed.
     Never registers status categories like 'Split', 'Credit Card Payment', or 'Spent from Savings'.
     """
     for def_cat in DEFAULT_CATEGORIES:
         db.execute(
             """
-            INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color)
-            VALUES (?, 1, 0, '#6366f1')
+            INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+            VALUES (?, 1, 0, '#6366f1', 0)
             """,
             (def_cat,),
         )
@@ -256,15 +359,39 @@ def _sync_category_catalog(db) -> list[dict]:
         SELECT DISTINCT category FROM transaction_splits
         """
     ).fetchall()
-    for r in discovered:
-        cat_name = (r["category"] or "").strip()
+    discovered_names = [(r["category"] or "").strip() for r in discovered if (r["category"] or "").strip()]
+
+    # Ensure each partner has their dedicated "{user}'s Spending Money" category (with allow_rollover=1 by default)
+    partner_rows = db.execute("SELECT id, name, avatar_color FROM partners ORDER BY id").fetchall()
+    existing_cat_rows = db.execute("SELECT name FROM category_catalog").fetchall()
+    all_known_names = list(set(discovered_names + [r["name"] for r in existing_cat_rows]))
+    partner_sm_categories = set()
+    for p in partner_rows:
+        sm_cat = resolve_partner_spending_money_category(db, p["name"], all_known_names)
+        partner_sm_categories.add(sm_cat)
+        if sm_cat not in all_known_names:
+            all_known_names.append(sm_cat)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+            VALUES (?, 1, 0, ?, 1)
+            """,
+            (sm_cat, p["avatar_color"] or "#ec4899"),
+        )
+
+    for cat_name in discovered_names:
         if cat_name and cat_name.lower() not in NON_BUDGET_CATEGORIES:
+            default_ro = 1 if (cat_name in partner_sm_categories or is_spending_money_category(cat_name)) else 0
             db.execute(
                 """
-                INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color)
-                VALUES (?, ?, 0, '#06b6d4')
+                INSERT OR IGNORE INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+                VALUES (?, ?, 0, '#06b6d4', ?)
                 """,
-                (cat_name, 1 if cat_name in DEFAULT_CATEGORIES else 0),
+                (
+                    cat_name,
+                    1 if (cat_name in DEFAULT_CATEGORIES or cat_name in partner_sm_categories) else 0,
+                    default_ro,
+                ),
             )
 
     # Purge any non-budget pseudo-categories that might have previously slipped into category_catalog
@@ -279,6 +406,250 @@ def _sync_category_catalog(db) -> list[dict]:
         ).fetchall()
         if r["name"].strip().lower() not in NON_BUDGET_CATEGORIES
     ]
+
+
+def _compute_rollover_data(
+    db,
+    selected_month: str,
+    all_transactions: list[dict],
+    all_income_entries: list[dict],
+    catalog_rows: list[dict] | None = None,
+) -> dict:
+    """
+    Computes cumulative month-by-month rollover balances, amounts spent from rollover saving,
+    and negative rollover debt for all rollover-enabled categories up through `selected_month`.
+    """
+    if catalog_rows is None:
+        catalog_rows = _sync_category_catalog(db)
+
+    allow_rollover_map = {
+        r["name"]: bool(r.get("allow_rollover"))
+        for r in catalog_rows
+    }
+
+    mb_all_rows = [
+        dict(r)
+        for r in db.execute(
+            "SELECT * FROM monthly_budgets ORDER BY budget_month ASC, id ASC"
+        ).fetchall()
+    ]
+    base_budget_rows = [
+        dict(r)
+        for r in db.execute("SELECT * FROM budgets ORDER BY id ASC").fetchall()
+    ]
+    base_budgets_map = {r["category"]: r for r in base_budget_rows}
+
+    for r in mb_all_rows:
+        cat = r["category"]
+        if cat not in allow_rollover_map:
+            allow_rollover_map[cat] = bool(r.get("allow_rollover")) or is_spending_money_category(cat)
+        elif r.get("allow_rollover"):
+            allow_rollover_map[cat] = True
+
+    for r in base_budget_rows:
+        cat = r["category"]
+        if cat not in allow_rollover_map:
+            allow_rollover_map[cat] = bool(r.get("allow_rollover")) or is_spending_money_category(cat)
+        elif r.get("allow_rollover"):
+            allow_rollover_map[cat] = True
+
+    gross_by_ym_cat: dict[tuple[str, str], float] = {}
+    tx_cnt_by_ym_cat: dict[tuple[str, str], int] = {}
+    for tx in all_transactions:
+        if is_tx_savings_spend(tx) or is_tx_cc_payment(tx):
+            continue
+        ym = (tx.get("budget_month") or tx.get("effective_budget_month") or (tx.get("date") or "")[:7]).strip()[:7]
+        if not ym:
+            continue
+        if tx.get("is_split") and tx.get("splits"):
+            for sp in tx["splits"]:
+                sp_cat = (sp.get("category") or "").strip()
+                if sp_cat and sp_cat.lower() not in NON_BUDGET_CATEGORIES:
+                    gross_by_ym_cat[(ym, sp_cat)] = gross_by_ym_cat.get((ym, sp_cat), 0.0) + float(sp.get("amount") or 0.0)
+                    tx_cnt_by_ym_cat[(ym, sp_cat)] = tx_cnt_by_ym_cat.get((ym, sp_cat), 0) + 1
+        elif not tx.get("is_split"):
+            cat = (tx.get("category") or "").strip()
+            if cat and cat.lower() not in NON_BUDGET_CATEGORIES:
+                gross_by_ym_cat[(ym, cat)] = gross_by_ym_cat.get((ym, cat), 0.0) + float(tx.get("amount") or 0.0)
+                tx_cnt_by_ym_cat[(ym, cat)] = tx_cnt_by_ym_cat.get((ym, cat), 0) + 1
+
+    returns_by_ym_cat: dict[tuple[str, str], float] = {}
+    for inc in all_income_entries:
+        if is_return_refund(inc.get("income_type")):
+            ym = (inc.get("budget_month") or inc.get("effective_budget_month") or (inc.get("date") or "")[:7]).strip()[:7]
+            rc = (inc.get("category") or "").strip()
+            if ym and rc:
+                returns_by_ym_cat[(ym, rc)] = returns_by_ym_cat.get((ym, rc), 0.0) + float(inc.get("amount") or 0.0)
+
+    mb_by_cat: dict[str, list[dict]] = {}
+    for r in mb_all_rows:
+        mb_by_cat.setdefault(r["category"], []).append(r)
+
+    all_cat_names = set(allow_rollover_map.keys()) | set(mb_by_cat.keys()) | set(base_budgets_map.keys())
+    for (_, c) in gross_by_ym_cat.keys():
+        all_cat_names.add(c)
+
+    by_category: dict[str, dict] = {}
+    ledgers: dict[str, list[dict]] = {}
+
+    for cat in all_cat_names:
+        allow_ro = bool(allow_rollover_map.get(cat, False) or is_spending_money_category(cat))
+        cat_mbs = mb_by_cat.get(cat, [])
+        active_mb_months = [
+            r["budget_month"]
+            for r in cat_mbs
+            if r.get("is_active", 1) and float(r.get("monthly_limit") or 0) > 0
+        ]
+        earliest_budget_ym = (
+            min(active_mb_months)
+            if active_mb_months
+            else (
+                selected_month
+                if (cat in base_budgets_map and float(base_budgets_map[cat].get("monthly_limit") or 0) > 0)
+                else None
+            )
+        )
+
+        if not allow_ro:
+            # Non-rollover category: compute standalone month numbers without cumulative carry
+            limit_sel = 0.0
+            for r in reversed(cat_mbs):
+                if r["budget_month"] == selected_month:
+                    limit_sel = round(float(r["monthly_limit"]), 2) if r.get("is_active", 1) else 0.0
+                    break
+            gross_sel = round(gross_by_ym_cat.get((selected_month, cat), 0.0), 2)
+            ret_sel = round(returns_by_ym_cat.get((selected_month, cat), 0.0), 2)
+            net_sel = round(max(0.0, gross_sel - ret_sel), 2)
+            rem_sel = round(limit_sel - net_sel, 2)
+            by_category[cat] = {
+                "category": cat,
+                "allow_rollover": False,
+                "rollover_in": 0.0,
+                "monthly_limit": limit_sel,
+                "gross_spent": gross_sel,
+                "returns_credited": ret_sel,
+                "spent": net_sel,
+                "spent_from_rollover": 0.0,
+                "month_delta": rem_sel,
+                "rollover_out": 0.0,
+                "effective_available": limit_sel,
+                "effective_remaining": rem_sel,
+                "is_using_rollover": False,
+                "is_in_debt": bool(net_sel > limit_sel and limit_sel > 0),
+            }
+            continue
+
+        # Rollover-enabled category: compute contiguous month-by-month cumulative chain
+        tx_months = [
+            ym
+            for (ym, c) in (set(gross_by_ym_cat.keys()) | set(returns_by_ym_cat.keys()))
+            if c == cat
+        ]
+        candidates = [m for m in ([earliest_budget_ym] + tx_months) if m]
+        if selected_month >= STARTING_BUDGET_MONTH:
+            valid_candidates = [m for m in candidates if m >= STARTING_BUDGET_MONTH]
+            first_ym = min(valid_candidates + [selected_month]) if valid_candidates else selected_month
+        else:
+            first_ym = min(candidates + [selected_month]) if candidates else selected_month
+
+        last_ym = max([selected_month] + [m for m in candidates if m >= first_ym])
+        month_chain = _generate_month_range(first_ym, last_ym)
+
+        running_rollover = 0.0
+        cat_ledger = []
+        selected_snapshot = None
+
+        for ym in month_chain:
+            # Resolve monthly budget limit for (cat, ym)
+            limit_m = 0.0
+            if earliest_budget_ym is not None and ym >= earliest_budget_ym:
+                matched_row = None
+                for r in cat_mbs:
+                    if r["budget_month"] <= ym:
+                        matched_row = r
+                    else:
+                        break
+                if matched_row is not None:
+                    limit_m = round(float(matched_row["monthly_limit"]), 2) if matched_row.get("is_active", 1) else 0.0
+                elif cat in base_budgets_map:
+                    limit_m = round(float(base_budgets_map[cat]["monthly_limit"]), 2)
+
+            gross_m = round(gross_by_ym_cat.get((ym, cat), 0.0), 2)
+            ret_m = round(returns_by_ym_cat.get((ym, cat), 0.0), 2)
+            net_spent_m = round(max(0.0, gross_m - ret_m), 2)
+            tx_cnt_m = tx_cnt_by_ym_cat.get((ym, cat), 0)
+
+            r_in = round(running_rollover, 2)
+            month_delta = round(limit_m - net_spent_m, 2)
+            r_out = round(r_in + month_delta, 2)
+
+            # Automatic allocation from positive rollover when monthly limit is exceeded
+            if r_in > 0 and net_spent_m > limit_m:
+                spent_from_ro = round(min(r_in, max(0.0, net_spent_m - limit_m)), 2)
+            else:
+                spent_from_ro = 0.0
+
+            # Rainbow gradient state: over the month's base limit, covered by positive rollover (not in debt)
+            is_using_ro = bool(net_spent_m > limit_m and r_out >= 0 and spent_from_ro > 0)
+            # Debt / Red state: net balance is negative, or entered month in debt and net balance is still <= 0
+            is_debt = bool(r_out < 0 or (r_in < 0 and r_out <= 0))
+
+            eff_avail = round(limit_m + r_in, 2)
+            eff_rem = r_out
+
+            entry = {
+                "month": ym,
+                "budget_month": ym,
+                "category": cat,
+                "allow_rollover": True,
+                "rollover_in": r_in,
+                "monthly_limit": limit_m,
+                "gross_spent": gross_m,
+                "returns_credited": ret_m,
+                "spent": net_spent_m,
+                "net_spent": net_spent_m,
+                "spent_from_rollover": spent_from_ro,
+                "month_delta": month_delta,
+                "rollover_out": r_out,
+                "effective_available": eff_avail,
+                "effective_remaining": eff_rem,
+                "is_using_rollover": is_using_ro,
+                "is_in_debt": is_debt,
+                "tx_count": tx_cnt_m,
+            }
+            cat_ledger.append(entry)
+            if ym == selected_month:
+                selected_snapshot = entry
+            running_rollover = r_out
+
+        if selected_snapshot is None:
+            selected_snapshot = cat_ledger[-1] if cat_ledger else {
+                "budget_month": selected_month,
+                "category": cat,
+                "allow_rollover": True,
+                "rollover_in": 0.0,
+                "monthly_limit": 0.0,
+                "gross_spent": 0.0,
+                "returns_credited": 0.0,
+                "spent": 0.0,
+                "spent_from_rollover": 0.0,
+                "month_delta": 0.0,
+                "rollover_out": 0.0,
+                "effective_available": 0.0,
+                "effective_remaining": 0.0,
+                "is_using_rollover": False,
+                "is_in_debt": False,
+                "tx_count": 0,
+            }
+
+        by_category[cat] = selected_snapshot
+        ledgers[cat] = cat_ledger
+
+    return {
+        "by_category": by_category,
+        "ledgers": ledgers,
+        "allow_rollover_map": allow_rollover_map,
+    }
 
 
 def _build_category_management_payload(
@@ -340,12 +711,14 @@ def _build_category_management_payload(
         m_cnt = month_cnt_map.get(cat_name, 0)
         tot_spent = round(all_spend_map.get(cat_name, 0.0), 2)
         tot_cnt = all_cnt_map.get(cat_name, 0)
+        allow_ro = bool(row.get("allow_rollover")) or (bool(b_row.get("allow_rollover")) if b_row else False) or is_spending_money_category(cat_name)
         enriched_catalog.append({
             "id": row["id"],
             "name": cat_name,
             "is_preloaded": bool(row["is_preloaded"]),
             "is_custom": not bool(row["is_preloaded"]),
             "is_archived": bool(row["is_archived"]),
+            "allow_rollover": allow_ro,
             "color": b_row["color"] if b_row else row["color"],
             "is_tracked": is_tracked,
             "monthly_limit": round(float(b_row["monthly_limit"]), 2) if b_row else 0.0,
@@ -406,22 +779,22 @@ def _ensure_monthly_budgets_for_month(db, ym: str) -> list[dict]:
 
         if prior_month_row:
             source_rows = db.execute(
-                "SELECT category, monthly_limit, color FROM monthly_budgets WHERE budget_month = ? AND is_active = 1",
+                "SELECT category, monthly_limit, color, allow_rollover FROM monthly_budgets WHERE budget_month = ? AND is_active = 1",
                 (prior_month_row["budget_month"],),
             ).fetchall()
         else:
             source_rows = db.execute(
-                "SELECT category, monthly_limit, color FROM budgets ORDER BY id"
+                "SELECT category, monthly_limit, color, allow_rollover FROM budgets ORDER BY id"
             ).fetchall()
 
         if source_rows:
             for r in source_rows:
                 db.execute(
                     """
-                    INSERT OR IGNORE INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
-                    VALUES (?, ?, ?, ?, 1)
+                    INSERT OR IGNORE INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+                    VALUES (?, ?, ?, ?, 1, ?)
                     """,
-                    (ym, r["category"], r["monthly_limit"], r["color"]),
+                    (ym, r["category"], r["monthly_limit"], r["color"], int(r["allow_rollover"] or 0)),
                 )
             db.commit()
 
@@ -1727,6 +2100,13 @@ def finance_summary():
             if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
                 spend_by_category[cat] = spend_by_category.get(cat, 0.0) + float(tx["amount"])
 
+    rollover_data = _compute_rollover_data(
+        db, selected_month, all_transactions, all_income_entries
+    )
+    ro_by_cat = rollover_data["by_category"]
+    ro_ledgers = rollover_data["ledgers"]
+    allow_ro_map = rollover_data["allow_rollover_map"]
+
     enriched_budgets = []
     total_budget_limit = 0.0
     total_budget_spent = 0.0
@@ -1735,18 +2115,66 @@ def finance_summary():
         cat_name = b["category"]
         gross_spent = round(spend_by_category.get(cat_name, 0.0), 2)
         cat_returns = round(returns_by_cat.get(cat_name, 0.0), 2)
-        net_spent = round(gross_spent - cat_returns, 2)
-        limit_val = float(b["monthly_limit"])
+        net_spent = round(max(0.0, gross_spent - cat_returns), 2)
+        limit_val = round(float(b["monthly_limit"]), 2)
         total_budget_limit += limit_val
         total_budget_gross_spent += gross_spent
         total_budget_spent += net_spent
-        pct = round((net_spent / limit_val) * 100, 1) if limit_val > 0 else 0.0
+
+        allow_ro = bool(
+            b.get("allow_rollover")
+            or allow_ro_map.get(cat_name, False)
+            or is_spending_money_category(cat_name)
+        )
+        ro_info = ro_by_cat.get(cat_name, {})
+        rollover_in = round(float(ro_info.get("rollover_in", 0.0)), 2) if allow_ro else 0.0
+        rollover_out = (
+            round(float(ro_info.get("rollover_out", limit_val - net_spent)), 2)
+            if allow_ro
+            else round(limit_val - net_spent, 2)
+        )
+        spent_from_rollover = (
+            round(float(ro_info.get("spent_from_rollover", 0.0)), 2) if allow_ro else 0.0
+        )
+        is_using_rollover = bool(ro_info.get("is_using_rollover", False)) if allow_ro else False
+        is_in_debt = (
+            bool(ro_info.get("is_in_debt", False))
+            if allow_ro
+            else bool(net_spent > limit_val and limit_val > 0)
+        )
+        effective_available = (
+            round(float(ro_info.get("effective_available", limit_val + rollover_in)), 2)
+            if allow_ro
+            else limit_val
+        )
+        effective_remaining = (
+            round(float(ro_info.get("effective_remaining", rollover_out)), 2)
+            if allow_ro
+            else round(limit_val - net_spent, 2)
+        )
+
+        if allow_ro and rollover_in < 0 and limit_val > 0:
+            pct = round(((net_spent + abs(rollover_in)) / limit_val) * 100, 1)
+        elif limit_val > 0:
+            pct = round((net_spent / limit_val) * 100, 1)
+        else:
+            pct = 100.0 if (net_spent > 0 or (allow_ro and rollover_in < 0)) else 0.0
+
         enriched_budgets.append({
             **b,
+            "monthly_limit": limit_val,
+            "allow_rollover": allow_ro,
             "gross_spent": gross_spent,
             "returns_credited": cat_returns,
             "spent": net_spent,
             "remaining": round(limit_val - net_spent, 2),
+            "rollover_in": rollover_in,
+            "rollover_out": rollover_out,
+            "spent_from_rollover": spent_from_rollover,
+            "effective_available": effective_available,
+            "effective_remaining": effective_remaining,
+            "is_using_rollover": is_using_rollover,
+            "is_in_debt": is_in_debt,
             "utilization_pct": max(0.0, pct),
         })
 
@@ -1754,6 +2182,73 @@ def finance_summary():
         db, selected_month, month_budgets, month_transactions, all_transactions
     )
     all_categories = cat_mgmt["active_categories"]
+
+    # Build dedicated "{user}'s Spending Money" summary & accumulated rollover ledger for each partner
+    partner_spending_money = []
+    for p in household_partners:
+        sm_cat = resolve_partner_spending_money_category(db, p["name"])
+        ro_info = ro_by_cat.get(sm_cat, {})
+        sm_ledger = ro_ledgers.get(sm_cat, [])
+        sm_limit = round(float(ro_info.get("monthly_limit", 0.0)), 2)
+        sm_gross = round(float(ro_info.get("gross_spent", 0.0)), 2)
+        sm_ret = round(float(ro_info.get("returns_credited", 0.0)), 2)
+        sm_spent = round(float(ro_info.get("spent", 0.0)), 2)
+        sm_r_in = round(float(ro_info.get("rollover_in", 0.0)), 2)
+        sm_r_out = round(float(ro_info.get("rollover_out", sm_limit - sm_spent)), 2)
+        sm_spent_from_ro = round(float(ro_info.get("spent_from_rollover", 0.0)), 2)
+        sm_using_ro = bool(ro_info.get("is_using_rollover", False))
+        sm_in_debt = bool(ro_info.get("is_in_debt", False))
+        sm_eff_avail = round(float(ro_info.get("effective_available", sm_limit + sm_r_in)), 2)
+        sm_eff_rem = round(float(ro_info.get("effective_remaining", sm_r_out)), 2)
+        if sm_r_in < 0 and sm_limit > 0:
+            sm_pct = round(((sm_spent + abs(sm_r_in)) / sm_limit) * 100, 1)
+        elif sm_limit > 0:
+            sm_pct = round((sm_spent / sm_limit) * 100, 1)
+        else:
+            sm_pct = 100.0 if (sm_spent > 0 or sm_r_in < 0) else 0.0
+
+        sm_txs = []
+        for tx in all_transactions:
+            if tx["is_savings_spend"] or tx["is_cc_payment"]:
+                continue
+            if tx.get("is_split") and tx.get("splits"):
+                for sp in tx["splits"]:
+                    if (sp.get("category") or "").strip() == sm_cat:
+                        sm_txs.append({
+                            **tx,
+                            "amount": round(float(sp["amount"]), 2),
+                            "category": sm_cat,
+                            "notes": sp.get("notes") or tx.get("notes") or "",
+                            "is_split_allocation": True,
+                            "parent_amount": round(float(tx["amount"]), 2),
+                        })
+            elif (tx.get("category") or "").strip() == sm_cat:
+                sm_txs.append(tx)
+
+        partner_spending_money.append({
+            "partner_id": p["id"],
+            "partner_name": p["name"],
+            "avatar_color": p.get("avatar_color") or "#ec4899",
+            "category": sm_cat,
+            "allow_rollover": True,
+            "is_budgeted": sm_limit > 0,
+            "monthly_limit": sm_limit,
+            "rollover_in": sm_r_in,
+            "gross_spent": sm_gross,
+            "returns_credited": sm_ret,
+            "spent": sm_spent,
+            "spent_from_rollover": sm_spent_from_ro,
+            "month_delta": round(sm_limit - sm_spent, 2),
+            "rollover_out": sm_r_out,
+            "effective_available": sm_eff_avail,
+            "effective_remaining": sm_eff_rem,
+            "utilization_pct": max(0.0, sm_pct),
+            "is_using_rollover": sm_using_ro,
+            "is_in_debt": sm_in_debt,
+            "rollover_ledger": sm_ledger,
+            "transactions": sm_txs,
+            "month_transactions": [t for t in sm_txs if t.get("budget_month") == selected_month],
+        })
 
     # Mark each transaction with whether its category is currently tracked in its budget month
     tracked_cat_names = {b["category"] for b in enriched_budgets}
@@ -1768,11 +2263,20 @@ def finance_summary():
         else:
             tx["is_category_tracked"] = tx.get("category") in tracked_cat_names
 
+    total_rollover_spent = round(
+        sum(
+            float(ro_info.get("spent_from_rollover", 0.0))
+            for ro_info in ro_by_cat.values()
+            if ro_info.get("allow_rollover")
+        ),
+        2,
+    )
     total_gross_spent = round(sum(float(t["amount"]) for t in budget_month_transactions), 2)
     total_savings_spent = round(sum(float(t["amount"]) for t in savings_month_transactions), 2)
     total_cc_payments_spent = round(sum(float(t["amount"]) for t in cc_payment_transactions), 2)
-    # Net monthly spent subtracts returns so equilibrium is strictly maintained and returns offset spending
-    total_monthly_spent = round(max(0.0, total_gross_spent - total_monthly_returns), 2)
+    # Net monthly spent subtracts returns AND spent_from_rollover so equilibrium is maintained
+    # and spending saved rollover never triggers overspending/savings overlap warnings on the month's budget bar
+    total_monthly_spent = round(max(0.0, total_gross_spent - total_monthly_returns - total_rollover_spent), 2)
     net_monthly_cashflow = round(total_monthly_income - total_monthly_spent, 2)
     unallocated_income = round(total_monthly_income - total_budget_limit, 2)
     projected_net_cashflow = round(projected_monthly_income - total_monthly_spent, 2)
@@ -1859,6 +2363,7 @@ def finance_summary():
         "is_balanced_budget": is_balanced_budget,
         "total_monthly_spent": total_monthly_spent,
         "total_gross_spent": total_gross_spent,
+        "total_rollover_spent": total_rollover_spent,
         "total_savings_spent": total_savings_spent,
         "savings_spend_count": len(savings_month_transactions),
         "savings_transactions": savings_month_transactions,
@@ -1867,7 +2372,7 @@ def finance_summary():
         "total_cc_payments_spent": total_cc_payments_spent,
         "cc_payment_spend_count": len(cc_payment_transactions),
         "total_transfers": total_transfers,
-        "budgeted_categories_spent": round(total_budget_spent, 2),
+        "budgeted_categories_spent": round(max(0.0, total_budget_spent - total_rollover_spent), 2),
         "total_monthly_income": total_monthly_income,
         "expected_monthly_income": expected_monthly_income,
         "previous_month_income": previous_month_income,
@@ -1895,6 +2400,8 @@ def finance_summary():
         "income_entries": all_income_entries if include_all else month_income_entries,
         "accounts": accounts,
         "partners": household_partners,
+        "partner_spending_money": partner_spending_money,
+        "rollover_ledgers": ro_ledgers,
         "budgets": enriched_budgets,
         "transactions": all_transactions if include_all else month_transactions,
         "month_transaction_count": len(month_transactions),
@@ -1993,6 +2500,18 @@ def finance_history():
     }
 
     sorted_months = sorted(months_set, reverse=True)
+    catalog_rows_hist = _sync_category_catalog(db)
+    max_hist_ym = sorted_months[0] if sorted_months else current_ym
+    hist_ro_data = _compute_rollover_data(db, max_hist_ym, all_txs, all_incomes, catalog_rows_hist)
+    hist_ro_ledgers = hist_ro_data["ledgers"]
+    rollover_spent_by_month = {}
+    for cat_name, ledger_rows in hist_ro_ledgers.items():
+        for lr in ledger_rows:
+            m_key = lr["month"]
+            rollover_spent_by_month[m_key] = round(
+                rollover_spent_by_month.get(m_key, 0.0) + float(lr.get("spent_from_rollover", 0.0)), 2
+            )
+
     history_list = []
 
     for ym in sorted_months:
@@ -2023,9 +2542,10 @@ def finance_history():
                     cat_returns_map[rc] = cat_returns_map.get(rc, 0.0) + float(r_inc.get("amount") or 0.0)
 
         month_ret = returns_by_month.get(ym, 0.0)
+        month_ro_spent = rollover_spent_by_month.get(ym, 0.0)
         gross_spent = round(sum(float(tx["amount"]) for tx in budget_m_txs), 2)
         savings_spent = round(sum(float(tx["amount"]) for tx in savings_m_txs), 2)
-        total_spent = round(max(0.0, gross_spent - month_ret), 2)
+        total_spent = round(max(0.0, gross_spent - month_ret - month_ro_spent), 2)
         total_limit = round(sum(float(b["monthly_limit"]) for b in m_budgets), 2)
         total_income = round(income_totals_by_month.get(ym, 0.0), 2)
         expected_income = round(expected_totals_by_month.get(ym, 0.0), 2)
@@ -2085,6 +2605,7 @@ def finance_history():
             "budget_month": ym,
             "total_spent": total_spent,
             "total_gross_spent": gross_spent,
+            "total_rollover_spent": month_ro_spent,
             "total_savings_spent": savings_spent,
             "savings_spend_count": len(savings_m_txs),
             "total_returns": month_ret,
@@ -2925,7 +3446,7 @@ def upsert_budget():
     """
     data = request.get_json(silent=True) or {}
     category = (data.get("category") or "").strip()
-    monthly_limit = float(data.get("monthly_limit", 0))
+    monthly_limit = round(float(data.get("monthly_limit", 0)), 2)
     if not category or monthly_limit <= 0:
         return jsonify({"error": "Category and positive monthly_limit are required"}), 400
     if category.lower() in NON_BUDGET_CATEGORIES:
@@ -2936,33 +3457,54 @@ def upsert_budget():
     apply_scope = data.get("apply_scope", "this_and_future")
 
     db = get_db()
-    _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
+    existing_cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (category,)).fetchone()
+    if "allow_rollover" in data and data.get("allow_rollover") is not None:
+        allow_rollover = 1 if bool(data.get("allow_rollover")) else 0
+    elif existing_cat_row is not None and "allow_rollover" in existing_cat_row.keys():
+        allow_rollover = 1 if existing_cat_row["allow_rollover"] else (1 if is_spending_money_category(category) else 0)
+    else:
+        allow_rollover = 1 if is_spending_money_category(category) else 0
+
+    _ensure_category_in_catalog(
+        db,
+        category,
+        color=color,
+        is_preloaded=1 if category in DEFAULT_CATEGORIES else 0,
+        unarchive=True,
+        allow_rollover=allow_rollover,
+    )
+    db.execute(
+        "UPDATE category_catalog SET allow_rollover = ?, color = ? WHERE name = ?",
+        (allow_rollover, color, category),
+    )
     # Ensure the target month is initialized before modifying it
     _ensure_monthly_budgets_for_month(db, target_month)
 
     db.execute(
         """
-        INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
-        VALUES (?, ?, ?, ?, 1)
+        INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+        VALUES (?, ?, ?, ?, 1, ?)
         ON CONFLICT(budget_month, category) DO UPDATE SET
             monthly_limit = excluded.monthly_limit,
             color = excluded.color,
-            is_active = 1
+            is_active = 1,
+            allow_rollover = excluded.allow_rollover
         """,
-        (target_month, category, monthly_limit, color),
+        (target_month, category, monthly_limit, color, allow_rollover),
     )
 
     if apply_scope == "this_and_future":
         # Update base template for future uninitialized months
         db.execute(
             """
-            INSERT INTO budgets (category, monthly_limit, color)
-            VALUES (?, ?, ?)
+            INSERT INTO budgets (category, monthly_limit, color, allow_rollover)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(category) DO UPDATE SET
                 monthly_limit = excluded.monthly_limit,
-                color = excluded.color
+                color = excluded.color,
+                allow_rollover = excluded.allow_rollover
             """,
-            (category, monthly_limit, color),
+            (category, monthly_limit, color, allow_rollover),
         )
         # Also update any already-initialized future months (> target_month), leaving past months (< target_month) untouched!
         future_months = db.execute(
@@ -2972,15 +3514,20 @@ def upsert_budget():
         for fm in future_months:
             db.execute(
                 """
-                INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
-                VALUES (?, ?, ?, ?, 1)
+                INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+                VALUES (?, ?, ?, ?, 1, ?)
                 ON CONFLICT(budget_month, category) DO UPDATE SET
                     monthly_limit = excluded.monthly_limit,
                     color = excluded.color,
-                    is_active = 1
+                    is_active = 1,
+                    allow_rollover = excluded.allow_rollover
                 """,
-                (fm["budget_month"], category, monthly_limit, color),
+                (fm["budget_month"], category, monthly_limit, color, allow_rollover),
             )
+    else:
+        # Even if only_this_month for limit, keep allow_rollover synced across category
+        db.execute("UPDATE budgets SET allow_rollover = ? WHERE category = ?", (allow_rollover, category))
+        db.execute("UPDATE monthly_budgets SET allow_rollover = ? WHERE category = ?", (allow_rollover, category))
 
     db.commit()
     row = dict(
@@ -3061,46 +3608,53 @@ def create_or_restore_category():
         return jsonify({"error": f"'{name}' is a transaction status and cannot be tracked as a category."}), 400
 
     color = (data.get("color") or "#06b6d4").strip()
-    monthly_limit = float(data.get("monthly_limit") or 0.0)
+    monthly_limit = round(float(data.get("monthly_limit") or 0.0), 2)
     target_month = (data.get("budget_month") or date.today().strftime("%Y-%m")).strip()[:7]
     apply_scope = data.get("apply_scope", "this_and_future")
+    if "allow_rollover" in data and data.get("allow_rollover") is not None:
+        allow_rollover = 1 if bool(data.get("allow_rollover")) else 0
+    else:
+        allow_rollover = 1 if is_spending_money_category(name) else 0
 
     db = get_db()
     _sync_category_catalog(db)
     db.execute(
         """
-        INSERT INTO category_catalog (name, is_preloaded, is_archived, color)
-        VALUES (?, ?, 0, ?)
+        INSERT INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
+        VALUES (?, ?, 0, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             is_archived = 0,
-            color = excluded.color
+            color = excluded.color,
+            allow_rollover = excluded.allow_rollover
         """,
-        (name, 1 if name in DEFAULT_CATEGORIES else 0, color),
+        (name, 1 if name in DEFAULT_CATEGORIES else 0, color, allow_rollover),
     )
 
     if monthly_limit > 0:
         _ensure_monthly_budgets_for_month(db, target_month)
         db.execute(
             """
-            INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
-            VALUES (?, ?, ?, ?, 1)
+            INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+            VALUES (?, ?, ?, ?, 1, ?)
             ON CONFLICT(budget_month, category) DO UPDATE SET
                 monthly_limit = excluded.monthly_limit,
                 color = excluded.color,
-                is_active = 1
+                is_active = 1,
+                allow_rollover = excluded.allow_rollover
             """,
-            (target_month, name, monthly_limit, color),
+            (target_month, name, monthly_limit, color, allow_rollover),
         )
         if apply_scope == "this_and_future":
             db.execute(
                 """
-                INSERT INTO budgets (category, monthly_limit, color)
-                VALUES (?, ?, ?)
+                INSERT INTO budgets (category, monthly_limit, color, allow_rollover)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(category) DO UPDATE SET
                     monthly_limit = excluded.monthly_limit,
-                    color = excluded.color
+                    color = excluded.color,
+                    allow_rollover = excluded.allow_rollover
                 """,
-                (name, monthly_limit, color),
+                (name, monthly_limit, color, allow_rollover),
             )
             future_months = db.execute(
                 "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month > ?",
@@ -3109,19 +3663,53 @@ def create_or_restore_category():
             for fm in future_months:
                 db.execute(
                     """
-                    INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active)
-                    VALUES (?, ?, ?, ?, 1)
+                    INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+                    VALUES (?, ?, ?, ?, 1, ?)
                     ON CONFLICT(budget_month, category) DO UPDATE SET
                         monthly_limit = excluded.monthly_limit,
                         color = excluded.color,
-                        is_active = 1
+                        is_active = 1,
+                        allow_rollover = excluded.allow_rollover
                     """,
-                    (fm["budget_month"], name, monthly_limit, color),
+                    (fm["budget_month"], name, monthly_limit, color, allow_rollover),
                 )
 
     db.commit()
     cat_row = dict(db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone())
     return jsonify(cat_row), 201
+
+
+@finance_bp.route("/categories/rollover", methods=["PUT"])
+def toggle_category_rollover():
+    """
+    Enables or disables rollover spending (`allow_rollover`) for a category
+    across `category_catalog`, `budgets`, and `monthly_budgets`.
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or data.get("category") or "").strip()
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+    allow_rollover = 1 if bool(data.get("allow_rollover")) else 0
+
+    db = get_db()
+    _ensure_category_in_catalog(
+        db,
+        name,
+        is_preloaded=1 if name in DEFAULT_CATEGORIES else 0,
+        unarchive=True,
+        allow_rollover=allow_rollover,
+    )
+    db.execute("UPDATE category_catalog SET allow_rollover = ? WHERE name = ?", (allow_rollover, name))
+    db.execute("UPDATE budgets SET allow_rollover = ? WHERE category = ?", (allow_rollover, name))
+    db.execute("UPDATE monthly_budgets SET allow_rollover = ? WHERE category = ?", (allow_rollover, name))
+    db.commit()
+
+    cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone()
+    return jsonify({
+        "name": name,
+        "allow_rollover": bool(allow_rollover),
+        "category": dict(cat_row) if cat_row else {"name": name, "allow_rollover": allow_rollover},
+    })
 
 
 @finance_bp.route("/categories", methods=["PUT"])

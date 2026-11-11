@@ -28,6 +28,7 @@ import RequestsModule from './modules/RequestsModule';
 import FuturePurchasesModule from './modules/FuturePurchasesModule';
 import FinanceModule from './modules/FinanceModule';
 import SavingsModule from './modules/SavingsModule';
+import DashboardModule from './modules/DashboardModule';
 import {
   AdminDocsSubModule,
   GroceriesSubModule,
@@ -36,6 +37,7 @@ import {
 } from './modules/CouplesHubModule';
 
 const ICON_MAP = {
+  'layout-dashboard': LayoutDashboard,
   wallet: Wallet,
   'piggy-bank': PiggyBank,
   handshake: Handshake,
@@ -75,7 +77,7 @@ export default function App() {
     } catch {
       // ignore
     }
-    return 'requests';
+    return 'dashboard';
   });
 
   const setActiveTab = (tab) => {
@@ -274,7 +276,10 @@ export default function App() {
       <LoginScreen
         householdName={householdName}
         partners={partners}
-        onLoginSuccess={() => loadCoreState()}
+        onLoginSuccess={() => {
+          selectTab('dashboard');
+          loadCoreState();
+        }}
       />
     );
   }
@@ -299,6 +304,7 @@ export default function App() {
   };
 
   const SHORT_TAB_LABELS = {
+    dashboard: 'Home',
     requests: 'Requests',
     finance: 'Finances',
     savings: 'Savings',
@@ -519,6 +525,15 @@ export default function App() {
           <main className="content-scroll">
             <MobilePushPromptBanner currentPartner={activePartner} />
             <ErrorBoundary onReset={loadCoreState}>
+              {activeTab === 'dashboard' && (
+                <DashboardModule
+                  activePartner={activePartner}
+                  partners={partners}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                  onNavigateTab={selectTab}
+                />
+              )}
               {activeTab === 'requests' && (
                 <RequestsModule
                   activePartner={activePartner}

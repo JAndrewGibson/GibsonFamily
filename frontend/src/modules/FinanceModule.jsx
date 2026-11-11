@@ -155,6 +155,14 @@ function formatIncomeTypeBadge(type, category = '') {
   }
 }
 
+function formatBudgetAmt(val) {
+  const num = Number(val || 0);
+  if (Math.abs(num - Math.round(num)) > 0.004) {
+    return num.toFixed(2);
+  }
+  return num.toFixed(2);
+}
+
 export default function FinanceModule({ activePartner, onDataChanged, syncVersion, onNavigateTab }) {
   const rawCalendarMonth = new Date().toISOString().slice(0, 7);
   const currentCalendarMonth =
@@ -266,6 +274,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [budgetCat, setBudgetCat] = useState('');
   const [budgetLimit, setBudgetLimit] = useState('800');
   const [budgetScope, setBudgetScope] = useState('this_and_future');
+  const [budgetAllowRollover, setBudgetAllowRollover] = useState(false);
 
   // Cancel / Remove Budget Category Confirmation Modal
   const [cancellingBudget, setCancellingBudget] = useState(null);
@@ -275,6 +284,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [catFilter, setCatFilter] = useState('all');
   const [newCatName, setNewCatName] = useState('');
   const [newCatLimit, setNewCatLimit] = useState('');
+  const [newCatAllowRollover, setNewCatAllowRollover] = useState(false);
   const [renamingCatName, setRenamingCatName] = useState(null);
   const [renameCatTarget, setRenameCatTarget] = useState('');
   const [deletingCatObj, setDeletingCatObj] = useState(null);
@@ -1032,6 +1042,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     setBudgetCat(b.category);
     setBudgetLimit(String(b.monthly_limit || 0));
     setBudgetScope('this_and_future');
+    setBudgetAllowRollover(Boolean(b.allow_rollover));
     setShowBudgetModal(true);
   };
 
@@ -1045,6 +1056,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         monthly_limit: parseFloat(budgetLimit),
         budget_month: selectedMonth,
         apply_scope: budgetScope,
+        allow_rollover: budgetAllowRollover,
       }),
     });
     setBudgetCat('');
@@ -1171,15 +1183,21 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     if (!catName || ['split', 'spent from savings', 'credit card payment', 'split category'].includes(catName.trim().toLowerCase())) {
       return;
     }
+    const existingCat = (summary?.categories_catalog || []).find((c) => c.name === catName);
+    const defaultRollover = existingCat
+      ? Boolean(existingCat.allow_rollover)
+      : catName.toLowerCase().includes('spending money');
     setBudgetCat(catName);
     setBudgetLimit('300');
     setBudgetScope('this_and_future');
+    setBudgetAllowRollover(defaultRollover);
     setShowBudgetModal(true);
   };
 
   const handleCreateManagedCategory = async (e) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
+    const isSpendMoney = newCatName.trim().toLowerCase().includes('spending money');
     await apiFetch('/api/finance/categories', {
       method: 'POST',
       body: JSON.stringify({
@@ -1187,11 +1205,25 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         monthly_limit: newCatLimit ? parseFloat(newCatLimit) : 0,
         budget_month: selectedMonth,
         apply_scope: 'this_and_future',
+        allow_rollover: newCatAllowRollover || isSpendMoney,
       }),
     });
     setNewCatName('');
     setNewCatLimit('');
+    setNewCatAllowRollover(false);
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+  };
+
+  const handleToggleCategoryRollover = async (catName, nextState) => {
+    await apiFetch('/api/finance/categories/rollover', {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: catName,
+        allow_rollover: Boolean(nextState),
+      }),
+    });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
   };
 
   const handleRenameOrMergeCategory = async (oldName) => {
@@ -1993,6 +2025,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       setBudgetCat('');
                       setBudgetLimit('500');
                       setBudgetScope('this_and_future');
+                      setBudgetAllowRollover(false);
                       setShowBudgetModal(true);
                     }}
                   >
@@ -2477,10 +2510,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 Returns Credited: <strong className="text-primary">+${Number(summary.total_monthly_returns).toFixed(2)}</strong>
               </span>
             )}
+            {Number(summary.total_rollover_spent || 0) > 0 && (
+              <span className="layered-legend-item">
+                <i className="legend-swatch swatch-rainbow" />
+                🌈 Spent from Rollover: <strong>${Number(summary.total_rollover_spent).toFixed(2)}</strong> (Excl. from Month Budget)
+              </span>
+            )}
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-expense-budget" />
-              Budgeted Categories: <strong>${expenseBudgetLimit.toFixed(0)}</strong> (Total w/ Savings:{' '}
-              <strong>${totalBudget.toFixed(0)}</strong>)
+              Budgeted Categories: <strong>${expenseBudgetLimit.toFixed(2)}</strong> (Total w/ Savings:{' '}
+              <strong>${totalBudget.toFixed(2)}</strong>)
             </span>
             <span className="layered-legend-item">
               <i className="legend-swatch swatch-grey-savings" />
@@ -2618,6 +2657,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     setBudgetCat('');
                     setBudgetLimit('500');
                     setBudgetScope('this_and_future');
+                    setBudgetAllowRollover(false);
                     setShowBudgetModal(true);
                   }}
                 >
@@ -2688,11 +2728,27 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             <div className="budgets-stack">
               {sortedBudgets.map((b) => {
                 const over = b.spent > b.monthly_limit && b.monthly_limit > 0;
+                const isUsingRollover = Boolean(b.allow_rollover && b.is_using_rollover);
+                const isInDebt = b.allow_rollover ? Boolean(b.is_in_debt) : over;
+                const fillClass = isUsingRollover
+                  ? 'fill-rainbow'
+                  : isInDebt
+                  ? 'fill-danger'
+                  : 'fill-success';
                 return (
                   <div key={b.id || b.category} className="budget-row-item">
                     <div className="budget-row-top">
                       <div>
                         <strong>{b.category}</strong>
+                        {b.allow_rollover && (
+                          <span
+                            className={`pill ${isUsingRollover ? 'pill-rainbow' : isInDebt ? 'pill-red' : 'pill-purple'}`}
+                            style={{ marginLeft: '0.4rem', fontSize: '0.68rem' }}
+                            title="Unused budget rolls over cumulatively each month"
+                          >
+                            {isUsingRollover ? '🌈 Rollover Active' : '↻ Rollover'}
+                          </span>
+                        )}
                         {!b.is_active && (
                           <span
                             className="pill pill-outline"
@@ -2710,7 +2766,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               (net)
                             </small>
                           )}{' '}
-                          / ${b.monthly_limit.toFixed(0)} ({b.utilization_pct}%)
+                          / ${formatBudgetAmt(b.monthly_limit)} ({b.utilization_pct}%)
                         </span>
                         <button
                           type="button"
@@ -2732,17 +2788,35 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     </div>
                     <div className="progress-track">
                       <div
-                        className={`progress-fill ${over ? 'fill-danger' : 'fill-success'}`}
+                        className={`progress-fill ${fillClass}`}
                         style={{
-                          width: `${Math.min(100, b.utilization_pct)}%`,
-                          background: over ? '#ef4444' : '#10b981',
+                          width: `${Math.min(100, Math.max(0, b.utilization_pct))}%`,
+                          ...(isUsingRollover
+                            ? {}
+                            : { background: isInDebt ? '#ef4444' : '#10b981' }),
                         }}
                       />
                     </div>
-                    <small className="text-muted">
-                      {over
-                        ? `Over budget by $${Math.abs(b.remaining).toFixed(2)} in ${formatShortMonth(selectedMonth)}`
-                        : `$${b.remaining.toFixed(2)} remaining for ${formatShortMonth(selectedMonth)}`}
+                    <small className="text-muted" style={{ display: 'block', marginTop: '0.2rem' }}>
+                      {isUsingRollover ? (
+                        <span className="rollover-rainbow-note">
+                          🌈 <strong>${Number(b.spent_from_rollover || 0).toFixed(2)} spent from rollover saving</strong>
+                          {' '}• ${Number(b.rollover_out || 0).toFixed(2)} remaining in rollover pool
+                        </span>
+                      ) : b.allow_rollover && isInDebt ? (
+                        <span className="text-danger" style={{ fontWeight: 600 }}>
+                          -${Math.abs(Number(b.rollover_out || 0)).toFixed(2)} negative rollover debt to be paid on this category (stays red until positive)
+                        </span>
+                      ) : over ? (
+                        `Over budget by $${Math.abs(b.remaining).toFixed(2)} in ${formatShortMonth(selectedMonth)}`
+                      ) : (
+                        `$${b.remaining.toFixed(2)} remaining for ${formatShortMonth(selectedMonth)}`
+                      )}
+                      {b.allow_rollover && !isUsingRollover && !isInDebt && (
+                        <span className="text-cyan" style={{ marginLeft: '0.45rem', display: 'inline-block' }}>
+                          • ↻ {Number(b.rollover_in || 0) >= 0 ? '+' : '-'}${Math.abs(Number(b.rollover_in || 0)).toFixed(2)} rollover in → <strong>${Number(b.rollover_out || 0).toFixed(2)}</strong> total available
+                        </span>
+                      )}
                       {b.returns_credited > 0 && (
                         <span className="text-cyan" style={{ marginLeft: '0.45rem', display: 'inline-block' }}>
                           • +${b.returns_credited.toFixed(2)} return credited (${b.gross_spent.toFixed(2)} gross)
@@ -2993,16 +3067,19 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 <div className="hbar-utilization-list">
                   {sortedBudgets.map((b) => {
                     const pct = b.monthly_limit > 0 ? (b.spent / b.monthly_limit) * 100 : 0;
-                    const isOver = b.spent > b.monthly_limit && b.monthly_limit > 0;
+                    const isUsingRollover = Boolean(b.allow_rollover && b.is_using_rollover);
+                    const isOver = b.allow_rollover
+                      ? Boolean(b.is_in_debt)
+                      : b.spent > b.monthly_limit && b.monthly_limit > 0;
                     return (
                       <div key={b.category} className="hbar-item">
                         <div className="hbar-top">
                           <strong>{b.category}</strong>
                           <span className="font-mono">
-                            <span className={isOver ? 'text-danger' : ''}>
-                              ${b.spent.toFixed(0)}
+                            <span className={isOver ? 'text-danger' : isUsingRollover ? 'text-rainbow-label' : ''}>
+                              ${b.spent.toFixed(2)}
                             </span>{' '}
-                            / ${b.monthly_limit.toFixed(0)}{' '}
+                            / ${formatBudgetAmt(b.monthly_limit)}{' '}
                             <small className={isOver ? 'text-danger' : 'text-muted'}>
                               ({Math.round(pct)}%)
                             </small>
@@ -3010,10 +3087,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         </div>
                         <div className="hbar-dual-track">
                           <div
-                            className={`hbar-fill ${isOver ? 'fill-danger' : 'fill-success'}`}
+                            className={`hbar-fill ${isUsingRollover ? 'fill-rainbow' : isOver ? 'fill-danger' : 'fill-success'}`}
                             style={{
-                              width: `${Math.min(100, pct)}%`,
-                              background: isOver ? '#ef4444' : '#10b981',
+                              width: `${Math.min(100, Math.max(0, pct))}%`,
+                              ...(isUsingRollover ? {} : { background: isOver ? '#ef4444' : '#10b981' }),
                             }}
                           />
                         </div>
@@ -3229,18 +3306,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   className="input input-sm"
                   placeholder="New category name (e.g., Pet Care, Subscriptions)..."
                   value={newCatName}
-                  onChange={(e) => setNewCatName(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setNewCatName(v);
+                    if (v.toLowerCase().includes('spending money')) {
+                      setNewCatAllowRollover(true);
+                    }
+                  }}
                   required
                 />
                 <input
                   type="number"
-                  step="5"
+                  step="0.01"
                   min="0"
                   className="input input-sm"
                   placeholder="Optional monthly budget ($)"
                   value={newCatLimit}
                   onChange={(e) => setNewCatLimit(e.target.value)}
                 />
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={newCatAllowRollover}
+                    onChange={(e) => setNewCatAllowRollover(e.target.checked)}
+                  />
+                  ↻ Allow Rollover
+                </label>
                 <button type="submit" className="btn btn-primary btn-sm">
                   <Plus size={14} /> Add Category
                 </button>
@@ -3309,11 +3409,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 <span className="pill pill-outline">Archived / Hidden</span>
                               ) : cat.is_tracked ? (
                                 <span className="pill pill-green">
-                                  ✓ Tracked (${cat.monthly_limit.toFixed(0)}/mo)
+                                  ✓ Tracked (${formatBudgetAmt(cat.monthly_limit)}/mo)
                                 </span>
                               ) : (
                                 <span className="pill pill-amber">
                                   ⚠️ Not Tracked in {formatShortMonth(selectedMonth)} Budget
+                                </span>
+                              )}
+                              {!cat.is_archived && cat.allow_rollover && (
+                                <span className="pill pill-purple" style={{ fontSize: '0.68rem' }}>
+                                  ↻ Rollover On
                                 </span>
                               )}
                             </div>
@@ -3344,6 +3449,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                     <Plus size={13} /> Track in Budget
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  className={`btn btn-xs ${cat.allow_rollover ? 'btn-primary' : 'btn-secondary'}`}
+                                  onClick={() => handleToggleCategoryRollover(cat.name, !cat.allow_rollover)}
+                                  title="Toggle monthly rollover saving for this category"
+                                >
+                                  <RefreshCw size={12} /> {cat.allow_rollover ? 'Rollover: ON' : 'Rollover: OFF'}
+                                </button>
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-xs"
@@ -5035,7 +5148,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     className="input"
                     list="budget-category-suggestions"
                     value={budgetCat}
-                    onChange={(e) => setBudgetCat(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBudgetCat(val);
+                      const found = (summary?.categories_catalog || []).find((c) => c.name === val);
+                      if (found) {
+                        setBudgetAllowRollover(Boolean(found.allow_rollover));
+                      } else if (val.toLowerCase().includes('spending money')) {
+                        setBudgetAllowRollover(true);
+                      }
+                    }}
                     placeholder="e.g., Netflix, Pet Care, Groceries & Dining"
                     required
                     autoFocus
@@ -5048,11 +5170,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 </div>
 
                 <div className="form-group">
-                  <label>Monthly Limit ($) *</label>
+                  <label>Monthly Limit ($) — Supports Decimals *</label>
                   <input
                     type="number"
-                    step="5"
-                    min="0"
+                    step="0.01"
+                    min="0.01"
                     className="input"
                     value={budgetLimit}
                     onChange={(e) => setBudgetLimit(e.target.value)}
@@ -5074,6 +5196,36 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       Only {formatMonthLabel(selectedMonth)} (One-Month Adjustment)
                     </option>
                   </select>
+                </div>
+
+                <div className="form-group">
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.6rem',
+                      cursor: 'pointer',
+                      padding: '0.65rem 0.75rem',
+                      borderRadius: '10px',
+                      background: 'rgba(99, 102, 241, 0.08)',
+                      border: '1px solid rgba(99, 102, 241, 0.25)',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={budgetAllowRollover}
+                      onChange={(e) => setBudgetAllowRollover(e.target.checked)}
+                      style={{ marginTop: '0.2rem' }}
+                    />
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.88rem' }}>
+                        ↻ Allow Rollover Spending
+                      </strong>
+                      <small className="text-muted">
+                        Unspent money rolls over cumulatively to the next month without inflating next month&apos;s budget limit. Spending saved rollover shows a 🌈 rainbow bar; overspending beyond available rollover carries forward as negative rollover debt.
+                      </small>
+                    </div>
+                  </label>
                 </div>
               </div>
 

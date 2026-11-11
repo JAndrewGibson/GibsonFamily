@@ -72,6 +72,7 @@ GibsonFamily/
         │   ├── OnboardingWizard.jsx  # 4-step first-time setup flow
         │   └── PasskeyLockScreen.jsx # Screen lock overlay & Passkey enrollment modal
         └── modules/
+            ├── DashboardModule.jsx   # Home/landing dashboard with Layered Budget Bar, partner's Spending Money & Rollover Ledger
             ├── RequestsModule.jsx    # Partner financial requests (Pending, Under Review, Approved, Timeline, Denied)
             ├── FuturePurchasesModule.jsx # Shared future purchase savings roadmap
             ├── FinanceModule.jsx     # Plaid link, income & fluctuation tracker, monthly budgets & ledger
@@ -144,11 +145,20 @@ GibsonFamily/
   - Stores both pre-loaded (`is_preloaded = 1`) and custom (`is_preloaded = 0`) categories along with `is_archived` status so unwanted pre-loaded or custom categories can be hidden/removed without re-populating in dropdowns.
   - Managed via `GET /api/finance/categories`, `POST /api/finance/categories` (create/restore), `PUT /api/finance/categories` (rename/merge across all transactions, budgets, requests, and future plans), and `DELETE /api/finance/categories` (hide/delete with optional transaction reassignment).
   - `GET /api/finance/summary` flags `untracked_categories` (categories that have spending in `selected_month` or are active in the catalog but have no active budget in `selected_month`), `untracked_monthly_spent`, and per-transaction `is_category_tracked`.
-- **Per-Month Budgets (`monthly_budgets` table)**:
-  - Each `YYYY-MM` month materializes its own rows in `monthly_budgets(budget_month, category, monthly_limit, color, is_active)`.
+- **Per-Month Budgets (`monthly_budgets` table), Decimal Limits & Rollover Spending (`allow_rollover`)**:
+  - Each `YYYY-MM` month materializes its own rows in `monthly_budgets(budget_month, category, monthly_limit, color, is_active, allow_rollover)`, with full decimal support (`step="0.01"`).
   - Adding, editing, or cancelling a category supports `apply_scope`:
     - `this_and_future`: Updates or deactivates the category for `selected_month` and all future months (`>= selected_month`), while preserving all historical months (`< selected_month`).
     - `only_this_month`: Applies a one-month adjustment to `selected_month` only.
+  - **Dedicated `"{user}'s Spending Money"` Category & Front Dashboard (`DashboardModule.jsx`)**:
+    - Each partner automatically has a dedicated `"{user}'s Spending Money"` category (reusing any existing matching category case-insensitively) with `allow_rollover = 1` by default.
+    - Upon login, users land on the **Home Dashboard** (`DashboardModule.jsx`, tab id `'dashboard'`), which displays the household **Layered Budget & Savings vs. Projected Income** graph, the logged-in partner's **`"{user}'s Spending Money"`** tracker card, and the chronological **Accumulated Spending Rollover Ledger**.
+  - **Rollover Spending Mechanics & Equilibrium (`_compute_rollover_data`, `PUT /api/finance/categories/rollover`)**:
+    - Any category can enable `allow_rollover = 1`.
+    - Unused monthly budget rolls over cumulatively (`+$5` from Nov + `+$9` from Dec = `+$14` entering Jan) and displays a rollover subtext note under the category bar (just like store returns).
+    - **Equilibrium Rule**: Accumulated rollover is **not** added to `total_monthly_budget`, and money spent from positive accumulated rollover (`spent_from_rollover`) is **excluded** from `total_monthly_spent` on the Layered Budget & Savings Bar so spending saved-up rollover never triggers false overspending or savings-invasion alerts.
+    - **Rainbow Progress Bar (`.fill-rainbow`)**: When a rollover-enabled category exceeds its monthly budget limit (`spent > monthly_limit`) and the overage is covered by positive accumulated rollover (`rollover_out >= 0`), the progress bar renders a **rainbow gradient** (`is_using_rollover = True`) with subtext `"$x.xx spent from rollover saving"`.
+    - **Negative Rollover Debt (`is_in_debt`)**: If a rollover category is overspent beyond its available rollover (`rollover_out < 0`), the deficit carries forward as negative rollover debt. In subsequent months, new budget limits immediately offset the negative rollover, and the category stays **red** (`is_in_debt = True`) while its cumulative balance is `<= $0.00` until positive again.
 - **Historical Months View (`GET /api/finance/history`)**:
   - Returns month-by-month total income, income fluctuation delta/%, total spend, total budget, net cash flow, net budget variance, utilization %, and per-category breakdown across all historical and active months.
 - **Credit Card Payment Marking (`transactions.is_cc_payment`)**:

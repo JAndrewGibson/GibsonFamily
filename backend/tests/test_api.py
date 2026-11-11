@@ -1868,6 +1868,196 @@ def test_transaction_cc_payment_and_split_categories(client):
     assert shop_b6["spent"] == 0.0
 
 
+def test_rollover_spending_partner_spending_money_and_decimal_budgets(app_instance, client):
+    """
+    Tests:
+    1. Home Dashboard ('dashboard') is registered as the first module.
+    2. Dedicated "{user}'s Spending Money" category is automatically created for each partner
+       with allow_rollover = True by default.
+    3. Category budgets support decimal limits (e.g., $49.95, $25.50).
+    4. Cumulative positive rollover across months:
+       - 2026-11: Budget $50.00, Spent $45.00 -> +$5.00 rollover_out
+       - 2026-12: Budget $50.00, Spent $41.00 -> +$9.00 month delta + $5.00 prior = +$14.00 rollover_out
+       - 2027-01: Budget $50.00, rollover_in = +$14.00 (total available $64.00)
+         Notice total_monthly_budget does NOT include the $14.00 rollover.
+    5. Spending into positive rollover (Rainbow bar):
+       - In 2027-01, spend $60.00 (over the $50.00 monthly limit, within $64.00 effective available).
+       - Category has is_using_rollover = True, is_in_debt = False, spent_from_rollover = $10.00, rollover_out = +$4.00.
+       - Crucial Equilibrium: $10.00 spent_from_rollover is excluded from total_monthly_spent so the month's
+         Layered Budget Bar only counts $50.00 against the month's budget.
+    6. Negative rollover debt (Red until positive again):
+       - In 2027-02, rollover_in = +$4.00, budget = $50.00 (effective available $54.00).
+       - Spend $120.00 -> rollover_out = -$66.00 (debt), is_in_debt = True, is_using_rollover = False.
+       - In 2027-03, rollover_in = -$66.00, budget = $50.00, spend = $0.00 -> rollover_out = -$16.00,
+         stays red (is_in_debt = True) because cumulative balance is still <= $0.00.
+       - In 2027-04, rollover_in = -$16.00, budget = $50.00, spend = $10.00 -> rollover_out = +$24.00,
+         is_in_debt = False (back to green!).
+    """
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Andrew", "email": "andrew@gibson.local", "password": "PassAndrew123!"},
+                {"name": "Ashley", "email": "ashley@gibson.local", "password": "PassAshley123!"},
+            ],
+        },
+    )
+    assert p_res.status_code == 201
+    headers = {"Authorization": f"Bearer {p_res.get_json()['token']}"}
+
+    # 1. Verify 'dashboard' is first in /api/modules
+    mods_res = client.get("/api/modules", headers=headers)
+    assert mods_res.status_code == 200
+    mods = mods_res.get_json()["modules"]
+    assert mods[0]["id"] == "dashboard"
+
+    # 2. Verify decimal budget limit support
+    dec_res = client.post(
+        "/api/finance/budgets",
+        headers=headers,
+        json={
+            "category": "Streaming & Apps",
+            "monthly_limit": 49.95,
+            "budget_month": "2026-11",
+            "apply_scope": "this_and_future",
+        },
+    )
+    assert dec_res.status_code == 201
+    assert dec_res.get_json()["monthly_limit"] == 49.95
+
+    # 3. Verify Andrew's Spending Money & Ashley's Spending Money exist with allow_rollover = True
+    sum_nov_init = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    psm_list = sum_nov_init.get("partner_spending_money", [])
+    assert len(psm_list) == 2
+    andrew_sm = next(p for p in psm_list if p["partner_name"] == "Andrew")
+    assert andrew_sm["category"] == "Andrew's Spending Money"
+    assert andrew_sm["allow_rollover"] is True
+
+    # Set Andrew's Spending Money budget to $50.00/mo starting 2026-11
+    sm_budget_res = client.post(
+        "/api/finance/budgets",
+        headers=headers,
+        json={
+            "category": "Andrew's Spending Money",
+            "monthly_limit": 50.00,
+            "budget_month": "2026-11",
+            "apply_scope": "this_and_future",
+            "allow_rollover": True,
+        },
+    )
+    assert sm_budget_res.status_code == 201
+
+    # 4. Log $45.00 in 2026-11 -> leaves +$5.00 rollover
+    client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Coffee & Books",
+            "amount": 45.00,
+            "category": "Andrew's Spending Money",
+            "date": "2026-11-10",
+            "budget_month": "2026-11",
+        },
+    )
+    # Log $41.00 in 2026-12 -> leaves +$9.00 from Dec + $5.00 from Nov = +$14.00 rollover
+    client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Steam Winter Sale",
+            "amount": 41.00,
+            "category": "Andrew's Spending Money",
+            "date": "2026-12-15",
+            "budget_month": "2026-12",
+        },
+    )
+
+    sum_dec = client.get("/api/finance/summary?month=2026-12", headers=headers).get_json()
+    andrew_dec = next(b for b in sum_dec["budgets"] if b["category"] == "Andrew's Spending Money")
+    assert andrew_dec["rollover_in"] == 5.00
+    assert andrew_dec["spent"] == 41.00
+    assert andrew_dec["rollover_out"] == 14.00
+    assert andrew_dec["is_using_rollover"] is False
+    assert andrew_dec["is_in_debt"] is False
+
+    # 5. In 2027-01, Andrew has $50.00 monthly budget + $14.00 rollover_in = $64.00 available.
+    # Spend $60.00 -> $10.00 comes from rollover saving!
+    client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Mechanical Keyboard",
+            "amount": 60.00,
+            "category": "Andrew's Spending Money",
+            "date": "2027-01-12",
+            "budget_month": "2027-01",
+        },
+    )
+    sum_jan = client.get("/api/finance/summary?month=2027-01", headers=headers).get_json()
+    andrew_jan = next(b for b in sum_jan["budgets"] if b["category"] == "Andrew's Spending Money")
+    assert andrew_jan["rollover_in"] == 14.00
+    assert andrew_jan["monthly_limit"] == 50.00
+    assert andrew_jan["spent"] == 60.00
+    assert andrew_jan["spent_from_rollover"] == 10.00
+    assert andrew_jan["rollover_out"] == 4.00
+    assert andrew_jan["is_using_rollover"] is True
+    assert andrew_jan["is_in_debt"] is False
+
+    # Verify total_monthly_spent in 2027-01 excludes the $10.00 spent_from_rollover!
+    assert sum_jan["total_gross_spent"] == 60.00
+    assert sum_jan["total_rollover_spent"] == 10.00
+    assert sum_jan["total_monthly_spent"] == 50.00
+
+    # 6. Negative Rollover Debt in 2027-02:
+    # Entering 2027-02 with +$4.00 rollover_in + $50.00 budget = $54.00 available.
+    # Spend $120.00 -> -$66.00 negative rollover debt!
+    client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Headphones Impulse Buy",
+            "amount": 120.00,
+            "category": "Andrew's Spending Money",
+            "date": "2027-02-05",
+            "budget_month": "2027-02",
+        },
+    )
+    sum_feb = client.get("/api/finance/summary?month=2027-02", headers=headers).get_json()
+    andrew_feb = next(b for b in sum_feb["budgets"] if b["category"] == "Andrew's Spending Money")
+    assert andrew_feb["rollover_in"] == 4.00
+    assert andrew_feb["spent_from_rollover"] == 4.00
+    assert andrew_feb["rollover_out"] == -66.00
+    assert andrew_feb["is_using_rollover"] is False
+    assert andrew_feb["is_in_debt"] is True
+
+    # In 2027-03, $0 spent, $50 budget offsets -$66 debt -> -$16.00 rollover_out (still in debt / red!)
+    sum_mar = client.get("/api/finance/summary?month=2027-03", headers=headers).get_json()
+    andrew_mar = next(b for b in sum_mar["budgets"] if b["category"] == "Andrew's Spending Money")
+    assert andrew_mar["rollover_in"] == -66.00
+    assert andrew_mar["rollover_out"] == -16.00
+    assert andrew_mar["is_in_debt"] is True
+
+    # In 2027-04, $10 spent, $50 budget offsets -$16 debt -> +$24.00 rollover_out (positive again!)
+    client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={
+            "name": "Snack",
+            "amount": 10.00,
+            "category": "Andrew's Spending Money",
+            "date": "2027-04-03",
+            "budget_month": "2027-04",
+        },
+    )
+    sum_apr = client.get("/api/finance/summary?month=2027-04", headers=headers).get_json()
+    andrew_apr = next(b for b in sum_apr["budgets"] if b["category"] == "Andrew's Spending Money")
+    assert andrew_apr["rollover_in"] == -16.00
+    assert andrew_apr["rollover_out"] == 24.00
+    assert andrew_apr["is_in_debt"] is False
+
+
+
 
 
 

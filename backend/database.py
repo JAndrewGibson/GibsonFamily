@@ -170,7 +170,8 @@ CREATE TABLE IF NOT EXISTS budgets (
     monthly_limit REAL NOT NULL,
     alert_threshold REAL NOT NULL DEFAULT 0.8,
     is_shared INTEGER NOT NULL DEFAULT 1,
-    color TEXT NOT NULL DEFAULT '#6366f1'
+    color TEXT NOT NULL DEFAULT '#6366f1',
+    allow_rollover INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS monthly_budgets (
@@ -180,6 +181,7 @@ CREATE TABLE IF NOT EXISTS monthly_budgets (
     monthly_limit REAL NOT NULL,
     color TEXT NOT NULL DEFAULT '#6366f1',
     is_active INTEGER NOT NULL DEFAULT 1,
+    allow_rollover INTEGER NOT NULL DEFAULT 0,
     UNIQUE(budget_month, category)
 );
 
@@ -189,6 +191,7 @@ CREATE TABLE IF NOT EXISTS category_catalog (
     is_preloaded INTEGER NOT NULL DEFAULT 0,
     is_archived INTEGER NOT NULL DEFAULT 0,
     color TEXT NOT NULL DEFAULT '#6366f1',
+    allow_rollover INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -332,6 +335,15 @@ CREATE TABLE IF NOT EXISTS admin_records (
 
 DEFAULT_MODULES = [
     (
+        "dashboard",
+        "Home Dashboard",
+        "Front dashboard with Layered Budget & Savings graph, your personal Spending Money tracker, and accumulated rollover ledger.",
+        "Financial",
+        "layout-dashboard",
+        1,
+        0,
+    ),
+    (
         "requests",
         "Partner Purchase Requests",
         "Submit purchase requests to your partner to approve, deny, or set up a savings budget & timeline.",
@@ -463,6 +475,30 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     db.execute(
         "DELETE FROM budgets WHERE LOWER(TRIM(category)) IN ('split', 'spent from savings', 'credit card payment')"
     )
+
+    budget_cols = [r["name"] for r in db.execute("PRAGMA table_info(budgets)").fetchall()]
+    if "allow_rollover" not in budget_cols:
+        db.execute("ALTER TABLE budgets ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+
+    mb_cols = [r["name"] for r in db.execute("PRAGMA table_info(monthly_budgets)").fetchall()]
+    if "allow_rollover" not in mb_cols:
+        db.execute("ALTER TABLE monthly_budgets ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+
+    cat_cols = [r["name"] for r in db.execute("PRAGMA table_info(category_catalog)").fetchall()]
+    if "allow_rollover" not in cat_cols:
+        db.execute("ALTER TABLE category_catalog ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+
+    # One-time migration: ensure any existing "Spending Money" categories have allow_rollover = 1 by default
+    rollover_mig = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'spending_money_rollover_default_v1'"
+    ).fetchone()
+    if not rollover_mig:
+        db.execute("UPDATE category_catalog SET allow_rollover = 1 WHERE LOWER(name) LIKE '%spending money%'")
+        db.execute("UPDATE budgets SET allow_rollover = 1 WHERE LOWER(category) LIKE '%spending money%'")
+        db.execute("UPDATE monthly_budgets SET allow_rollover = 1 WHERE LOWER(category) LIKE '%spending money%'")
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('spending_money_rollover_default_v1', '1')"
+        )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS transaction_splits (
