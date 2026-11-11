@@ -677,6 +677,10 @@ body {
   overflow: hidden;
 }
 
+html[data-theme='light'] .progress-track {
+  background: rgba(148, 163, 184, 0.28);
+}
+
 .progress-fill {
   height: 100%;
   background: linear-gradient(90deg, #6366f1, #06b6d4);
@@ -3850,6 +3854,10 @@ html[data-theme='light'] .history-cat-row {
   overflow: hidden;
 }
 
+html[data-theme='light'] .hbar-dual-track {
+  background: rgba(148, 163, 184, 0.28);
+}
+
 .hbar-fill {
   height: 100%;
   border-radius: 999px;
@@ -5384,3 +5392,81 @@ html[data-theme='light'] .overlap-alert.alert-warning {
     grid-template-columns: 1fr;
   }
 }
+
+/* Dashboard Month Picker & Dismissable Info Box */
+.dashboard-month-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-panel);
+  padding: 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.dashboard-month-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.dashboard-month-arrow:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.dashboard-month-arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dashboard-month-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dashboard-month-pill:hover {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: rgba(6, 182, 212, 0.5);
+}
+
+html[data-theme='light'] .dashboard-month-pill {
+  background: rgba(6, 182, 212, 0.12);
+  color: #0891b2;
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
+.dismissable-info-box {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  font-size: 12px;
+  margin-top: 12px;
+  margin-bottom: 14px;
+}
+

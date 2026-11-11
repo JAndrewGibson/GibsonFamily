@@ -269,6 +269,24 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     setCookie(`gibson_dismiss_balance_strip_${selectedMonth}`, '0', 365);
   };
 
+  // Dismissable Spent from Savings Banner in Transactions Ledger
+  const [dismissSavingsSpendBanner, setDismissSavingsSpendBanner] = useState(() => {
+    const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
+    const clamped = saved < STARTING_MONTH ? STARTING_MONTH : saved;
+    return getCookie(`gibson_dismiss_savings_banner_${clamped}`, '0') === '1';
+  });
+
+  useEffect(() => {
+    setDismissSavingsSpendBanner(
+      getCookie(`gibson_dismiss_savings_banner_${selectedMonth}`, '0') === '1'
+    );
+  }, [selectedMonth]);
+
+  const handleDismissSavingsSpendBanner = () => {
+    setDismissSavingsSpendBanner(true);
+    setCookie(`gibson_dismiss_savings_banner_${selectedMonth}`, '1', 365);
+  };
+
   // Add / Adjust Month Budget Floating Modal State
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetCat, setBudgetCat] = useState('');
@@ -3612,10 +3630,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
         </div>
 
-        {Number(summary.total_savings_spent || 0) > 0 && (
+        {Number(summary.total_savings_spent || 0) > 0 && !dismissSavingsSpendBanner && (
           <div
             className="alert alert-info"
             style={{
+              marginTop: '1rem',
               marginBottom: '0.85rem',
               display: 'flex',
               justifyContent: 'space-between',
@@ -3632,15 +3651,26 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               <strong>{summary.savings_spend_count || 1}</strong> purchase(s) is marked as funded from savings and{' '}
               <strong>completely excluded from your monthly budget</strong>.
             </div>
-            {onNavigateTab && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              {onNavigateTab && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => onNavigateTab('savings')}
+                >
+                  <PiggyBank size={13} /> Open Savings & Analytics
+                </button>
+              )}
               <button
                 type="button"
-                className="btn btn-secondary btn-xs"
-                onClick={() => onNavigateTab('savings')}
+                className="btn-icon-subtle"
+                onClick={handleDismissSavingsSpendBanner}
+                aria-label="Dismiss Spent from Savings notice"
+                title="Dismiss notice"
               >
-                <PiggyBank size={13} /> Open Savings & Analytics
+                <X size={15} />
               </button>
-            )}
+            </div>
           </div>
         )}
 
@@ -5222,7 +5252,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         ↻ Allow Rollover Spending
                       </strong>
                       <small className="text-muted">
-                        Unspent money rolls over cumulatively to the next month without inflating next month&apos;s budget limit. Spending saved rollover shows a 🌈 rainbow bar; overspending beyond available rollover carries forward as negative rollover debt.
+                        Unspent money rolls over cumulatively to the next month without inflating next month&apos;s budget limit. Overspending beyond available rollover carries forward as negative rollover debt.
                       </small>
                     </div>
                   </label>
