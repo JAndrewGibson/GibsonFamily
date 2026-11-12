@@ -1,8 +1,9 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+import json
 import threading
 import requests
 from flask import Blueprint, current_app, g, jsonify, request
-from backend.database import bump_state_version, get_db
+from backend.database import bump_state_version, create_notification, get_db
 from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 finance_bp = Blueprint("finance", __name__, url_prefix="/api/finance")
@@ -803,6 +804,590 @@ def _ensure_monthly_budgets_for_month(db, ym: str) -> list[dict]:
         (ym,),
     ).fetchall()
     return [dict(r) for r in active_rows]
+
+
+def get_month_close_eligibility(ym: str, ref_date: date | None = None) -> tuple[bool, int, str]:
+    """
+    Returns (is_eligible, days_until_eligible, notification_date_str).
+    Rule: Notification to close the month appears 3 days before the 1st of the new month.
+    e.g. for 2026-11, the new month starts 2026-12-01.
+    3 days before is 2026-11-28.
+    If today >= 2026-11-28, is_eligible is True and notification triggers.
+    If today < 2026-11-28, days_until_eligible is positive.
+    Any month strictly prior to the current calendar month is always eligible.
+    """
+    if ref_date is None:
+        ref_date = date.today()
+    try:
+        y, m = int(ym[:4]), int(ym[5:7])
+    except Exception:
+        return False, 99, ""
+
+    if m == 12:
+        next_first = date(y + 1, 1, 1)
+    else:
+        next_first = date(y, m + 1, 1)
+
+    notif_date = next_first - timedelta(days=3)
+    days_left = (notif_date - ref_date).days
+    is_eligible = (ref_date >= notif_date)
+    return is_eligible, max(0, days_left), notif_date.isoformat()
+
+
+def _compute_month_leftover_data(db, ym: str) -> dict:
+    """
+    Calculates specific leftover amounts for non-rollover categories (instructed to transfer to savings),
+    and separates rollover categories (which carry forward instead of being transferred).
+    """
+    month_budgets = _ensure_monthly_budgets_for_month(db, ym)
+    all_txs = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT t.*,
+                   COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) AS effective_budget_month
+            FROM transactions t
+            WHERE COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) = ?
+            """,
+            (ym,),
+        ).fetchall()
+    ]
+
+    splits_by_tx = {}
+    for sr in db.execute(
+        """
+        SELECT ts.* FROM transaction_splits ts
+        JOIN transactions t ON ts.transaction_id = t.id
+        WHERE COALESCE(NULLIF(t.budget_month, ''), substr(t.date, 1, 7)) = ?
+        """,
+        (ym,),
+    ).fetchall():
+        splits_by_tx.setdefault(sr["transaction_id"], []).append(dict(sr))
+
+    all_incomes = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT i.*,
+                   COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) AS effective_budget_month
+            FROM income_entries i
+            WHERE COALESCE(NULLIF(i.budget_month, ''), substr(i.date, 1, 7)) = ?
+            """,
+            (ym,),
+        ).fetchall()
+    ]
+
+    spend_by_cat = {}
+    for tx in all_txs:
+        if is_tx_savings_spend(tx) or is_tx_cc_payment(tx):
+            continue
+        tx_splits = splits_by_tx.get(tx["id"], [])
+        if tx.get("is_split") and tx_splits:
+            for sp in tx_splits:
+                cat = sp.get("category") or ""
+                if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                    spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(sp["amount"])
+        else:
+            cat = tx.get("category") or ""
+            if cat and cat.strip().lower() not in NON_BUDGET_CATEGORIES:
+                spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + float(tx["amount"])
+
+    returns_by_cat = {}
+    total_income = 0.0
+    for inc in all_incomes:
+        itype = (inc.get("income_type") or "payroll").strip().lower()
+        amt = float(inc.get("amount") or 0.0)
+        if is_real_earned_income(itype):
+            total_income += amt
+        elif is_return_refund(itype):
+            rcat = (inc.get("category") or "").strip()
+            if rcat:
+                returns_by_cat[rcat] = returns_by_cat.get(rcat, 0.0) + amt
+
+    leftover_categories = []
+    rollover_categories = []
+    total_leftover = 0.0
+    total_spend = 0.0
+
+    for b in month_budgets:
+        cat = b["category"]
+        lim = round(float(b["monthly_limit"]), 2)
+        gross = round(spend_by_cat.get(cat, 0.0), 2)
+        rets = round(returns_by_cat.get(cat, 0.0), 2)
+        net = round(max(0.0, gross - rets), 2)
+        total_spend += net
+        is_ro = bool(b.get("allow_rollover") or is_spending_money_category(cat))
+
+        if is_ro:
+            ro_val = round(lim - net, 2)
+            rollover_categories.append({
+                "category": cat,
+                "monthly_limit": lim,
+                "spent": net,
+                "rollover_out": ro_val,
+                "color": b.get("color", "#6366f1"),
+            })
+        else:
+            cat_leftover = round(max(0.0, lim - net), 2)
+            if cat_leftover > 0:
+                total_leftover += cat_leftover
+            leftover_categories.append({
+                "category": cat,
+                "monthly_limit": lim,
+                "spent": net,
+                "leftover": cat_leftover,
+                "color": b.get("color", "#6366f1"),
+            })
+
+    net_cashflow = round(total_income - total_spend, 2)
+    return {
+        "budget_month": ym,
+        "total_leftover": round(total_leftover, 2),
+        "leftover_categories": leftover_categories,
+        "rollover_categories": rollover_categories,
+        "total_income": round(total_income, 2),
+        "total_spend": round(total_spend, 2),
+        "net_cashflow": net_cashflow,
+    }
+
+
+def check_and_create_month_close_notifications(db, current_date: date | None = None) -> list[str]:
+    """
+    Checks active unclosed months where today >= 3 days before 1st of next month.
+    Generates an in-app notification in notifications table for partners if not already sent.
+    """
+    if current_date is None:
+        current_date = date.today()
+    current_ym = current_date.strftime("%Y-%m")
+
+    partners = db.execute("SELECT id, name FROM partners ORDER BY id").fetchall()
+    if not partners:
+        return []
+
+    closed_rows = db.execute("SELECT budget_month FROM closed_months").fetchall()
+    closed_set = {r["budget_month"] for r in closed_rows}
+
+    mb_months = db.execute(
+        "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month >= ? AND is_active = 1",
+        (STARTING_BUDGET_MONTH,),
+    ).fetchall()
+    cand_months = {r["budget_month"] for r in mb_months}
+    cand_months.add(current_ym)
+
+    created_months = []
+    for ym in sorted(cand_months):
+        if ym in closed_set:
+            continue
+        is_eligible, _, notif_date_str = get_month_close_eligibility(ym, current_date)
+        if not is_eligible:
+            continue
+
+        try:
+            y, m = int(ym[:4]), int(ym[5:7])
+            m_date = date(y, m, 1)
+            month_label = m_date.strftime("%B '%y")
+            next_m = 1 if m == 12 else m + 1
+            next_y = y + 1 if m == 12 else y
+            next_name = date(next_y, next_m, 1).strftime("%B")
+        except Exception:
+            month_label = ym
+            next_name = "the new month"
+
+        leftover_info = _compute_month_leftover_data(db, ym)
+        leftover_amt = leftover_info["total_leftover"]
+        leftover_str = f"transfer ${leftover_amt:.2f} leftover to savings" if leftover_amt > 0 else "wrap up your finances"
+
+        for p in partners:
+            existing = db.execute(
+                """
+                SELECT id FROM notifications
+                WHERE recipient_partner_id = ? AND notif_type = 'month_close' AND title LIKE ?
+                """,
+                (p["id"], f"%{month_label}%"),
+            ).fetchone()
+            if not existing:
+                create_notification(
+                    db,
+                    recipient_partner_id=p["id"],
+                    actor_partner_id=None,
+                    notif_type="month_close",
+                    title=f"Time to Close {month_label}!",
+                    message=f"Only 3 days until {next_name}! Review your budget, {leftover_str}, and unlock your {month_label} Recap.",
+                    link_tab="finance",
+                )
+                created_months.append(ym)
+    if created_months:
+        db.commit()
+    return created_months
+
+
+def _build_algorithmic_month_recap(db, ym: str) -> dict:
+    """
+    Generates a fun, algorithmic '{Month - 'XX) Recap' modeled after popular recaps
+    (Spotify Wrapped, YouTube Rewind, Google Photos Year in Review).
+    Features algorithmic persona, key financial stats, MoM & YoY trends (e.g.
+    'Spending down 10% from last month!' or 'Spending up 30% from last November!'),
+    top categories, top frequented merchant, biggest single purchase, budget MVPs,
+    partner rollovers, and a structured slide deck.
+    """
+    try:
+        y, m = int(ym[:4]), int(ym[5:7])
+        month_obj = date(y, m, 1)
+        month_name = month_obj.strftime("%B")
+        year_short = month_obj.strftime("%y")
+        month_label = f"{month_name} '{year_short}"
+    except Exception:
+        month_name = "Month"
+        year_short = "26"
+        month_label = ym
+
+    recap_title = f"{month_label} Recap"
+
+    # 1. This Month Core Financials
+    this_leftover = _compute_month_leftover_data(db, ym)
+    this_income = this_leftover["total_income"]
+    this_spent = this_leftover["total_spend"]
+    net_cashflow = this_leftover["net_cashflow"]
+    total_leftover = this_leftover["total_leftover"]
+    savings_rate_pct = round((net_cashflow / this_income) * 100, 1) if this_income > 0 else 0.0
+
+    month_budgets = _ensure_monthly_budgets_for_month(db, ym)
+    total_budget = round(sum(float(b["monthly_limit"]) for b in month_budgets), 2)
+    budget_utilization_pct = round((this_spent / total_budget) * 100, 1) if total_budget > 0 else 0.0
+
+    # 2. Previous Month Comparison (MoM Trend)
+    prev_ym = _shift_year_month(ym, -1)
+    prev_leftover = _compute_month_leftover_data(db, prev_ym)
+    prev_spent = prev_leftover["total_spend"]
+    prev_income = prev_leftover["total_income"]
+
+    mom_spend_trend = None
+    mom_direction = "flat"
+    mom_spend_pct_val = 0.0
+    if prev_spent > 0:
+        spend_diff = round(this_spent - prev_spent, 2)
+        pct = round((abs(spend_diff) / prev_spent) * 100)
+        mom_spend_pct_val = pct
+        pct_str = f"{pct:.0f}%"
+        if spend_diff < 0:
+            mom_spend_trend = f"Spending down {pct_str} from last month!"
+            mom_direction = "down"
+        elif spend_diff > 0:
+            mom_spend_trend = f"Spending up {pct_str} from last month!"
+            mom_direction = "up"
+        else:
+            mom_spend_trend = "Spending identical to last month!"
+            mom_direction = "flat"
+
+    mom_income_trend = None
+    if prev_income > 0:
+        inc_diff = round(this_income - prev_income, 2)
+        inc_pct = round((abs(inc_diff) / prev_income) * 100)
+        inc_pct_str = f"{inc_pct:.0f}%"
+        if inc_diff > 0:
+            mom_income_trend = f"Income up {inc_pct_str} compared to last month!"
+        elif inc_diff < 0:
+            mom_income_trend = f"Income down {inc_pct_str} from last month."
+
+    # 3. Same Month Previous Year Comparison (YoY Trend)
+    year_ago_ym = _shift_year_month(ym, -12)
+    year_ago_leftover = _compute_month_leftover_data(db, year_ago_ym)
+    year_ago_spent = year_ago_leftover["total_spend"]
+
+    yoy_spend_trend = None
+    if year_ago_spent > 0:
+        yoy_diff = round(this_spent - year_ago_spent, 2)
+        yoy_pct = round((abs(yoy_diff) / year_ago_spent) * 100)
+        yoy_pct_str = f"{yoy_pct:.0f}%"
+        if yoy_diff < 0:
+            yoy_spend_trend = f"Spending down {yoy_pct_str} from last {month_name}!"
+        elif yoy_diff > 0:
+            yoy_spend_trend = f"Spending up {yoy_pct_str} from last {month_name}!"
+        else:
+            yoy_spend_trend = f"Spending identical to last {month_name}!"
+
+    # 4. Top Spending Categories
+    spend_by_cat = {}
+    for cat_item in this_leftover["leftover_categories"] + this_leftover["rollover_categories"]:
+        c_name = cat_item["category"]
+        spend_by_cat[c_name] = {
+            "category": c_name,
+            "spent": cat_item["spent"],
+            "monthly_limit": cat_item["monthly_limit"],
+            "color": cat_item.get("color", "#6366f1"),
+        }
+
+    sorted_cats = sorted(spend_by_cat.values(), key=lambda x: x["spent"], reverse=True)
+    top_categories = []
+    for idx, c in enumerate(sorted_cats[:5]):
+        cat_pct = round((c["spent"] / this_spent) * 100, 1) if this_spent > 0 else 0.0
+        top_categories.append({
+            "rank": idx + 1,
+            "category": c["category"],
+            "spent": c["spent"],
+            "monthly_limit": c["monthly_limit"],
+            "pct": cat_pct,
+            "color": c["color"],
+        })
+
+    # 5. Transactions Highlights (Most Frequent Merchant & Biggest Purchase)
+    month_txs = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT * FROM transactions
+            WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) = ?
+            ORDER BY date DESC, id DESC
+            """,
+            (ym,),
+        ).fetchall()
+    ]
+    budget_txs = [t for t in month_txs if not is_tx_savings_spend(t) and not is_tx_cc_payment(t)]
+
+    merchant_counts = {}
+    merchant_totals = {}
+    biggest_purchase = None
+
+    for tx in budget_txs:
+        raw_name = (tx.get("merchant_name") or tx.get("name") or "Store").strip()
+        clean_name = raw_name.split("#")[0].strip() or raw_name
+        merchant_counts[clean_name] = merchant_counts.get(clean_name, 0) + 1
+        merchant_totals[clean_name] = merchant_totals.get(clean_name, 0.0) + float(tx["amount"])
+
+        amt = float(tx["amount"])
+        if biggest_purchase is None or amt > biggest_purchase["amount"]:
+            biggest_purchase = {
+                "name": clean_name,
+                "amount": round(amt, 2),
+                "date": tx["date"],
+                "category": tx.get("category") or "General",
+            }
+
+    top_merchant = None
+    if merchant_counts:
+        top_m_name = max(merchant_counts.keys(), key=lambda k: (merchant_counts[k], merchant_totals[k]))
+        top_merchant = {
+            "name": top_m_name,
+            "count": merchant_counts[top_m_name],
+            "total_spent": round(merchant_totals[top_m_name], 2),
+        }
+
+    # 6. Budget MVP Category (Non-rollover category with highest dollar surplus)
+    budget_mvp = None
+    eligible_mvps = [
+        c for c in this_leftover["leftover_categories"]
+        if c["leftover"] > 0 and c["monthly_limit"] > 0
+    ]
+    if eligible_mvps:
+        best_mvp = max(eligible_mvps, key=lambda c: c["leftover"])
+        util_pct = round((best_mvp["spent"] / best_mvp["monthly_limit"]) * 100, 1)
+        budget_mvp = {
+            "category": best_mvp["category"],
+            "saved": best_mvp["leftover"],
+            "monthly_limit": best_mvp["monthly_limit"],
+            "spent": best_mvp["spent"],
+            "utilization_pct": util_pct,
+            "comment": f"{best_mvp['category']} came in ${best_mvp['leftover']:.2f} under limit ({util_pct:.0f}% utilized)!",
+        }
+
+    # 7. Partner Spending Money & Rollovers
+    partners = db.execute("SELECT id, name, avatar_color FROM partners ORDER BY id").fetchall()
+    partner_rollovers = []
+    for p in partners:
+        sm_cat = resolve_partner_spending_money_category(db, p["name"])
+        matched_ro = next((r for r in this_leftover["rollover_categories"] if r["category"].lower() == sm_cat.lower()), None)
+        if matched_ro:
+            partner_rollovers.append({
+                "partner_name": p["name"],
+                "category": sm_cat,
+                "avatar_color": p["avatar_color"],
+                "monthly_limit": matched_ro["monthly_limit"],
+                "spent": matched_ro["spent"],
+                "rollover_out": matched_ro["rollover_out"],
+            })
+        else:
+            partner_rollovers.append({
+                "partner_name": p["name"],
+                "category": sm_cat,
+                "avatar_color": p["avatar_color"],
+                "monthly_limit": 0.0,
+                "spent": 0.0,
+                "rollover_out": 0.0,
+            })
+
+    # 8. Algorithmic Persona / Household Vibe
+    top_cat_name = top_categories[0]["category"] if top_categories else ""
+    top_cat_spent = top_categories[0]["spent"] if top_categories else 0.0
+
+    if savings_rate_pct >= 30.0:
+        persona = {
+            "title": "The Super Savers 🚀",
+            "badge": f"{savings_rate_pct:.0f}% Savings Rate",
+            "tagline": "Building wealth like clockwork.",
+            "description": f"You banked {savings_rate_pct:.0f}% of your household income this month. Future you is cheering!",
+            "theme_gradient": "linear-gradient(135deg, #059669 0%, #10b981 50%, #06b6d4 100%)",
+        }
+    elif total_budget > 0 and this_spent <= (total_budget * 0.85):
+        persona = {
+            "title": "The Budget Champions 🏆",
+            "badge": "15%+ Under Budget",
+            "tagline": "Unbeatable discipline & precision.",
+            "description": "Zero sweat, pure precision. Every category stayed safely beneath your monthly ceiling.",
+            "theme_gradient": "linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #8b5cf6 100%)",
+        }
+    elif top_cat_name and any(k in top_cat_name.lower() for k in ["grocer", "din", "food", "eat", "restaurant"]) and (top_cat_spent / this_spent >= 0.35 if this_spent > 0 else False):
+        persona = {
+            "title": "The Foodie Household 🍕",
+            "badge": "Culinary Connoisseurs",
+            "tagline": "Living the good life, one meal at a time.",
+            "description": "Delicious dining and great grocery hauls took center stage. High memory dividends!",
+            "theme_gradient": "linear-gradient(135deg, #ea580c 0%, #f97316 50%, #fbbf24 100%)",
+        }
+    elif mom_direction == "down" and mom_spend_pct_val >= 10:
+        persona = {
+            "title": "The Comeback Ninjas 🥷",
+            "badge": f"Spending Slashed by {mom_spend_pct_val:.0f}%",
+            "tagline": "Reeling in expenses with style.",
+            "description": f"You trimmed household spending by {mom_spend_pct_val:.0f}% compared to last month. Way to tighten up!",
+            "theme_gradient": "linear-gradient(135deg, #0284c7 0%, #06b6d4 50%, #14b8a6 100%)",
+        }
+    elif net_cashflow > 0:
+        persona = {
+            "title": "The Steady Builders 🧱",
+            "badge": "In the Green",
+            "tagline": "Consistent, positive, and dependable.",
+            "description": "Positive cash flow and dependable progress. Another solid month in the household vault.",
+            "theme_gradient": "linear-gradient(135deg, #0d9488 0%, #10b981 50%, #34d399 100%)",
+        }
+    else:
+        persona = {
+            "title": "The Action Takers ⚡",
+            "badge": "Full Throttle",
+            "tagline": "An energetic, eventful month.",
+            "description": "A bustling month of living life to the fullest. Time to reset and take on next month!",
+            "theme_gradient": "linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #ec4899 100%)",
+        }
+
+    # 9. Milestone Badges Unlocked
+    milestones = []
+    if this_spent <= total_budget and total_budget > 0:
+        milestones.append({"id": "on_budget", "icon": "shield-check", "title": "On Budget", "subtitle": "Kept under total limit"})
+    if total_leftover > 0:
+        milestones.append({"id": "leftover_stash", "icon": "piggy-bank", "title": "Surplus Stashed", "subtitle": f"${total_leftover:.2f} sent to savings"})
+    if mom_direction == "down":
+        milestones.append({"id": "spend_slashed", "icon": "trending-down", "title": "Slashed Spending", "subtitle": mom_spend_trend or "Down vs last month"})
+    if any(p["rollover_out"] > 0 for p in partner_rollovers):
+        milestones.append({"id": "rollover_hero", "icon": "sparkles", "title": "Rollover Hero", "subtitle": "Partner savings carried forward"})
+    if net_cashflow > 0:
+        milestones.append({"id": "green_cashflow", "icon": "dollar-sign", "title": "In the Green", "subtitle": f"+${net_cashflow:.2f} net cash flow"})
+    milestones.append({"id": "month_closed", "icon": "check-circle", "title": "Month Closed", "subtitle": f"{month_label} officially wrapped"})
+
+    # 10. Slide Deck Array (Spotify Wrapped stories format)
+    slides = [
+        {
+            "id": "cover",
+            "title": recap_title,
+            "badge": persona["badge"],
+            "headline": persona["title"],
+            "subheadline": persona["tagline"],
+            "description": persona["description"],
+            "theme_gradient": persona["theme_gradient"],
+        },
+        {
+            "id": "numbers",
+            "title": "The Bottom Line",
+            "badge": "Inflow & Outflow",
+            "metrics": {
+                "income": this_income,
+                "spent": this_spent,
+                "net_cashflow": net_cashflow,
+                "savings_rate_pct": savings_rate_pct,
+            },
+            "trends": {
+                "mom_spend_trend": mom_spend_trend,
+                "yoy_spend_trend": yoy_spend_trend,
+                "mom_income_trend": mom_income_trend,
+            },
+        },
+        {
+            "id": "categories",
+            "title": "Top Spending Categories",
+            "badge": "Where It Went",
+            "categories": top_categories,
+        },
+        {
+            "id": "merchants",
+            "title": "Merchant Spotlight",
+            "badge": "Favorites & Splashes",
+            "top_merchant": top_merchant,
+            "biggest_purchase": biggest_purchase,
+            "transaction_count": len(budget_txs),
+            "average_tx_amount": round(this_spent / len(budget_txs), 2) if budget_txs else 0.0,
+        },
+        {
+            "id": "mvps",
+            "title": "Budget MVPs & Rollovers",
+            "badge": "Wins & Carryovers",
+            "budget_mvp": budget_mvp,
+            "partner_rollovers": partner_rollovers,
+        },
+        {
+            "id": "savings",
+            "title": "Leftover to Savings",
+            "badge": "Future Fuel",
+            "total_leftover": total_leftover,
+            "leftover_categories": [c for c in this_leftover["leftover_categories"] if c["leftover"] > 0],
+            "instruction": f"Transfer ${total_leftover:.2f} of non-rollover leftover into your savings account!" if total_leftover > 0 else "All non-rollover categories were fully utilized.",
+        },
+        {
+            "id": "summary_poster",
+            "title": f"{month_label} Wrapped",
+            "badge": "Official Household Record",
+            "persona": persona,
+            "key_highlights": [
+                {"label": "Income", "value": f"${this_income:,.2f}"},
+                {"label": "Spent", "value": f"${this_spent:,.2f}"},
+                {"label": "Net Cash Flow", "value": f"{'+' if net_cashflow >= 0 else ''}${net_cashflow:,.2f}"},
+                {"label": "Savings Rate", "value": f"{savings_rate_pct:.0f}%"},
+                {"label": "Leftover to Savings", "value": f"${total_leftover:,.2f}"},
+                {"label": "Top Category", "value": top_cat_name or "None"},
+            ],
+            "trends": [t for t in [mom_spend_trend, yoy_spend_trend, mom_income_trend] if t],
+            "milestones": milestones,
+        },
+    ]
+
+    return {
+        "budget_month": ym,
+        "month_label": month_label,
+        "recap_title": recap_title,
+        "persona": persona,
+        "overview": {
+            "total_income": this_income,
+            "total_spent": this_spent,
+            "net_cashflow": net_cashflow,
+            "savings_rate_pct": savings_rate_pct,
+            "total_budget": total_budget,
+            "budget_utilization_pct": budget_utilization_pct,
+            "total_leftover": total_leftover,
+        },
+        "trends": {
+            "mom_spend_trend": mom_spend_trend,
+            "yoy_spend_trend": yoy_spend_trend,
+            "mom_income_trend": mom_income_trend,
+            "has_previous_month": bool(prev_spent > 0),
+            "has_year_ago_month": bool(year_ago_spent > 0),
+        },
+        "top_categories": top_categories,
+        "top_merchant": top_merchant,
+        "biggest_purchase": biggest_purchase,
+        "budget_mvp": budget_mvp,
+        "partner_rollovers": partner_rollovers,
+        "leftover_breakdown": this_leftover["leftover_categories"],
+        "rollover_breakdown": this_leftover["rollover_categories"],
+        "milestones": milestones,
+        "slides": slides,
+    }
 
 
 def _plaid_headers_and_auth():
@@ -2332,6 +2917,22 @@ def finance_summary():
         and not spent_exceeds_projected_income
     )
 
+    # Month close eligibility & status
+    is_eligible, days_until_eligible, notif_date_str = get_month_close_eligibility(selected_month)
+    closed_row = db.execute(
+        """
+        SELECT cm.*, p.name AS closed_by_partner_name
+        FROM closed_months cm
+        LEFT JOIN partners p ON cm.closed_by_partner_id = p.id
+        WHERE cm.budget_month = ?
+        """,
+        (selected_month,),
+    ).fetchone()
+    leftover_info = _compute_month_leftover_data(db, selected_month)
+
+    # Check for month close notification triggers
+    check_and_create_month_close_notifications(db)
+
     return jsonify({
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
@@ -2406,6 +3007,421 @@ def finance_summary():
         "transactions": all_transactions if include_all else month_transactions,
         "month_transaction_count": len(month_transactions),
         "total_transaction_count": len(all_transactions),
+        "month_close": {
+            "budget_month": selected_month,
+            "is_closed": bool(closed_row),
+            "closed_at": closed_row["closed_at"] if closed_row else None,
+            "closed_by_partner_name": closed_row["closed_by_partner_name"] if closed_row else None,
+            "is_eligible": is_eligible,
+            "days_until_eligible": days_until_eligible,
+            "notification_date": notif_date_str,
+            "leftover_amount": leftover_info["total_leftover"],
+            "leftover_categories": leftover_info["leftover_categories"],
+            "rollover_categories": leftover_info["rollover_categories"],
+            "transferred_to_savings": bool(closed_row and closed_row["transferred_to_savings"]),
+            "has_recap": bool(closed_row and closed_row["recap_data"]),
+        },
+    })
+
+
+@finance_bp.route("/month-close-status", methods=["GET"])
+def month_close_status():
+    """
+    Returns the close status, eligibility, leftover transfer amount, and tasks for a given month.
+    """
+    db = get_db()
+    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    raw_req_month = (request.args.get("month") or "").strip()[:7]
+    selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
+
+    # Run notification trigger check
+    check_and_create_month_close_notifications(db)
+
+    is_eligible, days_until_eligible, notif_date_str = get_month_close_eligibility(selected_month)
+    closed_row = db.execute(
+        """
+        SELECT cm.*, p.name AS closed_by_partner_name
+        FROM closed_months cm
+        LEFT JOIN partners p ON cm.closed_by_partner_id = p.id
+        WHERE cm.budget_month = ?
+        """,
+        (selected_month,),
+    ).fetchone()
+
+    leftover_info = _compute_month_leftover_data(db, selected_month)
+
+    # Check pending transactions in selected_month
+    pending_count = db.execute(
+        """
+        SELECT COUNT(*) AS cnt FROM transactions
+        WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) = ? AND is_pending = 1
+        """,
+        (selected_month,),
+    ).fetchone()["cnt"]
+
+    # Check untracked categories with spending in selected_month
+    month_budgets = _ensure_monthly_budgets_for_month(db, selected_month)
+    tracked_cats = {b["category"].lower() for b in month_budgets}
+    all_month_txs = db.execute(
+        """
+        SELECT category, amount FROM transactions
+        WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) = ?
+        AND is_savings_spend = 0 AND is_cc_payment = 0
+        """,
+        (selected_month,),
+    ).fetchall()
+    untracked_spend_count = sum(1 for t in all_month_txs if (t["category"] or "").strip().lower() not in tracked_cats and (t["category"] or "").strip().lower() not in NON_BUDGET_CATEGORIES)
+
+    # Check account balance snapshots in selected_month
+    snapshots_count = db.execute(
+        "SELECT COUNT(*) AS cnt FROM account_balance_snapshots WHERE snapshot_month = ?",
+        (selected_month,),
+    ).fetchone()["cnt"]
+
+    # Savings accounts list for leftover transfer destination
+    savings_accounts = [
+        dict(r)
+        for r in db.execute(
+            """
+            SELECT id, name, official_name, subtype, mask, balance_current, color
+            FROM accounts
+            WHERE type = 'depository' AND (subtype = 'savings' OR is_savings_account = 1 OR LOWER(name) LIKE '%saving%')
+            ORDER BY name
+            """
+        ).fetchall()
+    ]
+
+    is_closed = bool(closed_row)
+    transferred = bool(closed_row and closed_row["transferred_to_savings"])
+
+    tasks = [
+        {
+            "id": "pending_txs",
+            "title": "Review & settle pending transactions",
+            "status": "completed" if pending_count == 0 else "action_needed",
+            "count": pending_count,
+            "details": "All transactions have posted to your accounts." if pending_count == 0 else f"{pending_count} pending transaction(s) await bank settlement.",
+        },
+        {
+            "id": "untracked_spending",
+            "title": "Categorize unbudgeted spending",
+            "status": "completed" if untracked_spend_count == 0 else "action_needed",
+            "count": untracked_spend_count,
+            "details": "All expenses are assigned to tracked budget categories." if untracked_spend_count == 0 else f"{untracked_spend_count} transaction(s) in unbudgeted categories.",
+        },
+        {
+            "id": "transfer_leftover",
+            "title": f"Transfer ${leftover_info['total_leftover']:.2f} leftover to savings",
+            "status": "completed" if transferred else "action_needed",
+            "amount": leftover_info["total_leftover"],
+            "details": f"Move unspent ${leftover_info['total_leftover']:.2f} from non-rollover categories into your savings account." if leftover_info["total_leftover"] > 0 else "No leftover budget surplus this month.",
+        },
+        {
+            "id": "partner_rollovers",
+            "title": "Confirm partner spending money carryovers",
+            "status": "completed",
+            "details": "Rollover balances carry forward automatically into next month's budget.",
+        },
+        {
+            "id": "balance_snapshots",
+            "title": "Record end-of-month account balances",
+            "status": "completed" if snapshots_count > 0 else "action_needed",
+            "count": snapshots_count,
+            "details": "Balances captured for long-term MoM and YoY tracking." if snapshots_count > 0 else "No balance snapshots recorded yet for this month.",
+        },
+    ]
+
+    recap_obj = None
+    if is_closed and closed_row["recap_data"]:
+        try:
+            recap_obj = json.loads(closed_row["recap_data"])
+        except Exception:
+            recap_obj = _build_algorithmic_month_recap(db, selected_month)
+    else:
+        # Generate live preview
+        recap_obj = _build_algorithmic_month_recap(db, selected_month)
+
+    try:
+        y, m = int(selected_month[:4]), int(selected_month[5:7])
+        month_label = date(y, m, 1).strftime("%B '%y")
+    except Exception:
+        month_label = selected_month
+
+    return jsonify({
+        "budget_month": selected_month,
+        "month_label": month_label,
+        "is_closed": is_closed,
+        "closed_at": closed_row["closed_at"] if closed_row else None,
+        "closed_by_partner_id": closed_row["closed_by_partner_id"] if closed_row else None,
+        "closed_by_partner_name": closed_row["closed_by_partner_name"] if closed_row else None,
+        "is_eligible": is_eligible,
+        "days_until_eligible": days_until_eligible,
+        "notification_date": notif_date_str,
+        "leftover_amount": leftover_info["total_leftover"],
+        "leftover_categories": leftover_info["leftover_categories"],
+        "rollover_categories": leftover_info["rollover_categories"],
+        "transferred_to_savings": transferred,
+        "savings_account_id": closed_row["savings_account_id"] if closed_row else None,
+        "savings_accounts": savings_accounts,
+        "pending_tx_count": pending_count,
+        "untracked_spend_count": untracked_spend_count,
+        "tasks": tasks,
+        "recap": recap_obj,
+    })
+
+
+@finance_bp.route("/close-month", methods=["POST"])
+def close_month():
+    """
+    Closes a budget month, records leftover transfer to savings if requested,
+    stores the algorithmic recap, creates celebration notification, and bumps state version.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_month = (data.get("month") or "").strip()[:7]
+    if len(raw_month) != 7:
+        return jsonify({"error": "Valid YYYY-MM month is required"}), 400
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else None
+
+    db = get_db()
+    leftover_info = _compute_month_leftover_data(db, raw_month)
+    total_leftover = leftover_info["total_leftover"]
+
+    transferred = bool(data.get("transferred_to_savings", False))
+    savings_account_id = data.get("savings_account_id")
+    if savings_account_id:
+        try:
+            savings_account_id = int(savings_account_id)
+        except (ValueError, TypeError):
+            savings_account_id = None
+
+    transfer_amount = float(data.get("transfer_amount", total_leftover)) if transferred else 0.0
+
+    # If user requests recording the savings transfer and provides a savings account
+    if transferred and savings_account_id and transfer_amount > 0:
+        acc = db.execute("SELECT * FROM accounts WHERE id = ?", (savings_account_id,)).fetchone()
+        if acc:
+            try:
+                y, m = int(raw_month[:4]), int(raw_month[5:7])
+                m_label = date(y, m, 1).strftime("%B '%y")
+            except Exception:
+                m_label = raw_month
+
+            db.execute(
+                """
+                INSERT INTO income_entries (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'transfer', 'Transfer to Savings', 0, ?)
+                """,
+                (
+                    partner_id,
+                    savings_account_id,
+                    date.today().isoformat(),
+                    raw_month,
+                    f"Month-End Leftover ({m_label})",
+                    round(transfer_amount, 2),
+                    round(transfer_amount, 2),
+                    f"Leftover non-rollover budget surplus from {m_label} transferred to {acc['name']}.",
+                ),
+            )
+            db.execute(
+                "UPDATE accounts SET balance_current = balance_current + ?, balance_available = balance_available + ? WHERE id = ?",
+                (round(transfer_amount, 2), round(transfer_amount, 2), savings_account_id),
+            )
+            _upsert_account_balance_snapshot(
+                db, savings_account_id, float(acc["balance_current"] or 0.0) + transfer_amount, raw_month, f"Month-end close transfer for {m_label}"
+            )
+
+    # Generate algorithmic recap
+    recap_obj = _build_algorithmic_month_recap(db, raw_month)
+    recap_json = json.dumps(recap_obj)
+
+    notes = (data.get("notes") or "").strip()
+    tasks_json = json.dumps(data.get("tasks_completed") or {})
+
+    db.execute(
+        """
+        INSERT INTO closed_months (budget_month, closed_at, closed_by_partner_id, leftover_amount, transferred_to_savings, savings_account_id, tasks_completed, recap_data, notes)
+        VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(budget_month) DO UPDATE SET
+            closed_at = datetime('now'),
+            closed_by_partner_id = excluded.closed_by_partner_id,
+            leftover_amount = excluded.leftover_amount,
+            transferred_to_savings = excluded.transferred_to_savings,
+            savings_account_id = excluded.savings_account_id,
+            tasks_completed = excluded.tasks_completed,
+            recap_data = excluded.recap_data,
+            notes = excluded.notes
+        """,
+        (
+            raw_month,
+            partner_id,
+            round(total_leftover, 2),
+            1 if transferred else 0,
+            savings_account_id,
+            tasks_json,
+            recap_json,
+            notes,
+        ),
+    )
+
+    try:
+        y, m = int(raw_month[:4]), int(raw_month[5:7])
+        month_label = date(y, m, 1).strftime("%B '%y")
+    except Exception:
+        month_label = raw_month
+
+    # Mark prior month_close notifications for this month as read
+    db.execute(
+        "UPDATE notifications SET is_read = 1 WHERE notif_type = 'month_close' AND title LIKE ?",
+        (f"%{month_label}%",),
+    )
+
+    # Create celebration notification for all household partners
+    partners = db.execute("SELECT id FROM partners").fetchall()
+    for p in partners:
+        create_notification(
+            db,
+            recipient_partner_id=p["id"],
+            actor_partner_id=partner_id,
+            notif_type="month_close_celebrate",
+            title=f"🎉 {month_label} is Closed!",
+            message=f"Nice work! Your {month_label} Recap is ready to view.",
+            link_tab="finance",
+        )
+
+    db.commit()
+    bump_state_version(db)
+    return jsonify({
+        "closed": True,
+        "budget_month": raw_month,
+        "month_label": month_label,
+        "leftover_amount": round(total_leftover, 2),
+        "transferred_to_savings": transferred,
+        "recap": recap_obj,
+    }), 201
+
+
+@finance_bp.route("/reopen-month", methods=["POST"])
+def reopen_month():
+    """
+    Reopens a previously closed month so transactions and budgets can be modified again.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_month = (data.get("month") or "").strip()[:7]
+    if len(raw_month) != 7:
+        return jsonify({"error": "Valid YYYY-MM month is required"}), 400
+
+    db = get_db()
+    db.execute("DELETE FROM closed_months WHERE budget_month = ?", (raw_month,))
+    db.commit()
+    bump_state_version(db)
+    return jsonify({"reopened": True, "budget_month": raw_month})
+
+
+@finance_bp.route("/month-recap", methods=["GET"])
+def get_month_recap():
+    """
+    Returns the algorithmic recap for a month. If closed, returns the stored recap;
+    if not closed, generates a live preview.
+    """
+    db = get_db()
+    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    raw_month = (request.args.get("month") or "").strip()[:7]
+    selected_month = raw_month if len(raw_month) == 7 else current_ym
+
+    closed_row = db.execute(
+        "SELECT recap_data FROM closed_months WHERE budget_month = ?",
+        (selected_month,),
+    ).fetchone()
+
+    if closed_row and closed_row["recap_data"]:
+        try:
+            recap_data = json.loads(closed_row["recap_data"])
+        except Exception:
+            recap_data = _build_algorithmic_month_recap(db, selected_month)
+    else:
+        recap_data = _build_algorithmic_month_recap(db, selected_month)
+
+    return jsonify(recap_data)
+
+
+@finance_bp.route("/month-close/transfer-savings", methods=["POST"])
+def transfer_month_leftover_to_savings():
+    """
+    Transfers the specific leftover amount into a selected savings account.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_month = (data.get("month") or "").strip()[:7]
+    if len(raw_month) != 7:
+        return jsonify({"error": "Valid YYYY-MM month is required"}), 400
+
+    raw_acc_id = data.get("savings_account_id")
+    if not raw_acc_id or not str(raw_acc_id).isdigit():
+        return jsonify({"error": "Valid savings_account_id is required"}), 400
+    account_id = int(raw_acc_id)
+
+    db = get_db()
+    acc = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        return jsonify({"error": "Savings account not found"}), 404
+
+    leftover_info = _compute_month_leftover_data(db, raw_month)
+    default_amt = leftover_info["total_leftover"]
+    try:
+        amount = round(float(data.get("amount", default_amt)), 2)
+    except (ValueError, TypeError):
+        amount = default_amt
+
+    if amount <= 0:
+        return jsonify({"error": "Transfer amount must be greater than zero"}), 400
+
+    actor = getattr(g, "current_partner", None)
+    partner_id = actor["id"] if actor else None
+
+    try:
+        y, m = int(raw_month[:4]), int(raw_month[5:7])
+        m_label = date(y, m, 1).strftime("%B '%y")
+    except Exception:
+        m_label = raw_month
+
+    db.execute(
+        """
+        INSERT INTO income_entries (partner_id, account_id, date, budget_month, source_name, amount, expected_monthly_amount, income_type, category, is_recurring, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'transfer', 'Transfer to Savings', 0, ?)
+        """,
+        (
+            partner_id,
+            account_id,
+            date.today().isoformat(),
+            raw_month,
+            f"Month-End Leftover ({m_label})",
+            amount,
+            amount,
+            f"Leftover non-rollover budget surplus from {m_label} transferred to {acc['name']}.",
+        ),
+    )
+
+    db.execute(
+        "UPDATE accounts SET balance_current = balance_current + ?, balance_available = balance_available + ? WHERE id = ?",
+        (amount, amount, account_id),
+    )
+    _upsert_account_balance_snapshot(
+        db, account_id, float(acc["balance_current"] or 0.0) + amount, raw_month, f"Month-end close transfer for {m_label}"
+    )
+
+    db.execute(
+        "UPDATE closed_months SET transferred_to_savings = 1, savings_account_id = ? WHERE budget_month = ?",
+        (account_id, raw_month),
+    )
+    db.commit()
+    bump_state_version(db)
+    return jsonify({
+        "transferred": True,
+        "budget_month": raw_month,
+        "amount": amount,
+        "account_id": account_id,
+        "account_name": acc["name"],
     })
 
 
@@ -2513,6 +3529,10 @@ def finance_history():
             )
 
     history_list = []
+    closed_months_rows = db.execute(
+        "SELECT budget_month, closed_at, leftover_amount, transferred_to_savings, recap_data FROM closed_months"
+    ).fetchall()
+    closed_months_map = {r["budget_month"]: dict(r) for r in closed_months_rows}
 
     for ym in sorted_months:
         m_budgets = _ensure_monthly_budgets_for_month(db, ym)
@@ -2621,6 +3641,10 @@ def finance_history():
             "net_variance": round(total_limit - total_spent, 2),
             "utilization_pct": round((total_spent / total_limit) * 100, 1) if total_limit > 0 else 0.0,
             "transaction_count": len(budget_m_txs),
+            "is_closed": ym in closed_months_map,
+            "closed_at": closed_months_map[ym]["closed_at"] if ym in closed_months_map else None,
+            "leftover_amount": closed_months_map[ym]["leftover_amount"] if ym in closed_months_map else None,
+            "has_recap": bool(ym in closed_months_map and closed_months_map[ym].get("recap_data")),
             "categories": cat_breakdown,
         })
 

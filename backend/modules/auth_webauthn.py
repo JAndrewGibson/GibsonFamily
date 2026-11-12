@@ -389,6 +389,7 @@ def reset_all_data():
 
     db = get_db()
     for table in [
+        "closed_months",
         "push_subscriptions",
         "notifications",
         "request_comments",

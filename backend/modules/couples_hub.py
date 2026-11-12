@@ -37,6 +37,11 @@ def list_notifications():
         return jsonify({"notifications": [], "unread_count": 0})
 
     db = get_db()
+    try:
+        from backend.modules.finance import check_and_create_month_close_notifications
+        check_and_create_month_close_notifications(db)
+    except Exception:
+        pass
     rows = [
         dict(r)
         for r in db.execute(

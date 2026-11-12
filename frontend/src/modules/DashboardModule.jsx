@@ -2,13 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { apiFetch, getCookie, setCookie } from '../api';
 import {
   Calendar,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   History,
   Plus,
+  Sparkles,
   X,
 } from 'lucide-react';
+import MonthCloseModal from '../components/MonthCloseModal';
+import MonthRecapModal from '../components/MonthRecapModal';
 
 const STARTING_MONTH = '2026-11';
 
@@ -88,6 +92,8 @@ export default function DashboardModule({
   const [savingTx, setSavingTx] = useState(false);
 
   const [showMonthModal, setShowMonthModal] = useState(false);
+  const [showMonthCloseModal, setShowMonthCloseModal] = useState(false);
+  const [showMonthRecapModal, setShowMonthRecapModal] = useState(false);
 
   const selectBudgetMonth = (ym) => {
     const clamped = ym < STARTING_MONTH ? STARTING_MONTH : ym;
@@ -285,6 +291,110 @@ export default function DashboardModule({
           </button>
         </div>
       </div>
+
+      {/* Month Close & Recap Banner */}
+      {summary?.month_close?.is_closed ? (
+        <div
+          className="month-close-callout-banner closed"
+          style={{
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.1) 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '14px',
+            padding: '0.85rem 1.15rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <CheckCircle2 size={20} color="#10b981" />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                {formatMonthLabel(selectedMonth)} is Closed
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                {summary.month_close?.leftover_amount > 0
+                  ? `$${fmtMoney(summary.month_close.leftover_amount)} non-rollover leftover was transferred to savings.`
+                  : 'Month-end wrap-up complete.'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowMonthRecapModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <Sparkles size={14} color="#fbbf24" />
+              View {formatShortMonthLabel(selectedMonth)} Recap 🎉
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowMonthCloseModal(true)}
+            >
+              Details
+            </button>
+          </div>
+        </div>
+      ) : (summary?.month_close?.is_eligible || selectedMonth < currentCalendarMonth) ? (
+        <div
+          className="month-close-callout-banner open"
+          style={{
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.14) 0%, rgba(245, 158, 11, 0.12) 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.4)',
+            borderRadius: '14px',
+            padding: '0.9rem 1.15rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <Sparkles size={20} color="#fbbf24" />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                Ready to close {formatMonthLabel(selectedMonth)}?
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                {summary?.month_close?.leftover_amount > 0 ? (
+                  <>
+                    Transfer <strong>${fmtMoney(summary.month_close.leftover_amount)}</strong> leftover to savings and unlock your{' '}
+                    <strong>{formatShortMonthLabel(selectedMonth)} Recap</strong>!
+                  </>
+                ) : (
+                  <>Complete month-end tasks and unlock your <strong>{formatShortMonthLabel(selectedMonth)} Recap</strong>!</>
+                )}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowMonthRecapModal(true)}
+            >
+              Preview Recap
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowMonthCloseModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <Sparkles size={14} />
+              Review & Close Month
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* SECTION 1: Pure Layered Budget & Savings Graph (No title or clutter) */}
       <div className="card mb-20" style={{ padding: '16px 20px' }}>
@@ -988,6 +1098,35 @@ export default function DashboardModule({
             </div>
           </div>
         </div>
+      )}
+      {/* Month Close & Tasks Modal */}
+      {showMonthCloseModal && (
+        <MonthCloseModal
+          isOpen={showMonthCloseModal}
+          onClose={() => setShowMonthCloseModal(false)}
+          selectedMonth={selectedMonth}
+          activePartner={activePartner}
+          onMonthClosed={() => {
+            loadDashboardData(selectedMonth, true);
+            if (onDataChanged) onDataChanged();
+          }}
+          onViewRecap={() => {
+            setShowMonthRecapModal(true);
+          }}
+        />
+      )}
+
+      {/* Spotify-Wrapped Style Month Recap Modal */}
+      {showMonthRecapModal && (
+        <MonthRecapModal
+          isOpen={showMonthRecapModal}
+          onClose={() => setShowMonthRecapModal(false)}
+          selectedMonth={selectedMonth}
+          onReopenMonth={() => {
+            loadDashboardData(selectedMonth, true);
+            if (onDataChanged) onDataChanged();
+          }}
+        />
       )}
     </div>
   );

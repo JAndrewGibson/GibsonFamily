@@ -2057,6 +2057,215 @@ def test_rollover_spending_partner_spending_money_and_decimal_budgets(app_instan
     assert andrew_apr["is_in_debt"] is False
 
 
+def test_closing_months_notifications_leftover_and_fun_recap(client):
+    from datetime import date
+    from backend.modules.finance import (
+        get_month_close_eligibility,
+        check_and_create_month_close_notifications,
+        _compute_month_leftover_data,
+        _build_algorithmic_month_recap,
+    )
+    from backend.database import get_db
+
+    # 1. Reset and setup household
+    client.post("/api/auth/reset-all")
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Family",
+            "partners": [
+                {"name": "Alex Gibson", "email": "alex@example.com", "password": "AlexSecurePassword123!", "avatar_color": "#6366f1"},
+                {"name": "Jordan Gibson", "email": "jordan@example.com", "password": "JordanSecurePassword123!", "avatar_color": "#ec4899"},
+            ],
+        },
+    )
+    assert p_res.status_code == 201
+    p_data = p_res.get_json()
+    token = p_data["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/auth/onboarding/complete", headers=headers, json={"household_name": "Gibson Family"})
+
+    # Add checking account and savings account
+    chk_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={"name": "Primary Checking", "type": "depository", "subtype": "checking", "balance_current": 5000.0, "mask": "1111"},
+    )
+    chk_id = chk_res.get_json()["id"]
+
+    sav_res = client.post(
+        "/api/finance/accounts",
+        headers=headers,
+        json={"name": "High-Yield Savings", "type": "depository", "subtype": "savings", "balance_current": 10000.0, "mask": "2222", "is_savings_account": True},
+    )
+    sav_id = sav_res.get_json()["id"]
+
+    # 2. Test Eligibility Rule: 3 days before the 1st of the new month
+    # For November 2026 (2026-11), next month starts 2026-12-01.
+    # 3 days before is 2026-11-28.
+    not_yet_eligible, days_left, notif_date = get_month_close_eligibility("2026-11", date(2026, 11, 25))
+    assert not_yet_eligible is False
+    assert days_left == 3
+    assert notif_date == "2026-11-28"
+
+    eligible_day, days_left_0, notif_date_2 = get_month_close_eligibility("2026-11", date(2026, 11, 28))
+    assert eligible_day is True
+    assert days_left_0 == 0
+
+    past_month_eligible, _, _ = get_month_close_eligibility("2026-11", date(2026, 12, 5))
+    assert past_month_eligible is True
+
+    # 3. Test Notification Creation on 3 days before 1st of new month
+    with client.application.app_context():
+        db = get_db()
+        created = check_and_create_month_close_notifications(db, date(2026, 11, 28))
+        assert "2026-11" in created
+
+    notifs = client.get("/api/notifications", headers=headers).get_json()["notifications"]
+    assert any("Time to Close November '26!" in n["title"] for n in notifs)
+
+    # 4. Set category budgets in 2026-11
+    # Non-rollover: Groceries ($500), Dining ($300), Utilities ($200)
+    # Rollover: "Alex's Spending Money" ($100, allow_rollover = 1)
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Groceries", "monthly_limit": 500.0, "budget_month": "2026-11", "allow_rollover": 0})
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Dining Out", "monthly_limit": 300.0, "budget_month": "2026-11", "allow_rollover": 0})
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Utilities", "monthly_limit": 200.0, "budget_month": "2026-11", "allow_rollover": 0})
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Alex's Spending Money", "monthly_limit": 100.0, "budget_month": "2026-11", "allow_rollover": 1})
+
+    # Log income in 2026-11
+    client.post("/api/finance/income", headers=headers, json={"source_name": "Tech Corp Salary", "amount": 4500.0, "income_type": "payroll", "budget_month": "2026-11", "date": "2026-11-01"})
+
+    # Log expenses in 2026-11
+    # Groceries: $400 spent -> $100 leftover
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Trader Joe's", "merchant_name": "Trader Joe's", "amount": 250.0, "category": "Groceries", "budget_month": "2026-11", "date": "2026-11-05", "account_id": chk_id})
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Trader Joe's #2", "merchant_name": "Trader Joe's", "amount": 150.0, "category": "Groceries", "budget_month": "2026-11", "date": "2026-11-12", "account_id": chk_id})
+
+    # Dining: $220 spent -> $80 leftover
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Pizzeria Luigi", "merchant_name": "Pizzeria Luigi", "amount": 120.0, "category": "Dining Out", "budget_month": "2026-11", "date": "2026-11-15", "account_id": chk_id})
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Sushi Bar", "merchant_name": "Sushi Bar", "amount": 100.0, "category": "Dining Out", "budget_month": "2026-11", "date": "2026-11-20", "account_id": chk_id})
+
+    # Utilities: $180 spent -> $20 leftover
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Electric Power Co", "merchant_name": "Electric Power Co", "amount": 180.0, "category": "Utilities", "budget_month": "2026-11", "date": "2026-11-10", "account_id": chk_id})
+
+    # Alex's Spending Money: $60 spent -> $40 unused rollover
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Bookstore", "merchant_name": "Local Books", "amount": 60.0, "category": "Alex's Spending Money", "budget_month": "2026-11", "date": "2026-11-18", "account_id": chk_id})
+
+    # 5. Check Leftover Calculation (Not including rollovers!)
+    status_res = client.get("/api/finance/month-close-status?month=2026-11", headers=headers).get_json()
+    assert status_res["is_closed"] is False
+    # Total non-rollover leftover: $100 (Groceries) + $80 (Dining) + $20 (Utilities) = $200.00
+    assert status_res["leftover_amount"] == 200.00
+
+    # Ensure rollover category (Alex's Spending Money: $40) is in rollover_categories and EXCLUDED from leftover_amount!
+    leftover_cat_names = [c["category"] for c in status_res["leftover_categories"] if c["leftover"] > 0]
+    assert "Groceries" in leftover_cat_names
+    assert "Dining Out" in leftover_cat_names
+    assert "Utilities" in leftover_cat_names
+    assert "Alex's Spending Money" not in leftover_cat_names
+
+    ro_cat_names = [c["category"] for c in status_res["rollover_categories"]]
+    assert "Alex's Spending Money" in ro_cat_names
+    alex_ro = next(c for c in status_res["rollover_categories"] if c["category"] == "Alex's Spending Money")
+    assert alex_ro["rollover_out"] == 40.00
+
+    # Check Month-End Tasks list
+    task_ids = [t["id"] for t in status_res["tasks"]]
+    assert "pending_txs" in task_ids
+    assert "transfer_leftover" in task_ids
+    assert "partner_rollovers" in task_ids
+
+    # 6. Close the Month & Transfer Leftover into Savings
+    close_res = client.post(
+        "/api/finance/close-month",
+        headers=headers,
+        json={
+            "month": "2026-11",
+            "transferred_to_savings": True,
+            "savings_account_id": sav_id,
+            "transfer_amount": 200.00,
+            "notes": "November closed cleanly!",
+        },
+    )
+    assert close_res.status_code == 201
+    close_data = close_res.get_json()
+    assert close_data["closed"] is True
+    assert close_data["leftover_amount"] == 200.00
+    assert close_data["transferred_to_savings"] is True
+
+    # Verify savings account balance increased by $200.00
+    sav_check = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    sav_acc = next(a for a in sav_check["accounts"] if a["id"] == sav_id)
+    assert sav_acc["balance_current"] == 10200.00
+
+    # Verify summary returns month_close object
+    assert sav_check["month_close"]["is_closed"] is True
+    assert sav_check["month_close"]["leftover_amount"] == 200.00
+    assert sav_check["month_close"]["transferred_to_savings"] is True
+
+    # 7. Algorithmic Recap Verification (Spotify Wrapped / Year In Review style)
+    recap = close_data["recap"]
+    assert recap["budget_month"] == "2026-11"
+    assert "November '26 Recap" in recap["recap_title"]
+    assert recap["overview"]["total_income"] == 4500.00
+    assert recap["overview"]["total_spent"] == 860.00  # 400 + 220 + 180 + 60
+    assert recap["overview"]["net_cashflow"] == 3640.00
+    assert recap["persona"]["title"] != ""
+    assert len(recap["slides"]) >= 6
+
+    # Top Category is Groceries ($400)
+    assert recap["top_categories"][0]["category"] == "Groceries"
+    assert recap["top_categories"][0]["spent"] == 400.00
+
+    # Top Merchant is Trader Joe's (visited 2 times)
+    assert recap["top_merchant"]["name"] == "Trader Joe's"
+    assert recap["top_merchant"]["count"] == 2
+
+    # Biggest single purchase is Trader Joe's $250.00
+    assert recap["biggest_purchase"]["amount"] == 250.00
+
+    # Budget MVP is Groceries ($100 saved)
+    assert recap["budget_mvp"]["category"] == "Groceries"
+    assert recap["budget_mvp"]["saved"] == 100.00
+
+    # 8. Test Trends (MoM and YoY)
+    # Add December 2026 transactions to test MoM trend
+    # In Dec 2026, total spending is $1100 (up from Nov's $960)
+    client.post("/api/finance/budgets", headers=headers, json={"category": "Groceries", "monthly_limit": 500.0, "budget_month": "2026-12", "allow_rollover": 0})
+    client.post("/api/finance/income", headers=headers, json={"source_name": "Salary", "amount": 4500.0, "income_type": "payroll", "budget_month": "2026-12", "date": "2026-12-01"})
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Supermarket", "amount": 1100.0, "category": "Groceries", "budget_month": "2026-12", "date": "2026-12-05", "account_id": chk_id})
+
+    with client.application.app_context():
+        db = get_db()
+        dec_recap = _build_algorithmic_month_recap(db, "2026-12")
+        # In Dec, spent $1100 vs Nov $960 -> spending up ~15% from last month!
+        assert dec_recap["trends"]["mom_spend_trend"] is not None
+        assert "Spending up" in dec_recap["trends"]["mom_spend_trend"]
+        assert "from last month!" in dec_recap["trends"]["mom_spend_trend"]
+
+    # Also test YoY: add November 2025 transaction of $1400
+    # In Nov 2026, spending was $960 vs Nov 2025 $1400 -> Spending down 31% from last November!
+    client.post("/api/finance/transactions", headers=headers, json={"name": "Historical Grocery", "amount": 1400.0, "category": "Groceries", "budget_month": "2025-11", "date": "2025-11-10", "account_id": chk_id})
+    with client.application.app_context():
+        db = get_db()
+        nov_recap_with_yoy = _build_algorithmic_month_recap(db, "2026-11")
+        assert nov_recap_with_yoy["trends"]["yoy_spend_trend"] is not None
+        assert "Spending down" in nov_recap_with_yoy["trends"]["yoy_spend_trend"]
+        assert "from last November!" in nov_recap_with_yoy["trends"]["yoy_spend_trend"]
+
+    # 9. Test Reopen Month and Historical Months integration
+    reopen_res = client.post("/api/finance/reopen-month", headers=headers, json={"month": "2026-11"})
+    assert reopen_res.status_code == 200
+    assert reopen_res.get_json()["reopened"] is True
+
+    status_reopened = client.get("/api/finance/month-close-status?month=2026-11", headers=headers).get_json()
+    assert status_reopened["is_closed"] is False
+
+    # Check history endpoint contains is_closed flag
+    history = client.get("/api/finance/history", headers=headers).get_json()["history"]
+    nov_hist = next(h for h in history if h["month"] == "2026-11")
+    assert nov_hist["is_closed"] is False
+
+
 
 
 

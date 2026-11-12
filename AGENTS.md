@@ -187,7 +187,30 @@ GibsonFamily/
 - **Mobile Push Notifications (`push_subscriptions` table & `/sw.js`)**:
   - Mobile browsers require `ServiceWorkerRegistration.showNotification()` rather than `new window.Notification()`. `frontend/public/sw.js` and `showMobileNativeNotification()` in `frontend/src/api.js` handle native mobile notification delivery, while `MobilePushPromptBanner` in `NotificationCenter.jsx` prompts users to enable and test push notifications (`GET /api/notifications/push-status`, `POST /api/notifications/push-subscribe`, `POST /api/notifications/push-test`).
 
-### 3.5 Security & Plaid Production Architecture
+### 3.5 Month Closing, Leftover Savings Transfer & Algorithmic Month Recap ({Month - 'XX} Recap)
+- **Month Closing Eligibility & 3-Day Notification Trigger (`get_month_close_eligibility`, `check_and_create_month_close_notifications`)**:
+  - The notification to close a month (`budget_month`, e.g. `2026-11`) surfaces **exactly 3 days before the 1st of the new month**. For November 2026, eligibility begins on **November 28th, 2026** (`date(y, m+1, 1) - timedelta(days=3)`).
+  - Automatically verified during `GET /api/finance/summary` and `GET /api/notifications`. When eligible and unclosed, sends an in-app notification to both partners: *"Time to Close {Month}! 3 days left until the new month. Close {Month} to review your spending recap and transfer leftover savings."*
+- **Month-End Closing Tasks & Strict Leftover Savings Equilibrium (`closed_months` table, `_compute_month_leftover_data`)**:
+  - `closed_months(budget_month, closed_at, closed_by_partner_id, leftover_amount, transferred_to_savings, savings_account_id, tasks_completed, recap_data, notes)` tracks the closure state.
+  - **Leftover vs. Rollover Law**: Unspent budget from categories with `allow_rollover = 0` (e.g. Groceries, Dining, Utilities) generates **Leftover Surplus** (`leftover_amount`) that the user is instructed to transfer to savings. In contrast, categories with `allow_rollover = 1` (such as dedicated `"{user}'s Spending Money"`) are **strictly excluded** from leftover savings transfers because their balances roll forward into next month's spending allowance.
+  - **Month-End Task Checklist**:
+    1. Resolve pending transactions.
+    2. Review uncategorized/untracked transactions.
+    3. Take month-end savings & brokerage balance snapshots.
+    4. Transfer unspent non-rollover leftover into a designated savings/brokerage account (`POST /api/finance/month-close/transfer-savings`).
+    5. Finalize month closing (`POST /api/finance/close-month`). Can be reopened if needed (`POST /api/finance/reopen-month`).
+- **Algorithmic Month Recap Engine (`_build_algorithmic_month_recap`, `MonthRecapModal.jsx`)**:
+  - **Strict Constraint**: Uses **zero generative AI**; purely deterministic algorithms compute an engaging, Spotify-Wrapped-style story experience:
+    - **Household Persona Archetype**: Computes spending profile dynamically (e.g., `The Super Savers 🚀`, `The Budget Champions 🏆`, `The Foodie Household 🍕`, `The Comeback Ninjas 🥷`, `The Steady Builders 🧱`, `The Action Takers ⚡`) with paired theme gradients.
+    - **Month-over-Month (MoM) & Year-over-Year (YoY) Trends**: Algorithmically generates exact trend callouts (e.g. `"Spending down 10% from last month!"` / `"Spending up 15% from last month!"`, and `"Spending down 31% from last November!"` / `"Spending up 30% from last November!"`).
+    - **Top 5 Category Rankings**: Computes spend amounts and percent-of-total breakdown with visual meter bars.
+    - **Merchant & Transaction Spotlight**: Identifies the most frequented merchant and biggest single purchase.
+    - **Budget MVP & Rollovers**: Highlights the category with the highest dollar surplus under budget and partner rollover carryovers.
+    - **Savings Celebration & Milestones**: Highlights leftover stash transferred to savings and unlocks milestones (e.g. Under-budget streak, First month closed, 20%+ savings rate).
+    - **Interactive Wrapped Story Deck**: 7 full-screen slides with auto-advancing story bars, pause/play, keyboard controls (`Space`, `←`, `→`), confetti celebration, and a shareable summary recap card.
+
+### 3.6 Security & Plaid Production Architecture
 - **Authentication**: All `/api/*` endpoints (except `/api/health`, `/api/auth/setup-status`, `/api/auth/login`, and WebAuthn assertion endpoints) require a valid `gibson_session` `HttpOnly` cookie or `Bearer` token (`backend/app.py`).
 - **Encryption at Rest**: Plaid `access_token` values are encrypted with a key derived from `FLASK_SECRET_KEY` (`encrypt_plaid_token` / `decrypt_plaid_token` in `backend/security.py`, `enc:v1:...`) before being stored in `plaid_items`.
 - **Plaid Redirect URI**: Normalized without a trailing slash (`https://gibsonfamily.onrender.com`) in `backend/config.py` and `backend/modules/finance.py` to match the Plaid Dashboard registration. Never log or expose secret values from `.env`.

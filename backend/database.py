@@ -222,6 +222,21 @@ CREATE TABLE IF NOT EXISTS monthly_income_projections (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS closed_months (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_month TEXT NOT NULL UNIQUE,
+    closed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_by_partner_id INTEGER,
+    leftover_amount REAL NOT NULL DEFAULT 0.0,
+    transferred_to_savings INTEGER NOT NULL DEFAULT 0,
+    savings_account_id INTEGER,
+    tasks_completed TEXT NOT NULL DEFAULT '{}',
+    recap_data TEXT,
+    notes TEXT,
+    FOREIGN KEY (closed_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     partner_id INTEGER NOT NULL,
@@ -590,6 +605,25 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         """
     )
 
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS closed_months (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            budget_month TEXT NOT NULL UNIQUE,
+            closed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            closed_by_partner_id INTEGER,
+            leftover_amount REAL NOT NULL DEFAULT 0.0,
+            transferred_to_savings INTEGER NOT NULL DEFAULT 0,
+            savings_account_id INTEGER,
+            tasks_completed TEXT NOT NULL DEFAULT '{}',
+            recap_data TEXT,
+            notes TEXT,
+            FOREIGN KEY (closed_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+            FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL
+        )
+        """
+    )
+
     # One-time migration: enforce November (2026-11) starting point & deduplicate duplicate Plaid accounts
     cleanup_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'november_start_and_dedup_v1'"
@@ -713,3 +747,4 @@ def create_notification(
         (recipient_partner_id, actor_partner_id, notif_type, title, message, link_tab, reference_id),
     )
     bump_state_version(db)
+    db.commit()

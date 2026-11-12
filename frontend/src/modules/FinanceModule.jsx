@@ -28,6 +28,7 @@ import {
   RotateCcw,
   Scissors,
   SlidersHorizontal,
+  Sparkles,
   Tags,
   Target,
   Trash2,
@@ -39,6 +40,8 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setCookie } from '../api';
+import MonthCloseModal from '../components/MonthCloseModal';
+import MonthRecapModal from '../components/MonthRecapModal';
 
 const DEFAULT_CATEGORIES = [
   'Groceries & Dining',
@@ -213,6 +216,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   // Top "Options" Menu & Spawnable Floating Modals
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(false);
+  const [showMonthCloseModal, setShowMonthCloseModal] = useState(false);
+  const [showMonthRecapModal, setShowMonthRecapModal] = useState(false);
+  const [recapTargetMonth, setRecapTargetMonth] = useState(selectedMonth);
   const [showPlaidModal, setShowPlaidModal] = useState(false);
   const [unlinkingPlaidItem, setUnlinkingPlaidItem] = useState(null);
   const [showAccountsModal, setShowAccountsModal] = useState(false);
@@ -1905,6 +1911,31 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               )}
               <ChevronDown size={13} />
             </button>
+            {summary.month_close?.is_closed ? (
+              <button
+                type="button"
+                className="badge badge-success"
+                onClick={() => {
+                  setRecapTargetMonth(selectedMonth);
+                  setShowMonthRecapModal(true);
+                }}
+                style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', border: 'none' }}
+                title="Click to view month recap"
+              >
+                <Sparkles size={12} color="#fbbf24" />
+                <span>Closed · Recap</span>
+              </button>
+            ) : summary.month_close?.is_eligible ? (
+              <button
+                type="button"
+                className="badge badge-warning"
+                onClick={() => setShowMonthCloseModal(true)}
+                style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', border: 'none' }}
+                title="Click to review and close month"
+              >
+                <span>Ready to Close</span>
+              </button>
+            ) : null}
           </div>
           <p className="text-muted finance-header-subtitle">
             Net Cash:{' '}
@@ -1989,6 +2020,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       <X size={16} />
                     </button>
                   </div>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      if (summary.month_close?.is_closed) {
+                        setRecapTargetMonth(selectedMonth);
+                        setShowMonthRecapModal(true);
+                      } else {
+                        setShowMonthCloseModal(true);
+                      }
+                    }}
+                  >
+                    <Sparkles size={16} color="#fbbf24" />
+                    <div className="finance-option-copy">
+                      <div className="request-badges">
+                        <strong>
+                          {summary.month_close?.is_closed
+                            ? `View ${formatShortMonth(selectedMonth)} Recap`
+                            : `Close Month & Month-End Tasks`}
+                        </strong>
+                        {summary.month_close?.is_closed ? (
+                          <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>Closed</span>
+                        ) : summary.month_close?.is_eligible ? (
+                          <span className="pill pill-amber" style={{ fontSize: '0.68rem' }}>Ready</span>
+                        ) : null}
+                      </div>
+                      <small>
+                        {summary.month_close?.is_closed
+                          ? 'Replay your household financial wrap-up'
+                          : 'Review leftover surplus, transfer to savings & unlock recap'}
+                      </small>
+                    </div>
+                  </button>
 
                   <button
                     type="button"
@@ -2188,6 +2254,116 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </button>
         </div>
       )}
+
+      {/* Month Close & Recap Banner */}
+      {summary.month_close?.is_closed ? (
+        <div
+          className="month-close-callout-banner closed"
+          style={{
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.1) 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.35)',
+            borderRadius: '14px',
+            padding: '0.85rem 1.15rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <CheckCircle2 size={20} color="#10b981" />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                {formatMonthLabel(selectedMonth)} is Closed
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                {summary.month_close?.leftover_amount > 0
+                  ? `$${summary.month_close.leftover_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} non-rollover leftover was transferred to savings.`
+                  : 'Month-end wrap-up complete.'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                setRecapTargetMonth(selectedMonth);
+                setShowMonthRecapModal(true);
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <Sparkles size={14} color="#fbbf24" />
+              View {formatShortMonth(selectedMonth)} Recap 🎉
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowMonthCloseModal(true)}
+            >
+              Month-End Details
+            </button>
+          </div>
+        </div>
+      ) : (summary.month_close?.is_eligible || selectedMonth < currentCalendarMonth) ? (
+        <div
+          className="month-close-callout-banner open"
+          style={{
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.14) 0%, rgba(245, 158, 11, 0.12) 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.4)',
+            borderRadius: '14px',
+            padding: '0.9rem 1.15rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <Sparkles size={20} color="#fbbf24" />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                Ready to close {formatMonthLabel(selectedMonth)}?
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                {summary.month_close?.leftover_amount > 0 ? (
+                  <>
+                    Transfer <strong>${summary.month_close.leftover_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong> leftover to savings and unlock your{' '}
+                    <strong>{formatShortMonth(selectedMonth)} Recap</strong>!
+                  </>
+                ) : (
+                  <>Complete month-end tasks and unlock your <strong>{formatShortMonth(selectedMonth)} Recap</strong>!</>
+                )}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setRecapTargetMonth(selectedMonth);
+                setShowMonthRecapModal(true);
+              }}
+            >
+              Preview Recap
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowMonthCloseModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <Sparkles size={14} />
+              Review & Close Month
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* =====================================================================
           1. TOP OF PAGE: MONTHLY INCOME, LAYERED BALANCE BAR & FLUCTUATION TRACKER
@@ -4260,21 +4436,43 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 <span className="pill pill-outline">
                                   {mItem.transaction_count} tx
                                 </span>
+                                {mItem.is_closed && (
+                                  <span className="pill pill-green" style={{ fontSize: '0.68rem' }}>
+                                    ✓ Closed
+                                  </span>
+                                )}
                               </div>
                               <h3 style={{ marginTop: '0.25rem' }}>
                                 {formatMonthLabel(mItem.budget_month)}
                               </h3>
                             </div>
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-xs"
-                              onClick={() => {
-                                setSelectedMonth(mItem.budget_month);
-                                setShowPeriodModal(false);
-                              }}
-                            >
-                              Switch to Month
-                            </button>
+                            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                              {mItem.is_closed && (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-xs"
+                                  onClick={() => {
+                                    setRecapTargetMonth(mItem.budget_month);
+                                    setShowMonthRecapModal(true);
+                                  }}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#fbbf24' }}
+                                  title="View month recap"
+                                >
+                                  <Sparkles size={12} />
+                                  Recap
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-xs"
+                                onClick={() => {
+                                  setSelectedMonth(mItem.budget_month);
+                                  setShowPeriodModal(false);
+                                }}
+                              >
+                                Switch to Month
+                              </button>
+                            </div>
                           </div>
 
                           <div className="plan-numbers-row">
@@ -6610,6 +6808,36 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             </form>
           </div>
         </div>
+      )}
+      {/* Month Close & Tasks Modal */}
+      {showMonthCloseModal && (
+        <MonthCloseModal
+          isOpen={showMonthCloseModal}
+          onClose={() => setShowMonthCloseModal(false)}
+          selectedMonth={selectedMonth}
+          activePartner={activePartner}
+          onMonthClosed={() => {
+            loadSummary(selectedMonth);
+            if (onDataChanged) onDataChanged();
+          }}
+          onViewRecap={(m) => {
+            setRecapTargetMonth(m || selectedMonth);
+            setShowMonthRecapModal(true);
+          }}
+        />
+      )}
+
+      {/* Spotify-Wrapped Style Month Recap Modal */}
+      {showMonthRecapModal && (
+        <MonthRecapModal
+          isOpen={showMonthRecapModal}
+          onClose={() => setShowMonthRecapModal(false)}
+          selectedMonth={recapTargetMonth || selectedMonth}
+          onReopenMonth={() => {
+            loadSummary(selectedMonth);
+            if (onDataChanged) onDataChanged();
+          }}
+        />
       )}
     </div>
   );
