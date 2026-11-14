@@ -2,9 +2,10 @@ import os
 from pathlib import Path
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from backend.config import Config
 from backend.database import bump_state_version, get_db, init_db
-from backend.security import load_current_session
+from backend.security import SESSION_COOKIE_NAME, load_current_session
 from backend.modules.auth_webauthn import auth_bp
 from backend.modules.finance import finance_bp
 from backend.modules.requests_and_plans import requests_bp
@@ -37,6 +38,14 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
+
+    if not app.config.get("TESTING"):
+        secret = app.config.get("SECRET_KEY")
+        if not secret or secret in ("gibson-family-dev-secret-key", "gibson-default-secret"):
+            raise RuntimeError("CRITICAL: FLASK_SECRET_KEY must be configured with a cryptographically secure random string.")
+
+    # Mitigate reverse-proxy IP spoofing for rate-limiting and audit logging
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     allowed_origin = app.config.get("WEBAUTHN_ORIGIN", "http://localhost:5173")
     CORS(
@@ -71,6 +80,27 @@ def create_app(test_config: dict | None = None) -> Flask:
 
         if not getattr(g, "current_partner", None):
             return jsonify({"error": "Authentication required. Please log in."}), 401
+
+        # CSRF check: For mutating requests authenticated via cookies (no Bearer token)
+        if request.method in ("POST", "PUT", "DELETE"):
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+                if cookie_token:
+                    csrf_header = (
+                        request.headers.get("X-Requested-With")
+                        or request.headers.get("X-Gibson-CSRF")
+                        or request.headers.get("X-CSRF-Token")
+                    )
+                    origin = request.headers.get("Origin", "")
+                    allowed_origins = {
+                        allowed_origin,
+                        "http://localhost:5173",
+                        "http://127.0.0.1:5173",
+                    }
+                    if not app.config.get("TESTING") or app.config.get("ENFORCE_CSRF_IN_TESTS"):
+                        if not csrf_header and (not origin or origin not in allowed_origins):
+                            return jsonify({"error": "CSRF validation failed: missing custom request header or origin mismatch."}), 403
 
         if getattr(g, "current_session", None) and g.current_session.get("is_screen_locked"):
             if path not in LOCKED_ALLOWED_API_PATHS:
@@ -118,6 +148,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             "plaid_env": app.config.get("PLAID_ENV", "production"),
             "plaid_configured": bool(app.config.get("PLAID_CLIENT_ID") and app.config.get("PLAID_SECRET")),
         })
+
+    @app.route("/api/account", methods=["DELETE"])
+    def account_deletion_root_alias():
+        from backend.modules.auth_webauthn import delete_account
+        return delete_account()
 
     def _build_overview_payload(db, actor):
         pending_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status IN ('pending', 'under_review')").fetchone()["cnt"]

@@ -4,6 +4,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from flask import current_app, g, jsonify, request
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from backend.database import get_db
 
 SESSION_COOKIE_NAME = "gibson_session"
@@ -15,6 +16,20 @@ def sanitize_partner(row) -> dict:
     d = dict(row)
     d.pop("password_hash", None)
     return d
+
+
+def _get_master_secret() -> str:
+    secret = current_app.config.get("SECRET_KEY")
+    if not secret or secret in ("gibson-family-dev-secret-key", "gibson-default-secret"):
+        if not current_app.config.get("TESTING"):
+            raise RuntimeError("CRITICAL: FLASK_SECRET_KEY must be configured with a cryptographically secure random string.")
+    return secret or "test-fallback-secret-key"
+
+
+def _derive_aes_key(master_secret: str, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256", master_secret.encode("utf-8"), salt, 100_000, dklen=32
+    )
 
 
 def _derive_keys(master_secret: str, salt: bytes) -> tuple[bytes, bytes]:
@@ -39,35 +54,58 @@ def _keystream_xor(data: bytes, enc_key: bytes, nonce: bytes) -> bytes:
 
 
 def encrypt_plaid_token(plaintext: str) -> str:
-    """Encrypts a Plaid access_token at rest with authenticated encryption (PBKDF2 + HMAC-SHA256)."""
-    if not plaintext or plaintext.startswith("enc:v1:"):
+    """Encrypts a Plaid access_token at rest using standard AES-256-GCM with PBKDF2 key derivation."""
+    if not plaintext or plaintext.startswith("enc:"):
         return plaintext
-    secret = current_app.config.get("SECRET_KEY", "gibson-default-secret")
+    secret = _get_master_secret()
     salt = secrets.token_bytes(16)
-    nonce = secrets.token_bytes(16)
-    enc_key, mac_key = _derive_keys(secret, salt)
-    ciphertext = _keystream_xor(plaintext.encode("utf-8"), enc_key, nonce)
-    tag = hmac.new(mac_key, salt + nonce + ciphertext, hashlib.sha256).digest()
-    payload = base64.urlsafe_b64encode(salt + nonce + tag + ciphertext).decode("ascii")
-    return f"enc:v1:{payload}"
+    nonce = secrets.token_bytes(12)  # Standard 96-bit nonce for AES-GCM
+    key = _derive_aes_key(secret, salt)
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
+    payload = base64.urlsafe_b64encode(salt + nonce + ciphertext).decode("ascii")
+    return f"enc:v2:{payload}"
 
 
 def decrypt_plaid_token(stored_value: str) -> str:
-    """Decrypts an encrypted Plaid access_token in memory and verifies its HMAC tag."""
-    if not stored_value or not stored_value.startswith("enc:v1:"):
+    """Decrypts an encrypted Plaid access_token (supports standard enc:v2: AES-GCM and legacy enc:v1:)."""
+    if not stored_value or not stored_value.startswith("enc:"):
         return stored_value
-    raw = base64.urlsafe_b64decode(stored_value[len("enc:v1:"):].encode("ascii"))
-    salt = raw[:16]
-    nonce = raw[16:32]
-    tag = raw[32:64]
-    ciphertext = raw[64:]
-    secret = current_app.config.get("SECRET_KEY", "gibson-default-secret")
-    enc_key, mac_key = _derive_keys(secret, salt)
-    expected_tag = hmac.new(mac_key, salt + nonce + ciphertext, hashlib.sha256).digest()
-    if not hmac.compare_digest(tag, expected_tag):
-        raise ValueError("Encrypted Plaid access token failed integrity check")
-    plaintext_bytes = _keystream_xor(ciphertext, enc_key, nonce)
-    return plaintext_bytes.decode("utf-8")
+
+    secret = _get_master_secret()
+
+    if stored_value.startswith("enc:v2:"):
+        try:
+            raw = base64.urlsafe_b64decode(stored_value[len("enc:v2:"):].encode("ascii"))
+            if len(raw) < 16 + 12 + 16:
+                raise ValueError("Payload too short for AES-GCM")
+            salt = raw[:16]
+            nonce = raw[16:28]
+            ciphertext = raw[28:]
+            key = _derive_aes_key(secret, salt)
+            aesgcm = AESGCM(key)
+            plaintext_bytes = aesgcm.decrypt(nonce, ciphertext, None)
+            return plaintext_bytes.decode("utf-8")
+        except Exception as e:
+            raise ValueError(f"Encrypted Plaid access token failed integrity check: {e}") from e
+
+    if stored_value.startswith("enc:v1:"):
+        try:
+            raw = base64.urlsafe_b64decode(stored_value[len("enc:v1:"):].encode("ascii"))
+            salt = raw[:16]
+            nonce = raw[16:32]
+            tag = raw[32:64]
+            ciphertext = raw[64:]
+            enc_key, mac_key = _derive_keys(secret, salt)
+            expected_tag = hmac.new(mac_key, salt + nonce + ciphertext, hashlib.sha256).digest()
+            if not hmac.compare_digest(tag, expected_tag):
+                raise ValueError("Encrypted Plaid access token failed integrity check")
+            plaintext_bytes = _keystream_xor(ciphertext, enc_key, nonce)
+            return plaintext_bytes.decode("utf-8")
+        except Exception as e:
+            raise ValueError(f"Legacy encrypted Plaid access token failed integrity check: {e}") from e
+
+    return stored_value
 
 
 def hash_session_token(raw_token: str) -> str:

@@ -1,6 +1,9 @@
+import base64
 from datetime import date, datetime, timedelta, timezone
+import hashlib
 import json
 import threading
+import time
 import requests
 from flask import Blueprint, current_app, g, jsonify, request
 from backend.database import bump_state_version, create_notification, get_db
@@ -282,6 +285,93 @@ def resolve_partner_spending_money_category(
         if first_lower and first_lower in norm and "spending money" in norm:
             return existing
     return f"{first_name}'s Spending Money"
+
+
+def sync_partner_spending_money_budget(
+    db,
+    partner_name: str,
+    amount: float,
+    avatar_color: str = "#ec4899",
+    clear_if_zero: bool = False,
+) -> None:
+    """
+    Synchronizes a partner's unified '{user}'s Spending Money' limit into `budgets`
+    and active/future `monthly_budgets` so there is a single source of truth.
+    """
+    sm_cat = resolve_partner_spending_money_category(db, partner_name)
+    val = round(float(amount or 0.0), 2)
+    color = (avatar_color or "#ec4899").strip()
+    current_ym = max(STARTING_BUDGET_MONTH, date.today().strftime("%Y-%m"))
+
+    if val > 0:
+        _ensure_category_in_catalog(
+            db,
+            sm_cat,
+            is_preloaded=1,
+            unarchive=True,
+            allow_rollover=1,
+            color=color,
+        )
+        db.execute(
+            """
+            INSERT INTO budgets (category, monthly_limit, color, allow_rollover)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(category) DO UPDATE SET
+                monthly_limit = excluded.monthly_limit,
+                color = excluded.color,
+                allow_rollover = 1
+            """,
+            (sm_cat, val, color),
+        )
+        _ensure_monthly_budgets_for_month(db, current_ym)
+        db.execute(
+            """
+            INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+            VALUES (?, ?, ?, ?, 1, 1)
+            ON CONFLICT(budget_month, category) DO UPDATE SET
+                monthly_limit = excluded.monthly_limit,
+                color = excluded.color,
+                is_active = 1,
+                allow_rollover = 1
+            """,
+            (current_ym, sm_cat, val, color),
+        )
+        future_months = db.execute(
+            "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month > ?",
+            (current_ym,),
+        ).fetchall()
+        for fm in future_months:
+            db.execute(
+                """
+                INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+                VALUES (?, ?, ?, ?, 1, 1)
+                ON CONFLICT(budget_month, category) DO UPDATE SET
+                    monthly_limit = excluded.monthly_limit,
+                    color = excluded.color,
+                    is_active = 1,
+                    allow_rollover = 1
+                """,
+                (fm["budget_month"], sm_cat, val, color),
+            )
+    elif clear_if_zero:
+        db.execute("DELETE FROM budgets WHERE category = ?", (sm_cat,))
+        db.execute(
+            "UPDATE monthly_budgets SET is_active = 0 WHERE category = ? AND budget_month >= ?",
+            (sm_cat, current_ym),
+        )
+
+
+def _sync_spending_money_to_partner(db, category: str, monthly_limit: float) -> None:
+    """When a '{user}'s Spending Money' budget is updated, mirror the limit back onto `partners.monthly_fun_allowance`."""
+    if not is_spending_money_category(category):
+        return
+    partners = db.execute("SELECT id, name FROM partners").fetchall()
+    for p in partners:
+        if resolve_partner_spending_money_category(db, p["name"]) == category:
+            db.execute(
+                "UPDATE partners SET monthly_fun_allowance = ? WHERE id = ?",
+                (round(float(monthly_limit or 0.0), 2), p["id"]),
+            )
 
 
 def _ensure_category_in_catalog(
@@ -2159,13 +2249,107 @@ def sync_all_plaid_items():
     })
 
 
+_PLAID_KEY_CACHE = {}
+
+
+def verify_plaid_webhook(req) -> bool:
+    """
+    Cryptographically verifies Plaid webhook requests via JWT signature (Plaid-Verification header),
+    request body hash matching, and timestamp freshness.
+    """
+    if not current_app.config.get("PLAID_VERIFY_WEBHOOKS", True):
+        return True
+
+    token = req.headers.get("Plaid-Verification")
+    if not token:
+        # In test mode or when Plaid secret is not configured, permit unverified calls unless header is present
+        if current_app.config.get("TESTING") or not current_app.config.get("PLAID_SECRET"):
+            return True
+        return False
+
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return False
+        header_b64, payload_b64, signature_b64 = parts
+
+        def b64url_decode(s: str) -> bytes:
+            padding = "=" * ((4 - len(s) % 4) % 4)
+            return base64.urlsafe_b64decode(s + padding)
+
+        header = json.loads(b64url_decode(header_b64).decode("utf-8"))
+        claims = json.loads(b64url_decode(payload_b64).decode("utf-8"))
+
+        if header.get("alg") != "ES256":
+            return False
+
+        kid = header.get("kid")
+        if not kid:
+            return False
+
+        # Validate timestamp within 5 minutes (300 seconds)
+        iat = claims.get("iat")
+        if not iat or abs(time.time() - float(iat)) > 300:
+            return False
+
+        # Validate body SHA-256
+        body_sha = hashlib.sha256(req.get_data()).hexdigest()
+        if claims.get("request_body_sha256") != body_sha:
+            return False
+
+        now = time.time()
+        pub_key = None
+        if kid in _PLAID_KEY_CACHE and _PLAID_KEY_CACHE[kid]["expires_at"] > now:
+            pub_key = _PLAID_KEY_CACHE[kid]["key"]
+        else:
+            plaid_base = current_app.config.get("PLAID_BASE_URL", "https://production.plaid.com")
+            client_id = current_app.config.get("PLAID_CLIENT_ID", "")
+            secret = current_app.config.get("PLAID_SECRET", "")
+            if not client_id or not secret:
+                return False
+
+            resp = requests.post(
+                f"{plaid_base}/webhook_verification_key/get",
+                json={"client_id": client_id, "secret": secret, "key_id": kid},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return False
+            key_data = resp.json().get("key", {})
+            x_bytes = b64url_decode(key_data["x"])
+            y_bytes = b64url_decode(key_data["y"])
+            from cryptography.hazmat.primitives.asymmetric import ec
+            pub_key = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256R1(), b"\x04" + x_bytes + y_bytes
+            )
+            _PLAID_KEY_CACHE[kid] = {"key": pub_key, "expires_at": now + 86400}
+
+        raw_sig = b64url_decode(signature_b64)
+        if len(raw_sig) != 64:
+            return False
+        r = int.from_bytes(raw_sig[:32], "big")
+        s = int.from_bytes(raw_sig[32:], "big")
+        from cryptography.hazmat.primitives.asymmetric import utils
+        from cryptography.hazmat.primitives import hashes
+        der_sig = utils.encode_dss_signature(r, s)
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+        pub_key.verify(der_sig, signing_input, ec.ECDSA(hashes.SHA256()))
+        return True
+    except Exception:
+        return False
+
+
 @finance_bp.route("/plaid/webhook", methods=["POST"])
 def plaid_webhook():
     """
     Public webhook receiver for Plaid asynchronous lifecycle events.
+    Verifies Plaid JWT signature before processing events.
     Handles TRANSACTIONS updates (SYNC_UPDATES_AVAILABLE, DEFAULT_UPDATE, etc.)
     and ITEM errors (ITEM_LOGIN_REQUIRED).
     """
+    if not verify_plaid_webhook(request):
+        return jsonify({"error": "Plaid webhook verification failed"}), 401
+
     data = request.get_json(silent=True) or {}
     webhook_type = (data.get("webhook_type") or "").upper()
     webhook_code = (data.get("webhook_code") or "").upper()
@@ -4548,6 +4732,7 @@ def upsert_budget():
                 """,
                 (fm["budget_month"], category, monthly_limit, color, allow_rollover),
             )
+        _sync_spending_money_to_partner(db, category, monthly_limit)
     else:
         # Even if only_this_month for limit, keep allow_rollover synced across category
         db.execute("UPDATE budgets SET allow_rollover = ? WHERE category = ?", (allow_rollover, category))

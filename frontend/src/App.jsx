@@ -5,16 +5,16 @@ import {
   FileHeart,
   Fingerprint,
   Handshake,
+  Home,
   LayoutDashboard,
   Layers,
   Lock,
   LogOut,
   Menu,
-  Moon,
   PiggyBank,
   Radio,
+  Settings,
   ShoppingCart,
-  Sun,
   Wallet,
   X,
 } from 'lucide-react';
@@ -46,6 +46,13 @@ const ICON_MAP = {
   'check-square': CheckSquare,
   'shopping-cart': ShoppingCart,
 };
+
+function formatFamilyBrand(rawName) {
+  const clean = (rawName || '').trim();
+  if (!clean || clean.toLowerCase() === 'our household') return 'Our Family';
+  if (/(family|household)$/i.test(clean)) return clean;
+  return `${clean} Family`;
+}
 
 export default function App() {
   const [loadingInit, setLoadingInit] = useState(true);
@@ -117,8 +124,8 @@ export default function App() {
     }
   }, [theme]);
 
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
+  const changeTheme = (nextTheme) => {
+    const next = nextTheme === 'light' ? 'light' : 'dark';
     setThemeState(next);
     setCookie('gibson_theme', next, 365);
     try {
@@ -305,14 +312,22 @@ export default function App() {
 
   const SHORT_TAB_LABELS = {
     dashboard: 'Home',
+    finance: 'Budget',
     requests: 'Requests',
-    finance: 'Finances',
     savings: 'Savings',
-    future_plans: 'Plans',
+    future_plans: 'Big Buys',
     groceries: 'Groceries',
-    todos: 'To-Dos',
     admin_docs: 'Medical',
+    todos: 'To Do',
   };
+
+  const dashboardModule = enabledModules.find((m) => m.id === 'dashboard');
+  const financeModules = enabledModules.filter(
+    (m) => m.category === 'Financial' && m.id !== 'dashboard'
+  );
+  const adminModules = enabledModules.filter(
+    (m) => m.category !== 'Financial' && m.category !== 'Home' && m.id !== 'dashboard'
+  );
 
   const bottomNavModules = enabledModules.slice(0, 4);
 
@@ -330,10 +345,11 @@ export default function App() {
       {/* Sidebar Navigation (Slide-over Drawer on Mobile, Fixed Left on Desktop) */}
       <aside className={`sidebar ${mobileDrawerOpen ? 'open' : ''}`}>
         <div className="brand-box">
-          <div className="brand-logo">GF</div>
+          <div className="brand-logo brand-logo-house">
+            <Home size={18} />
+          </div>
           <div className="brand-title-col">
-            <h1>{householdName}</h1>
-            <span>Couples Finance & Life OS</span>
+            <h1>{formatFamilyBrand(householdName)}</h1>
           </div>
           <button
             type="button"
@@ -345,67 +361,67 @@ export default function App() {
           </button>
         </div>
 
-        <div className="sidebar-section-label">FINANCIAL & PLANNING</div>
+        {dashboardModule && (
+          <nav className="sidebar-nav" style={{ marginBottom: '0.25rem' }}>
+            <button
+              type="button"
+              className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+              onClick={() => selectTab('dashboard')}
+            >
+              <Home size={18} />
+              <span>{dashboardModule.name}</span>
+            </button>
+          </nav>
+        )}
+
+        <div className="sidebar-section-label">FINANCES</div>
         <nav className="sidebar-nav">
-          {enabledModules
-            .filter((m) => m.category === 'Financial')
-            .map((mod) => {
-              const IconComp = ICON_MAP[mod.icon] || LayoutDashboard;
-              const badgeCount = getBadgeForModule(mod.id);
-              return (
-                <button
-                  key={mod.id}
-                  type="button"
-                  className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
-                  onClick={() => selectTab(mod.id)}
-                >
-                  <IconComp size={18} />
-                  <span>{mod.name}</span>
-                  {badgeCount > 0 && <span className="nav-badge">{badgeCount}</span>}
-                </button>
-              );
-            })}
+          {financeModules.map((mod) => {
+            const IconComp = ICON_MAP[mod.icon] || LayoutDashboard;
+            const badgeCount = getBadgeForModule(mod.id);
+            return (
+              <button
+                key={mod.id}
+                type="button"
+                className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
+                onClick={() => selectTab(mod.id)}
+              >
+                <IconComp size={18} />
+                <span>{mod.name}</span>
+                {badgeCount > 0 && <span className="nav-badge">{badgeCount}</span>}
+              </button>
+            );
+          })}
         </nav>
 
-        <div className="sidebar-section-label">COUPLES ADMIN & LISTS</div>
+        <div className="sidebar-section-label">ADMIN</div>
         <nav className="sidebar-nav">
-          {enabledModules
-            .filter((m) => m.category !== 'Financial')
-            .map((mod) => {
-              const IconComp = ICON_MAP[mod.icon] || Layers;
-              const badgeCount = getBadgeForModule(mod.id);
-              return (
-                <button
-                  key={mod.id}
-                  type="button"
-                  className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
-                  onClick={() => selectTab(mod.id)}
-                >
-                  <IconComp size={18} />
-                  <span>{mod.name}</span>
-                  {badgeCount > 0 && <span className="nav-badge">{badgeCount}</span>}
-                </button>
-              );
-            })}
+          {adminModules.map((mod) => {
+            const IconComp = ICON_MAP[mod.icon] || Layers;
+            const badgeCount = getBadgeForModule(mod.id);
+            return (
+              <button
+                key={mod.id}
+                type="button"
+                className={`nav-item ${activeTab === mod.id ? 'active' : ''}`}
+                onClick={() => selectTab(mod.id)}
+              >
+                <IconComp size={18} />
+                <span>{mod.name}</span>
+                {badgeCount > 0 && <span className="nav-badge">{badgeCount}</span>}
+              </button>
+            );
+          })}
         </nav>
 
-        <div className="sidebar-section-label">SETTINGS & MODULES</div>
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" style={{ marginTop: '0.5rem' }}>
           <button
             type="button"
             className={`nav-item ${activeTab === 'modules_registry' ? 'active' : ''}`}
             onClick={() => selectTab('modules_registry')}
           >
-            <Layers size={18} />
-            <span>Modules & Settings</span>
-          </button>
-          <button
-            type="button"
-            className="nav-item"
-            onClick={toggleTheme}
-          >
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-            <span>{theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}</span>
+            <Settings size={18} />
+            <span>Settings</span>
           </button>
           <button
             type="button"
@@ -476,17 +492,6 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm theme-toggle-btn"
-              onClick={toggleTheme}
-              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            >
-              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-              <span className="hide-on-mobile">{theme === 'dark' ? 'Light' : 'Dark'}</span>
-            </button>
-
             <NotificationCenter
               onNavigateTab={(tab) => selectTab(tab)}
               syncVersion={syncVersion}
@@ -591,6 +596,9 @@ export default function App() {
                 <ModuleManagerSubModule
                   modules={modules}
                   partners={partners}
+                  householdName={householdName}
+                  theme={theme}
+                  onChangeTheme={changeTheme}
                   onToggleModule={handleToggleModule}
                   onRefreshState={loadCoreState}
                 />

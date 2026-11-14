@@ -107,7 +107,7 @@ export default function OnboardingWizard({ onComplete }) {
       const res = await apiFetch('/api/auth/partners', {
         method: 'POST',
         body: JSON.stringify({
-          household_name: householdName.trim() || 'Our Household',
+          household_name: householdName.trim() || 'Our Family',
           partners: [
             {
               id: createdPartners[0]?.id,
@@ -314,7 +314,7 @@ export default function OnboardingWizard({ onComplete }) {
       await apiFetch('/api/auth/onboarding/complete', {
         method: 'POST',
         body: JSON.stringify({
-          household_name: householdName.trim() || 'Our Household',
+          household_name: householdName.trim() || 'Our Family',
           budgets,
           enabled_modules: enabledModules,
         }),
@@ -375,14 +375,17 @@ export default function OnboardingWizard({ onComplete }) {
             </p>
 
             <div className="form-group">
-              <label>Household / Family Name</label>
+              <label>Family / Last Name</label>
               <input
                 type="text"
                 className="input"
-                placeholder="e.g., The Gibson Family"
+                placeholder="e.g., Gibson"
                 value={householdName}
                 onChange={(e) => setHouseholdName(e.target.value)}
               />
+              <small className="text-muted">
+                This name will be used for branding around the app (e.g., "{householdName.trim() ? householdName.trim() : 'Gibson'} Family").
+              </small>
             </div>
 
             <div className="onboarding-partners-split">
@@ -424,7 +427,11 @@ export default function OnboardingWizard({ onComplete }) {
                 </div>
                 <div className="form-grid-2">
                   <div className="form-group">
-                    <label>Monthly Personal Allowance ($)</label>
+                    <label>
+                      {p1Name.trim()
+                        ? `${p1Name.trim().split(' ')[0]}'s Spending Money ($/mo)`
+                        : "Partner 1's Spending Money ($/mo)"}
+                    </label>
                     <input
                       type="number"
                       step="10"
@@ -484,7 +491,11 @@ export default function OnboardingWizard({ onComplete }) {
                 </div>
                 <div className="form-grid-2">
                   <div className="form-group">
-                    <label>Monthly Personal Allowance ($)</label>
+                    <label>
+                      {p2Name.trim()
+                        ? `${p2Name.trim().split(' ')[0]}'s Spending Money ($/mo)`
+                        : "Partner 2's Spending Money ($/mo)"}
+                    </label>
                     <input
                       type="number"
                       step="10"

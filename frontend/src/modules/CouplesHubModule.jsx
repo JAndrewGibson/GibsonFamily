@@ -703,6 +703,9 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
 export function ModuleManagerSubModule({
   modules,
   partners,
+  householdName,
+  theme = 'dark',
+  onChangeTheme,
   onToggleModule,
   onRefreshState,
 }) {
@@ -711,6 +714,30 @@ export function ModuleManagerSubModule({
   const [editEmail, setEditEmail] = useState('');
   const [editColor, setEditColor] = useState('#6366f1');
   const [editAllowance, setEditAllowance] = useState(0);
+  const [familyNameInput, setFamilyNameInput] = useState(householdName || '');
+  const [savingHousehold, setSavingHousehold] = useState(false);
+  const [householdSavedMsg, setHouseholdSavedMsg] = useState('');
+
+  useEffect(() => {
+    setFamilyNameInput(householdName || '');
+  }, [householdName]);
+
+  const handleSaveHouseholdName = async (e) => {
+    e.preventDefault();
+    if (!familyNameInput.trim()) return;
+    setSavingHousehold(true);
+    setHouseholdSavedMsg('');
+    try {
+      await apiFetch('/api/auth/household', {
+        method: 'PUT',
+        body: JSON.stringify({ household_name: familyNameInput.trim() }),
+      });
+      setHouseholdSavedMsg('Saved!');
+      await onRefreshState?.();
+    } finally {
+      setSavingHousehold(false);
+    }
+  };
 
   const startEditPartner = (p) => {
     setEditingPartner(p.id);
@@ -752,9 +779,9 @@ export function ModuleManagerSubModule({
     <div className="module-container">
       <div className="section-header-bar">
         <div>
-          <h2>Modules, Partner Profiles & Workspace Settings</h2>
+          <h2>Settings & Modules</h2>
           <p className="text-muted">
-            Enable or disable modules dynamically, update partner profiles, or re-run the initial setup wizard.
+            Customize appearance, family branding, partner profiles, and active modules.
           </p>
         </div>
         <button
@@ -764,6 +791,46 @@ export function ModuleManagerSubModule({
         >
           <RotateCcw size={15} /> Reset & Re-Run First-Time Setup
         </button>
+      </div>
+
+      <div className="card">
+        <h3>Appearance & Family Branding</h3>
+        <div className="plans-grid" style={{ marginTop: '0.85rem' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="settings-theme-select">Color Theme</label>
+            <select
+              id="settings-theme-select"
+              className="input"
+              value={theme}
+              onChange={(e) => onChangeTheme?.(e.target.value)}
+            >
+              <option value="dark">Dark Mode</option>
+              <option value="light">Light Mode</option>
+            </select>
+          </div>
+          <form className="form-group" style={{ marginBottom: 0 }} onSubmit={handleSaveHouseholdName}>
+            <label htmlFor="settings-family-name">Family / Last Name (used for app branding)</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                id="settings-family-name"
+                type="text"
+                className="input"
+                placeholder="e.g., Gibson"
+                value={familyNameInput}
+                onChange={(e) => setFamilyNameInput(e.target.value)}
+                required
+              />
+              <button type="submit" className="btn btn-primary btn-sm" disabled={savingHousehold}>
+                {savingHousehold ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+            {householdSavedMsg && (
+              <small className="text-success" style={{ marginTop: '0.25rem', display: 'block' }}>
+                {householdSavedMsg}
+              </small>
+            )}
+          </form>
+        </div>
       </div>
 
       <div className="card">
@@ -794,9 +861,14 @@ export function ModuleManagerSubModule({
                   </div>
                   <div className="form-grid-2">
                     <div className="form-group">
-                      <label>Monthly Allowance ($)</label>
+                      <label>
+                        {editName.trim()
+                          ? `${editName.trim().split(' ')[0]}'s Spending Money ($/mo)`
+                          : "Spending Money ($/mo)"}
+                      </label>
                       <input
                         type="number"
+                        step="0.01"
                         className="input"
                         value={editAllowance}
                         onChange={(e) => setEditAllowance(e.target.value)}
@@ -837,7 +909,7 @@ export function ModuleManagerSubModule({
                     <div>
                       <strong>{p.name}</strong>
                       <small className="text-muted">
-                        {p.email || p.role} • Allowance: ${Number(p.monthly_fun_allowance || 0).toFixed(0)}/mo
+                        {p.email || p.role} • {p.name.split(' ')[0]}&apos;s Spending Money: ${Number(p.monthly_fun_allowance || 0).toFixed(0)}/mo
                       </small>
                     </div>
                   </div>

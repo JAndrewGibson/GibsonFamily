@@ -569,7 +569,7 @@ export default function DashboardModule({
 
               <div className="sm-metric-box">
                 <div className="sm-metric-label">
-                  {formatShortMonthLabel(selectedMonth)} Allowance
+                  {formatShortMonthLabel(selectedMonth)} Spending Money
                 </div>
                 <div className="sm-metric-value">${fmtMoney(mySpendingMoney.monthly_limit)}</div>
                 <div className="sm-metric-sub">
@@ -626,7 +626,7 @@ export default function DashboardModule({
             <div className="budget-row-card" style={{ marginTop: 12 }}>
               <div className="budget-row-top">
                 <span style={{ fontWeight: 600, fontSize: 13 }}>
-                  Allowance Progress
+                  Spending Money Progress
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>
                   ${fmtMoney(mySpendingMoney.spent)} / ${fmtMoney(mySpendingMoney.monthly_limit)}
@@ -684,7 +684,7 @@ export default function DashboardModule({
                   <span className="text-danger" style={{ fontWeight: 600 }}>
                     ⚠️ Category is in negative rollover debt (
                     {fmtSignedMoney(mySpendingMoney.rollover_out)}). Stays red until future monthly
-                    allowances pay off the negative balance above $0.00.
+                    spending money pays off the negative balance above $0.00.
                   </span>
                 ) : (
                   <span className="text-muted">

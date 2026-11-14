@@ -105,6 +105,13 @@ def create_request():
     if not title or amount <= 0:
         return jsonify({"error": "Title and a positive amount are required"}), 400
 
+    raw_url = (data.get("url") or "").strip()
+    if raw_url:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(raw_url)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            return jsonify({"error": "Invalid URL. Only http:// and https:// URLs are permitted."}), 400
+
     db = get_db()
     actor = getattr(g, "current_partner", None)
     requester_id = actor["id"] if actor else int(data.get("requester_id", 1))
@@ -129,7 +136,7 @@ def create_request():
             data.get("category", "Entertainment & Gaming"),
             round(amount, 2),
             data.get("priority", "medium"),
-            (data.get("url") or "").strip(),
+            raw_url,
             proposed_monthly,
             proposed_target_date,
             float(data.get("saved_amount", 0.0)),

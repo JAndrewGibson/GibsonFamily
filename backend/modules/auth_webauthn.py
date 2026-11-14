@@ -36,7 +36,7 @@ def _attach_session_cookie(resp, raw_token: str):
         raw_token,
         httponly=True,
         secure=is_secure,
-        samesite="Lax",
+        samesite="Strict",
         max_age=7 * 24 * 3600,
         path="/",
     )
@@ -121,7 +121,8 @@ def login():
 
     if not identifier or not password:
         return jsonify({"error": "Email/username and password are required"}), 400
-    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "local").split(",")[0].strip()
+    # Use real client IP resolved via ProxyFix to prevent X-Forwarded-For rate limit bypass
+    client_ip = (request.remote_addr or "local").strip()
     rate_key = f"{client_ip}:{identifier}"
 
     if not check_rate_limit(db, rate_key):
@@ -222,6 +223,17 @@ def create_partners():
 
     data = request.get_json(silent=True) or {}
 
+    # Restrict unauthenticated onboarding partner injection if SETUP_INVITE_TOKEN is configured
+    setup_token_req = current_app.config.get("SETUP_INVITE_TOKEN")
+    if setup_token_req and not getattr(g, "current_partner", None):
+        provided_token = (
+            data.get("setup_token")
+            or request.headers.get("X-Setup-Token")
+            or ""
+        ).strip()
+        if not provided_token or not secrets.compare_digest(provided_token, setup_token_req):
+            return jsonify({"error": "A valid setup invite token is required to initialize partner accounts."}), 403
+
     if "household_name" in data and str(data["household_name"]).strip():
         db.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
@@ -268,6 +280,10 @@ def create_partners():
                     (name, email, pw_hash, role, avatar_color, allowance),
                 )
                 created_ids.append(cur.lastrowid)
+
+            if allowance > 0:
+                from .finance import sync_partner_spending_money_budget
+                sync_partner_spending_money_budget(db, name, allowance, avatar_color)
 
         if not created_ids:
             return jsonify({"error": "At least one partner profile is required"}), 400
@@ -320,9 +336,31 @@ def update_partner(partner_id: int):
             "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
             (name, email, role, avatar_color, monthly_fun_allowance, partner_id),
         )
+    if "monthly_fun_allowance" in data or "spending_money_limit" in data:
+        from .finance import sync_partner_spending_money_budget
+        val = float(data.get("spending_money_limit", data.get("monthly_fun_allowance", monthly_fun_allowance)) or 0.0)
+        db.execute("UPDATE partners SET monthly_fun_allowance = ? WHERE id = ?", (val, partner_id))
+        sync_partner_spending_money_budget(db, name, val, avatar_color, clear_if_zero=True)
     db.commit()
     updated = sanitize_partner(db.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone())
     return jsonify(updated)
+
+
+@auth_bp.route("/household", methods=["PUT"])
+def update_household_settings():
+    if not getattr(g, "current_partner", None):
+        return jsonify({"error": "Authentication required"}), 401
+    data = request.get_json(silent=True) or {}
+    household_name = (data.get("household_name") or "").strip()
+    if not household_name:
+        return jsonify({"error": "Family / Last Name is required"}), 400
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
+        (household_name,),
+    )
+    db.commit()
+    return jsonify({"household_name": household_name})
 
 
 @auth_bp.route("/onboarding/complete", methods=["POST"])
@@ -693,3 +731,54 @@ def delete_credential(cred_id: int):
     db.execute("DELETE FROM webauthn_credentials WHERE id = ?", (cred_id,))
     db.commit()
     return jsonify({"deleted": True, "id": cred_id})
+
+
+@auth_bp.route("/account", methods=["DELETE"])
+def delete_account():
+    """
+    Permanently deletes the authenticated partner account and personal data,
+    fulfilling Apple App Store Review Guideline 5.1.1(v) & GDPR erasure requirements.
+    """
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+
+    actor_id = actor["id"]
+    db = get_db()
+
+    # 1. Clear session tokens, passkeys, and push subscriptions
+    db.execute("DELETE FROM auth_sessions WHERE partner_id = ?", (actor_id,))
+    db.execute("DELETE FROM webauthn_credentials WHERE partner_id = ?", (actor_id,))
+    db.execute("DELETE FROM push_subscriptions WHERE partner_id = ?", (actor_id,))
+
+    # 2. Clear notifications
+    db.execute(
+        "DELETE FROM notifications WHERE recipient_partner_id = ? OR actor_partner_id = ?",
+        (actor_id, actor_id),
+    )
+
+    # 3. Clear or unlink purchase requests & comments
+    db.execute("DELETE FROM request_comments WHERE partner_id = ?", (actor_id,))
+    db.execute(
+        "DELETE FROM purchase_requests WHERE requester_id = ? OR reviewer_id = ?",
+        (actor_id, actor_id),
+    )
+
+    # 4. Clear partner-owned income entries
+    db.execute("DELETE FROM income_entries WHERE partner_id = ?", (actor_id,))
+
+    # 5. Delete partner record
+    db.execute("DELETE FROM partners WHERE id = ?", (actor_id,))
+
+    # Check remaining partners
+    remaining = db.execute("SELECT COUNT(*) AS cnt FROM partners").fetchone()["cnt"]
+    if remaining == 0:
+        db.execute("UPDATE app_settings SET value = '0' WHERE key = 'onboarding_completed'")
+
+    db.commit()
+
+    resp = make_response(
+        jsonify({"deleted": True, "message": "Account and associated personal data deleted successfully."})
+    )
+    resp.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return resp

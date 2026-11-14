@@ -442,11 +442,11 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
 
                   <div className="request-price-box">
                     <span className="price-amount">${Number(req.amount).toFixed(2)}</span>
-                    {req.url && (
+                    {req.url && (req.url.startsWith('http://') || req.url.startsWith('https://')) && (
                       <a
                         href={req.url}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noreferrer noopener"
                         className="product-link"
                       >
                         View Item <ExternalLink size={13} />

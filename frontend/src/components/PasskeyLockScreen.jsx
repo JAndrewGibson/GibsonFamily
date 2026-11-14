@@ -97,6 +97,26 @@ export default function PasskeyLockScreen({
     }
   };
 
+  const handleDeleteAccount = async () => {
+    const confirmed = window.confirm(
+      `Permanently delete account "${currentPartner.name}" and personal data?\n\nThis action cannot be undone.`
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch('/api/account', { method: 'DELETE' });
+      onCloseManageModal();
+      if (onSignOut) {
+        onSignOut();
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="lock-overlay">
       <div className="lock-card">
@@ -215,6 +235,25 @@ export default function PasskeyLockScreen({
                 ))}
               </div>
             )}
+
+            <div className="account-danger-zone" style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--danger, #ef4444)' }}>Delete Account & Data</h4>
+                  <p style={{ margin: '2px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    Permanently delete your profile, credentials, and data.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-danger-outline btn-sm"
+                  onClick={handleDeleteAccount}
+                  disabled={busy}
+                >
+                  <Trash2 size={13} /> Delete Account
+                </button>
+              </div>
+            </div>
 
             <div className="lock-footer-actions">
               <button type="button" className="btn btn-secondary" onClick={onCloseManageModal}>

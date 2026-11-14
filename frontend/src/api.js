@@ -34,6 +34,7 @@ export function notifyLocalSync() {
 export async function apiFetch(path, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
+    'X-Requested-With': 'GibsonApp',
     ...(options.headers || {}),
   };
   if (memoryAuthToken) {

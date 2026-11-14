@@ -2,7 +2,8 @@ import base64
 import json
 import pytest
 from backend.app import create_app
-from backend.security import decrypt_plaid_token, encrypt_plaid_token
+from backend.database import get_db
+from backend.security import SESSION_COOKIE_NAME, decrypt_plaid_token, encrypt_plaid_token
 
 
 def _b64url(data: bytes) -> str:
@@ -40,15 +41,31 @@ def test_plaid_access_token_encryption_at_rest(app_instance):
     with app_instance.app_context():
         raw_token = "access-production-secret-plaid-token-998877"
         encrypted = encrypt_plaid_token(raw_token)
-        assert encrypted.startswith("enc:v1:")
+        # Should now use standard AES-256-GCM (enc:v2:)
+        assert encrypted.startswith("enc:v2:")
         assert raw_token not in encrypted
         decrypted = decrypt_plaid_token(encrypted)
         assert decrypted == raw_token
 
-        # Tampering with the ciphertext must fail integrity verification
+        # Tampering with the ciphertext must fail AES-GCM integrity verification
         tampered = encrypted[:-4] + "AAAA"
         with pytest.raises(Exception):
             decrypt_plaid_token(tampered)
+
+        # Backwards compatibility: verify legacy enc:v1: tokens can still be decrypted
+        from backend.security import _derive_keys, _keystream_xor
+        import secrets as sec
+        salt = sec.token_bytes(16)
+        nonce = sec.token_bytes(16)
+        secret = app_instance.config["SECRET_KEY"]
+        enc_key, mac_key = _derive_keys(secret, salt)
+        ct = _keystream_xor(raw_token.encode("utf-8"), enc_key, nonce)
+        import hmac as hm
+        import hashlib as hl
+        tag = hm.new(mac_key, salt + nonce + ct, hl.sha256).digest()
+        legacy_payload = base64.urlsafe_b64encode(salt + nonce + tag + ct).decode("ascii")
+        legacy_enc = f"enc:v1:{legacy_payload}"
+        assert decrypt_plaid_token(legacy_enc) == raw_token
 
 
 def test_full_auth_login_lock_notifications_and_request_deletion(client):
@@ -2264,6 +2281,251 @@ def test_closing_months_notifications_leftover_and_fun_recap(client):
     history = client.get("/api/finance/history", headers=headers).get_json()["history"]
     nov_hist = next(h for h in history if h["month"] == "2026-11")
     assert nov_hist["is_closed"] is False
+
+
+def test_security_audit_secret_key_mandate(tmp_path):
+    # Weak default or missing secret must raise RuntimeError in non-testing mode
+    db_file = tmp_path / "test_sec.db"
+    with pytest.raises(RuntimeError) as exc_info:
+        create_app({
+            "TESTING": False,
+            "DATABASE_PATH": str(db_file),
+            "SECRET_KEY": "gibson-family-dev-secret-key",
+        })
+    assert "CRITICAL: FLASK_SECRET_KEY must be configured" in str(exc_info.value)
+
+
+def test_security_audit_url_scheme_validation(client):
+    # Setup partners
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Security Household",
+            "partners": [
+                {"name": "Alice", "email": "alice@test.local", "password": "Password123!", "avatar_color": "#6366f1"},
+                {"name": "Bob", "email": "bob@test.local", "password": "Password123!", "avatar_color": "#ec4899"},
+            ],
+        },
+    )
+    token = p_res.get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Attempt to inject javascript: URI in purchase request must be rejected with 400
+    bad_res = client.post(
+        "/api/requests",
+        headers=headers,
+        json={
+            "title": "Malicious Request",
+            "amount": 99.0,
+            "url": "javascript:alert(document.cookie)",
+        },
+    )
+    assert bad_res.status_code == 400
+    assert "Only http:// and https:// URLs are permitted" in bad_res.get_json()["error"]
+
+    # Legitimate https URL must succeed
+    good_res = client.post(
+        "/api/requests",
+        headers=headers,
+        json={
+            "title": "Legitimate Item",
+            "amount": 49.99,
+            "url": "https://www.target.com/p/item",
+        },
+    )
+    assert good_res.status_code == 201
+    assert good_res.get_json()["url"] == "https://www.target.com/p/item"
+
+
+def test_security_audit_account_deletion_and_data_erasure(client):
+    # Create partners
+    p_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Erasure Household",
+            "partners": [
+                {"name": "Charlie", "email": "charlie@test.local", "password": "Password123!", "avatar_color": "#6366f1"},
+            ],
+        },
+    )
+    token = p_res.get_json()["token"]
+    partner_id = p_res.get_json()["partners"][0]["id"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Add a purchase request and a push subscription
+    client.post(
+        "/api/requests",
+        headers=headers,
+        json={"title": "Chair", "amount": 120.0},
+    )
+    client.post(
+        "/api/notifications/push-subscribe",
+        headers=headers,
+        json={"endpoint": "https://push.example.com/sub/123", "p256dh": "key", "auth": "secret"},
+    )
+
+    # Invoke DELETE /api/account
+    del_res = client.delete("/api/account", headers=headers)
+    assert del_res.status_code == 200
+    assert del_res.get_json()["deleted"] is True
+
+    # Partner, sessions, requests, and subscriptions should be completely erased
+    with client.application.app_context():
+        db = get_db()
+        assert db.execute("SELECT COUNT(*) AS cnt FROM partners WHERE id = ?", (partner_id,)).fetchone()["cnt"] == 0
+        assert db.execute("SELECT COUNT(*) AS cnt FROM auth_sessions WHERE partner_id = ?", (partner_id,)).fetchone()["cnt"] == 0
+        assert db.execute("SELECT COUNT(*) AS cnt FROM push_subscriptions WHERE partner_id = ?", (partner_id,)).fetchone()["cnt"] == 0
+        assert db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE requester_id = ?", (partner_id,)).fetchone()["cnt"] == 0
+
+        # Since 0 partners remain, onboarding should be reset
+        onb = db.execute("SELECT value FROM app_settings WHERE key = 'onboarding_completed'").fetchone()
+        assert onb["value"] == "0"
+
+
+def test_security_audit_csrf_protection(tmp_path):
+    # Test CSRF protection when cookie is used without custom header
+    db_file = tmp_path / "test_csrf.db"
+    app = create_app({
+        "TESTING": True,
+        "ENFORCE_CSRF_IN_TESTS": True,
+        "DATABASE_PATH": str(db_file),
+    })
+    with app.test_client() as c:
+        # Create user
+        p_res = c.post(
+            "/api/auth/partners",
+            json={
+                "household_name": "CSRF Household",
+                "partners": [
+                    {"name": "Dave", "email": "dave@test.local", "password": "Password123!", "avatar_color": "#6366f1"},
+                ],
+            },
+        )
+        token = p_res.get_json()["token"]
+
+        # Set the session cookie manually (simulating browser cookie)
+        c.set_cookie(SESSION_COOKIE_NAME, token)
+
+        # Mutating request with cookie but WITHOUT custom header and with cross-origin Origin must be rejected (403)
+        csrf_blocked = c.post(
+            "/api/requests",
+            headers={"Origin": "https://malicious-evil-site.com"},
+            json={"title": "Evil Request", "amount": 1000.0},
+        )
+        assert csrf_blocked.status_code == 403
+        assert "CSRF validation failed" in csrf_blocked.get_json()["error"]
+
+        # Mutating request WITH X-Requested-With: GibsonApp header must be accepted
+        csrf_allowed = c.post(
+            "/api/requests",
+            headers={"X-Requested-With": "GibsonApp"},
+            json={"title": "Legit Request", "amount": 25.0},
+        )
+        assert csrf_allowed.status_code == 201
+
+
+def test_security_audit_setup_invite_token(tmp_path):
+    db_file = tmp_path / "test_setup.db"
+    app = create_app({
+        "TESTING": True,
+        "SETUP_INVITE_TOKEN": "secret-invite-token-7788",
+        "DATABASE_PATH": str(db_file),
+    })
+    with app.test_client() as c:
+        # 1. Onboarding without token should be 403
+        blocked = c.post(
+            "/api/auth/partners",
+            json={
+                "household_name": "Token Household",
+                "partners": [{"name": "Eve", "email": "eve@test.local", "password": "Password123!", "avatar_color": "#6366f1"}],
+            },
+        )
+        assert blocked.status_code == 403
+        assert "setup invite token is required" in blocked.get_json()["error"]
+
+        # 2. Onboarding with valid setup token should succeed
+        allowed = c.post(
+            "/api/auth/partners",
+            json={
+                "setup_token": "secret-invite-token-7788",
+                "household_name": "Token Household",
+                "partners": [{"name": "Eve", "email": "eve@test.local", "password": "Password123!", "avatar_color": "#6366f1"}],
+            },
+        )
+        assert allowed.status_code == 201
+
+
+def test_facelift_modules_household_and_spending_money_sync(client):
+    res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {
+                    "name": "Alex",
+                    "email": "alex@test.local",
+                    "password": "Password123!",
+                    "monthly_fun_allowance": 300,
+                },
+                {
+                    "name": "Jordan",
+                    "email": "jordan@test.local",
+                    "password": "Password123!",
+                    "monthly_fun_allowance": 200,
+                },
+            ],
+        },
+    )
+    assert res.status_code == 201
+    data = res.get_json()
+    headers = {"Authorization": f"Bearer {data['token']}"}
+    alex_id = data["partners"][0]["id"]
+
+    # 1. Verify renamed & reordered modules
+    mods = client.get("/api/modules", headers=headers).get_json()["modules"]
+    assert [m["name"] for m in mods] == [
+        "Home",
+        "Budget",
+        "Purchase Requests",
+        "Savings",
+        "Big Purchases",
+        "Groceries",
+        "Medical",
+        "To Do",
+    ]
+
+    # 2. Verify Spending Money budget was created from partner profile
+    summary = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    alex_budget = next((b for b in summary["budgets"] if b["category"] == "Alex's Spending Money"), None)
+    assert alex_budget is not None
+    assert alex_budget["monthly_limit"] == 300.0
+
+    # 3. Updating Alex's Spending Money via /api/finance/budgets syncs back to partner
+    up_res = client.post(
+        "/api/finance/budgets",
+        headers=headers,
+        json={
+            "category": "Alex's Spending Money",
+            "monthly_limit": 450.0,
+            "budget_month": "2026-11",
+            "apply_scope": "this_and_future",
+        },
+    )
+    assert up_res.status_code == 201
+    setup_data = client.get("/api/auth/setup-status", headers=headers).get_json()
+    alex_p = next(p for p in setup_data["partners"] if p["id"] == alex_id)
+    assert alex_p["monthly_fun_allowance"] == 450.0
+
+    # 4. Updating household_name via PUT /api/auth/household
+    hh_res = client.put(
+        "/api/auth/household",
+        headers=headers,
+        json={"household_name": "Smith"},
+    )
+    assert hh_res.status_code == 200
+    assert hh_res.get_json()["household_name"] == "Smith"
+
+
 
 
 
