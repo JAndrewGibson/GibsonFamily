@@ -17,6 +17,7 @@ import {
   DollarSign,
   Edit3,
   FileText,
+  Filter,
   History,
   Key,
   Link2,
@@ -27,6 +28,7 @@ import {
   RefreshCw,
   RotateCcw,
   Scissors,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Tags,
@@ -108,8 +110,6 @@ const ACCOUNT_COLOR_PALETTE = [
   '#ef4444',
 ];
 
-const STARTING_MONTH = '2026-11';
-
 function formatMonthLabel(ym) {
   if (!ym || ym.length < 7) return ym;
   const [y, m] = ym.split('-').map(Number);
@@ -166,17 +166,24 @@ function formatBudgetAmt(val) {
   return num.toFixed(2);
 }
 
-export default function FinanceModule({ activePartner, onDataChanged, syncVersion, onNavigateTab }) {
+export default function FinanceModule({ activePartner, onDataChanged, syncVersion, onNavigateTab, startingMonth }) {
   const rawCalendarMonth = new Date().toISOString().slice(0, 7);
+  const effectiveStartingMonth = startingMonth || rawCalendarMonth;
   const currentCalendarMonth =
-    rawCalendarMonth < STARTING_MONTH ? STARTING_MONTH : rawCalendarMonth;
+    rawCalendarMonth < effectiveStartingMonth ? effectiveStartingMonth : rawCalendarMonth;
 
-  // Persisted Month & Chart Selection (Clamped to November 2026 starting point)
+  // Persisted Month & Chart Selection (Clamped to configured starting month)
   const [selectedMonth, setSelectedMonthState] = useState(() => {
     const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
-    return saved < STARTING_MONTH ? STARTING_MONTH : saved;
+    return saved < effectiveStartingMonth ? effectiveStartingMonth : saved;
   });
   const [showAllMonthsInLedger, setShowAllMonthsInLedger] = useState(false);
+
+  // Transactions Ledger Filters
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const [ledgerAccountFilter, setLedgerAccountFilter] = useState('all');
+  const [ledgerTypeFilter, setLedgerTypeFilter] = useState('all');
+  const [ledgerCategoryFilter, setLedgerCategoryFilter] = useState('all');
 
   // Persisted Category Budget Sort Order (Cookie)
   const [budgetSortOrder, setBudgetSortOrderState] = useState(() =>
@@ -190,7 +197,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
   const setSelectedMonth = (ym) => {
     if (!ym) return;
-    const clamped = ym < STARTING_MONTH ? STARTING_MONTH : ym;
+    const clamped = ym < effectiveStartingMonth ? effectiveStartingMonth : ym;
     setSelectedMonthState(clamped);
     setCookie('gibson_finance_month', clamped, 365);
   };
@@ -255,7 +262,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   // Dismissable Category Budgets Balance Strip
   const [dismissCategoryBalanceStrip, setDismissCategoryBalanceStrip] = useState(() => {
     const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
-    const clamped = saved < STARTING_MONTH ? STARTING_MONTH : saved;
+    const clamped = saved < effectiveStartingMonth ? effectiveStartingMonth : saved;
     return getCookie(`gibson_dismiss_balance_strip_${clamped}`, '0') === '1';
   });
 
@@ -278,7 +285,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   // Dismissable Spent from Savings Banner in Transactions Ledger
   const [dismissSavingsSpendBanner, setDismissSavingsSpendBanner] = useState(() => {
     const saved = getCookie('gibson_finance_month', currentCalendarMonth) || currentCalendarMonth;
-    const clamped = saved < STARTING_MONTH ? STARTING_MONTH : saved;
+    const clamped = saved < effectiveStartingMonth ? effectiveStartingMonth : saved;
     return getCookie(`gibson_dismiss_savings_banner_${clamped}`, '0') === '1';
   });
 
@@ -1373,16 +1380,16 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     }
   });
 
-  // Build quick-jump month ribbon starting from November 2026 (STARTING_MONTH) onward
+  // Build quick-jump month ribbon starting from configured starting month onward
   const ribbonMonths = Array.from(
     new Set(
       [
-        STARTING_MONTH,
+        effectiveStartingMonth,
         currentCalendarMonth,
         shiftMonthString(currentCalendarMonth, 1),
         selectedMonth,
         ...(summary.available_months || []),
-      ].filter((ym) => ym && ym >= STARTING_MONTH)
+      ].filter((ym) => ym && ym >= effectiveStartingMonth)
     )
   ).sort();
 
@@ -1547,9 +1554,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     ...currentMonthBars.map((b) => b.value)
   );
 
-  // Multi-month historical comparison (chronological, starting from November 2026)
+  // Multi-month historical comparison (chronological, starting from configured starting month)
   const filteredHistoryList = (historyData?.history || []).filter(
-    (m) => m.budget_month >= STARTING_MONTH
+    (m) => m.budget_month >= effectiveStartingMonth
   );
   const recentHistoryChrono = [...filteredHistoryList]
     .slice(0, 6)
@@ -3850,28 +3857,184 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           </div>
         )}
 
-        {summary.transactions.length === 0 ? (
-          <div className="empty-state-box">
-            <p className="text-muted">
-              No transactions allocated to <strong>{formatMonthLabel(selectedMonth)}</strong>. Switch months via <strong>Budget Period</strong>, click <strong>Show All Months</strong>, or log a new expense.
-            </p>
-          </div>
-        ) : (
-          <div className="tx-table-wrapper" ref={menuContainerRef}>
-            <table className="tx-table">
-              <thead>
-                <tr>
-                  <th>Purchase Date</th>
-                  <th>Description & Account</th>
-                  <th>Category</th>
-                  <th className="text-right">Amount</th>
-                  <th className="text-right" style={{ width: '56px' }}>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.transactions.map((tx) => {
+        {(() => {
+          const hasActiveLedgerFilter =
+            ledgerSearch.trim() !== '' ||
+            ledgerAccountFilter !== 'all' ||
+            ledgerTypeFilter !== 'all' ||
+            ledgerCategoryFilter !== 'all';
+
+          const searchLower = ledgerSearch.trim().toLowerCase();
+          const filteredTransactions = summary.transactions.filter((tx) => {
+            if (ledgerAccountFilter === 'none') {
+              if (tx.account_id) return false;
+            } else if (ledgerAccountFilter !== 'all') {
+              if (String(tx.account_id || '') !== String(ledgerAccountFilter)) return false;
+            }
+
+            if (ledgerTypeFilter === 'budgeted') {
+              if (tx.is_cc_payment || tx.is_savings_spend) return false;
+            } else if (ledgerTypeFilter === 'pending') {
+              if (!tx.is_pending) return false;
+            } else if (ledgerTypeFilter === 'settled') {
+              if (tx.is_pending) return false;
+            } else if (ledgerTypeFilter === 'split') {
+              if (!tx.is_split) return false;
+            } else if (ledgerTypeFilter === 'cc_payment') {
+              if (!tx.is_cc_payment) return false;
+            } else if (ledgerTypeFilter === 'savings_spend') {
+              if (!tx.is_savings_spend) return false;
+            } else if (ledgerTypeFilter === 'untracked') {
+              if (tx.is_category_tracked !== false) return false;
+            } else if (ledgerTypeFilter === 'shifted') {
+              if (
+                !tx.budget_month ||
+                !tx.original_date_month ||
+                tx.budget_month === tx.original_date_month
+              ) {
+                return false;
+              }
+            }
+
+            if (ledgerCategoryFilter !== 'all') {
+              const matchesMain = tx.category === ledgerCategoryFilter;
+              const matchesSplit =
+                tx.is_split &&
+                Array.isArray(tx.splits) &&
+                tx.splits.some((sp) => sp.category === ledgerCategoryFilter);
+              if (!matchesMain && !matchesSplit) return false;
+            }
+
+            if (searchLower) {
+              const nameMatch = (tx.name || '').toLowerCase().includes(searchLower);
+              const notesMatch = (tx.notes || '').toLowerCase().includes(searchLower);
+              const catMatch = (tx.category || '').toLowerCase().includes(searchLower);
+              const accMatch = (tx.account_name || '').toLowerCase().includes(searchLower);
+              const splitMatch =
+                tx.is_split &&
+                Array.isArray(tx.splits) &&
+                tx.splits.some((sp) => (sp.category || '').toLowerCase().includes(searchLower));
+              if (!nameMatch && !notesMatch && !catMatch && !accMatch && !splitMatch) return false;
+            }
+
+            return true;
+          });
+
+          const ledgerFilterCategories = Array.from(
+            new Set([
+              ...(summary.all_categories || []),
+              ...summary.transactions.flatMap((tx) =>
+                tx.is_split && Array.isArray(tx.splits)
+                  ? tx.splits.map((s) => s.category)
+                  : [tx.category]
+              ),
+            ].filter(Boolean))
+          ).sort((a, b) => a.localeCompare(b));
+
+          return (
+            <>
+              {summary.transactions.length > 0 && (
+                <div className="ledger-filter-bar">
+                  <div className="ledger-filter-search-wrap">
+                    <Search size={15} className="ledger-filter-search-icon" />
+                    <input
+                      type="text"
+                      className="input input-sm ledger-filter-search-input"
+                      placeholder="Search merchant, notes, category..."
+                      value={ledgerSearch}
+                      onChange={(e) => setLedgerSearch(e.target.value)}
+                      aria-label="Search transactions"
+                    />
+                  </div>
+                  <select
+                    className="input input-sm ledger-filter-select"
+                    value={ledgerAccountFilter}
+                    onChange={(e) => setLedgerAccountFilter(e.target.value)}
+                    aria-label="Filter by account"
+                  >
+                    <option value="all">All Accounts</option>
+                    {summary.accounts.map((acc) => (
+                      <option key={acc.id} value={String(acc.id)}>
+                        {acc.name}
+                        {acc.mask ? ` ••${acc.mask}` : ''}
+                      </option>
+                    ))}
+                    <option value="none">Manual / No Account</option>
+                  </select>
+                  <select
+                    className="input input-sm ledger-filter-select"
+                    value={ledgerTypeFilter}
+                    onChange={(e) => setLedgerTypeFilter(e.target.value)}
+                    aria-label="Filter by transaction type"
+                  >
+                    <option value="all">All Transaction Types</option>
+                    <option value="budgeted">Budgeted Expenses</option>
+                    <option value="pending">Pending Only</option>
+                    <option value="settled">Settled Only</option>
+                    <option value="split">Split Transactions</option>
+                    <option value="cc_payment">Credit Card Payments</option>
+                    <option value="savings_spend">Spent from Savings</option>
+                    <option value="untracked">Untracked Categories</option>
+                    <option value="shifted">Month-Shifted</option>
+                  </select>
+                  <select
+                    className="input input-sm ledger-filter-select"
+                    value={ledgerCategoryFilter}
+                    onChange={(e) => setLedgerCategoryFilter(e.target.value)}
+                    aria-label="Filter by category"
+                  >
+                    <option value="all">All Categories</option>
+                    {ledgerFilterCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                  {hasActiveLedgerFilter && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        setLedgerSearch('');
+                        setLedgerAccountFilter('all');
+                        setLedgerTypeFilter('all');
+                        setLedgerCategoryFilter('all');
+                      }}
+                    >
+                      <X size={14} /> Clear ({filteredTransactions.length}/{summary.transactions.length})
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {summary.transactions.length === 0 ? (
+                <div className="empty-state-box">
+                  <p className="text-muted">
+                    No transactions allocated to <strong>{formatMonthLabel(selectedMonth)}</strong>. Switch months via <strong>Budget Period</strong>, click <strong>Show All Months</strong>, or log a new expense.
+                  </p>
+                </div>
+              ) : filteredTransactions.length === 0 ? (
+                <div className="empty-state-box">
+                  <p className="text-muted">
+                    No transactions match your current filters.
+                  </p>
+                </div>
+              ) : (
+                <div className="tx-table-wrapper" ref={menuContainerRef}>
+                  <table className="tx-table">
+                    <thead>
+                      <tr>
+                        <th>Purchase Date</th>
+                        <th>Description & Account</th>
+                        <th>Category</th>
+                        <th className="text-right">Amount</th>
+                        <th className="text-right" style={{ width: '56px' }}>
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredTransactions.map((tx) => {
                   const isShifted =
                     tx.budget_month &&
                     tx.original_date_month &&
@@ -4222,7 +4385,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 </div>
                               )}
 
-                              {tx.previous_budget_month >= STARTING_MONTH && (
+                              {tx.previous_budget_month >= effectiveStartingMonth && (
                                 <button
                                   type="button"
                                   className="tx-popover-item"
@@ -4246,7 +4409,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 <label>Reassign to Specific Month:</label>
                                 <input
                                   type="month"
-                                  min={STARTING_MONTH}
+                                  min={effectiveStartingMonth}
                                   className="input input-sm"
                                   value={tx.budget_month}
                                   onChange={(e) =>
@@ -4255,7 +4418,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 />
                               </div>
 
-                              {isShifted && tx.original_date_month >= STARTING_MONTH && (
+                              {isShifted && tx.original_date_month >= effectiveStartingMonth && (
                                 <button
                                   type="button"
                                   className="tx-popover-item"
@@ -4286,7 +4449,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               </tbody>
             </table>
           </div>
-        )}
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* =====================================================================
@@ -4308,7 +4474,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   Budget Period & Historical Month Comparison
                 </h3>
                 <p className="text-muted">
-                  November 2026 is your starting point. Switch your active budget month or compare monthly income, spending, and subscription changes forward.
+                  {formatMonthLabel(effectiveStartingMonth)} is your starting point (changeable in Settings). Switch your active budget month or compare monthly income, spending, and subscription changes forward.
                 </p>
               </div>
               <button
@@ -4333,21 +4499,21 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         {selectedMonth === currentCalendarMonth && (
                           <span className="pill pill-cyan">Current Month</span>
                         )}
-                        {selectedMonth === STARTING_MONTH && (
-                          <span className="pill pill-outline">Starting Point (Nov 2026)</span>
+                        {selectedMonth === effectiveStartingMonth && (
+                          <span className="pill pill-outline">Starting Point ({formatShortMonth(effectiveStartingMonth)})</span>
                         )}
                         {selectedMonth > currentCalendarMonth && (
                           <span className="pill pill-amber">Future Month Plan</span>
                         )}
                       </div>
                       <small className="text-muted">
-                        Budgets reset cleanly on the 1st of every month starting November 2026.
+                        Budgets reset cleanly on the 1st of every month starting {formatMonthLabel(effectiveStartingMonth)}.
                       </small>
                     </div>
                   </div>
 
                   <div className="month-selector-controls">
-                    {summary.previous_month >= STARTING_MONTH && (
+                    {summary.previous_month >= effectiveStartingMonth && (
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
@@ -4359,11 +4525,11 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
                     <input
                       type="month"
-                      min={STARTING_MONTH}
+                      min={effectiveStartingMonth}
                       className="input input-sm month-picker-input"
                       value={selectedMonth}
                       onChange={(e) => {
-                        if (e.target.value && e.target.value >= STARTING_MONTH) {
+                        if (e.target.value && e.target.value >= effectiveStartingMonth) {
                           setSelectedMonth(e.target.value);
                         }
                       }}
@@ -4676,7 +4842,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       style={{ flex: '1 1 auto' }}
                       disabled={plaidBusy}
                       onClick={() => handleSyncPlaid({ reset_cursor: true })}
-                      title="Resets cached Plaid cursors and re-streams all transactions from November 2026 to ensure no missed settled or pending transactions"
+                      title="Resets cached Plaid cursors and re-streams all transactions from your starting budget month to ensure no missed settled or pending transactions"
                     >
                       <RefreshCw size={15} className={plaidBusy ? 'spin' : ''} /> Force Full Re-Sync (Reset Cursor)
                     </button>

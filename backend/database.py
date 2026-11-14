@@ -1,3 +1,4 @@
+from datetime import date
 import sqlite3
 import time
 from pathlib import Path
@@ -624,22 +625,12 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         """
     )
 
-    # One-time migration: enforce November (2026-11) starting point & deduplicate duplicate Plaid accounts
+    # One-time migration: deduplicate duplicate Plaid accounts
     cleanup_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'november_start_and_dedup_v1'"
     ).fetchone()
     if not cleanup_row:
-        # 1. Remove any pre-November (< '2026-11') historical transactions, income entries & monthly budgets
-        db.execute(
-            "DELETE FROM transactions WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) < '2026-11'"
-        )
-        db.execute(
-            "DELETE FROM income_entries WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) < '2026-11'"
-        )
-        db.execute("DELETE FROM monthly_budgets WHERE budget_month < '2026-11'")
-        db.execute("DELETE FROM monthly_income_projections WHERE budget_month < '2026-11'")
-
-        # 2. Deduplicate duplicate accounts (same institution + mask + subtype + name)
+        # Deduplicate duplicate accounts (same institution + mask + subtype + name)
         all_accs = db.execute("SELECT * FROM accounts ORDER BY id ASC").fetchall()
         seen_signatures = {}
         for acc in all_accs:
@@ -706,7 +697,8 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
                 )
     defaults = {
         "onboarding_completed": "0",
-        "household_name": "Gibson Household",
+        "household_name": "Our Household",
+        "starting_budget_month": date.today().strftime("%Y-%m"),
         "state_version": str(int(time.time() * 1000)),
         "plaid_banner_dismissed": "0",
         "last_plaid_sync_at": "",

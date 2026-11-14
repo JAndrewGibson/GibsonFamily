@@ -61,7 +61,7 @@ class Config:
     )
 
     WEBAUTHN_RP_ID = _get_env_case_insensitive("WEBAUTHN_RP_ID", "localhost")
-    WEBAUTHN_RP_NAME = _get_env_case_insensitive("WEBAUTHN_RP_NAME", "GibsonFamily Hub")
+    WEBAUTHN_RP_NAME = _get_env_case_insensitive("WEBAUTHN_RP_NAME", "Family Hub")
     WEBAUTHN_ORIGIN = _get_env_case_insensitive(
         "WEBAUTHN_ORIGIN", "https://gibsonfamily.onrender.com"
     )

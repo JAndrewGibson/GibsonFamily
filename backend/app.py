@@ -144,7 +144,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def health():
         return jsonify({
             "status": "ok",
-            "app": "GibsonFamily Modular Hub",
+            "app": "Family Modular Hub",
             "plaid_env": app.config.get("PLAID_ENV", "production"),
             "plaid_configured": bool(app.config.get("PLAID_CLIENT_ID") and app.config.get("PLAID_SECRET")),
         })
@@ -206,7 +206,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             if index_file.exists():
                 return send_from_directory(str(FRONTEND_DIST), "index.html")
         return jsonify({
-            "app": "GibsonFamily Hub API",
+            "app": "Family Hub API",
             "message": "Frontend dist not built yet. Run `npm run build --prefix frontend`.",
         })
 

@@ -2,6 +2,7 @@ import base64
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import threading
 import time
 import requests
@@ -11,7 +12,19 @@ from backend.security import decrypt_plaid_token, encrypt_plaid_token
 
 finance_bp = Blueprint("finance", __name__, url_prefix="/api/finance")
 
-STARTING_BUDGET_MONTH = "2026-11"
+
+def get_starting_budget_month(db=None) -> str:
+    """Returns the user-configured beginning budget month (YYYY-MM), defaulting to the current month."""
+    try:
+        conn = db or get_db()
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'starting_budget_month'"
+        ).fetchone()
+        if row and row["value"] and re.match(r"^\d{4}-(0[1-9]|1[0-2])$", row["value"].strip()):
+            return row["value"].strip()
+    except Exception:
+        pass
+    return date.today().strftime("%Y-%m")
 
 ACCOUNT_COLOR_PALETTE = [
     "#06b6d4",
@@ -179,7 +192,7 @@ def _upsert_account_balance_snapshot(
 ) -> None:
     if not account_id:
         return
-    target_ym = (ym or max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)).strip()[:7]
+    target_ym = (ym or max(date.today().strftime("%Y-%m"), get_starting_budget_month(db))).strip()[:7]
     if len(target_ym) != 7:
         return
     db.execute(
@@ -301,7 +314,7 @@ def sync_partner_spending_money_budget(
     sm_cat = resolve_partner_spending_money_category(db, partner_name)
     val = round(float(amount or 0.0), 2)
     color = (avatar_color or "#ec4899").strip()
-    current_ym = max(STARTING_BUDGET_MONTH, date.today().strftime("%Y-%m"))
+    current_ym = max(get_starting_budget_month(db), date.today().strftime("%Y-%m"))
 
     if val > 0:
         _ensure_category_in_catalog(
@@ -637,8 +650,9 @@ def _compute_rollover_data(
             if c == cat
         ]
         candidates = [m for m in ([earliest_budget_ym] + tx_months) if m]
-        if selected_month >= STARTING_BUDGET_MONTH:
-            valid_candidates = [m for m in candidates if m >= STARTING_BUDGET_MONTH]
+        starting_ym = get_starting_budget_month(db)
+        if selected_month >= starting_ym:
+            valid_candidates = [m for m in candidates if m >= starting_ym]
             first_ym = min(valid_candidates + [selected_month]) if valid_candidates else selected_month
         else:
             first_ym = min(candidates + [selected_month]) if candidates else selected_month
@@ -1059,7 +1073,7 @@ def check_and_create_month_close_notifications(db, current_date: date | None = N
 
     mb_months = db.execute(
         "SELECT DISTINCT budget_month FROM monthly_budgets WHERE budget_month >= ? AND is_active = 1",
-        (STARTING_BUDGET_MONTH,),
+        (get_starting_budget_month(db),),
     ).fetchall()
     cand_months = {r["budget_month"] for r in mb_months}
     cand_months.add(current_ym)
@@ -1580,8 +1594,8 @@ def create_link_token():
     base_payload = {
         "client_id": client_id,
         "secret": secret,
-        "client_name": "GibsonFamily Financial Hub",
-        "user": {"client_user_id": f"gibson-partner-{partner_id}"},
+        "client_name": "Family Financial Hub",
+        "user": {"client_user_id": f"partner-{partner_id}"},
         "country_codes": ["US"],
         "language": "en",
     }
@@ -1840,8 +1854,8 @@ def _sync_plaid_accounts_and_transactions(
             is_pending = 1 if tx.get("pending") else 0
             pending_tx_id = tx.get("pending_transaction_id")
 
-            # Enforce November (STARTING_BUDGET_MONTH) starting point for synced transactions
-            if tx_budget_month < STARTING_BUDGET_MONTH:
+            # Enforce configured starting budget month for synced transactions
+            if tx_budget_month < get_starting_budget_month(db):
                 continue
 
             # In Plaid, negative amounts or INCOME / TRANSFER_IN primary category represent inflows/deposits
@@ -2595,12 +2609,12 @@ def delete_plaid_item(item_identifier: str):
 
 @finance_bp.route("/summary", methods=["GET"])
 def finance_summary():
-    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    db = get_db()
+    starting_ym = get_starting_budget_month(db)
+    current_ym = max(date.today().strftime("%Y-%m"), starting_ym)
     raw_req_month = (request.args.get("month") or "").strip()[:7]
     selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
     include_all = request.args.get("include_all_months") == "true"
-
-    db = get_db()
     accounts = []
     for r in db.execute(
         """
@@ -2647,16 +2661,16 @@ def finance_summary():
         ).fetchall()
     ]
 
-    # Do not auto-generate months prior to STARTING_BUDGET_MONTH (November 2026)
+    # Do not auto-generate months prior to configured starting_ym
     month_set = {
         m
         for m in [
-            STARTING_BUDGET_MONTH,
+            starting_ym,
             selected_month,
             _shift_year_month(selected_month, 1),
             current_ym,
         ]
-        if m >= STARTING_BUDGET_MONTH
+        if m >= starting_ym
     }
     splits_by_tx = {}
     for sr in db.execute(
@@ -2681,7 +2695,7 @@ def finance_summary():
         tx_splits = splits_by_tx.get(tx["id"], [])
         tx["splits"] = tx_splits
         tx["is_split"] = bool(tx.get("is_split")) or len(tx_splits) > 0
-        if tx["budget_month"] and tx["budget_month"] >= STARTING_BUDGET_MONTH:
+        if tx["budget_month"] and tx["budget_month"] >= starting_ym:
             month_set.add(tx["budget_month"])
         if not tx["is_savings_spend"] and not tx["is_cc_payment"]:
             if tx["is_split"] and tx_splits:
@@ -2691,9 +2705,9 @@ def finance_summary():
             elif tx.get("category") and tx.get("category").strip().lower() not in NON_BUDGET_CATEGORIES:
                 tx_categories.add(tx["category"])
 
-    # Also include any months from monthly_budgets and income_entries (>= STARTING_BUDGET_MONTH)
+    # Also include any months from monthly_budgets and income_entries (>= starting_ym)
     for mb_row in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
-        if mb_row["budget_month"] and mb_row["budget_month"] >= STARTING_BUDGET_MONTH:
+        if mb_row["budget_month"] and mb_row["budget_month"] >= starting_ym:
             month_set.add(mb_row["budget_month"])
 
     all_income_entries = [
@@ -2738,7 +2752,7 @@ def finance_summary():
         inc["is_transfer_or_cc"] = is_trans
 
         if ym:
-            if ym >= STARTING_BUDGET_MONTH:
+            if ym >= starting_ym:
                 month_set.add(ym)
             if is_real:
                 income_by_month[ym] = income_by_month.get(ym, 0.0) + amt
@@ -3118,6 +3132,7 @@ def finance_summary():
     check_and_create_month_close_notifications(db)
 
     return jsonify({
+        "starting_budget_month": starting_ym,
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
         "previous_month": prev_ym,
@@ -3214,7 +3229,7 @@ def month_close_status():
     Returns the close status, eligibility, leftover transfer amount, and tasks for a given month.
     """
     db = get_db()
-    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    current_ym = max(date.today().strftime("%Y-%m"), get_starting_budget_month(db))
     raw_req_month = (request.args.get("month") or "").strip()[:7]
     selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
 
@@ -3510,7 +3525,7 @@ def get_month_recap():
     if not closed, generates a live preview.
     """
     db = get_db()
-    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    current_ym = max(date.today().strftime("%Y-%m"), get_starting_budget_month(db))
     raw_month = (request.args.get("month") or "").strip()[:7]
     selected_month = raw_month if len(raw_month) == 7 else current_ym
 
@@ -3659,17 +3674,18 @@ def finance_history():
         tx["is_savings_spend"] = is_tx_savings_spend(tx)
         tx["is_cc_payment"] = is_tx_cc_payment(tx)
 
+    starting_ym = get_starting_budget_month(db)
     months_set = {
-        max(current_ym, STARTING_BUDGET_MONTH),
+        max(current_ym, starting_ym),
     }
     for tx in all_txs:
-        if tx["effective_budget_month"] and tx["effective_budget_month"] >= STARTING_BUDGET_MONTH:
+        if tx["effective_budget_month"] and tx["effective_budget_month"] >= starting_ym:
             months_set.add(tx["effective_budget_month"])
     for inc in all_incomes:
-        if inc["effective_budget_month"] and inc["effective_budget_month"] >= STARTING_BUDGET_MONTH:
+        if inc["effective_budget_month"] and inc["effective_budget_month"] >= starting_ym:
             months_set.add(inc["effective_budget_month"])
     for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets").fetchall():
-        if mb["budget_month"] and mb["budget_month"] >= STARTING_BUDGET_MONTH:
+        if mb["budget_month"] and mb["budget_month"] >= starting_ym:
             months_set.add(mb["budget_month"])
 
     income_totals_by_month = {}
@@ -5052,7 +5068,7 @@ def delete_or_archive_category():
 
 def _build_continuous_month_range(min_ym: str, max_ym: str) -> list[str]:
     if not min_ym or not max_ym or min_ym > max_ym:
-        return [max_ym or STARTING_BUDGET_MONTH]
+        return [max_ym or date.today().strftime("%Y-%m")]
     months = []
     curr = min_ym
     guard = 0
@@ -5069,11 +5085,11 @@ def get_savings_analytics():
     Returns comprehensive Month-over-Month (MoM) and Year-over-Year (YoY) analytics
     for Savings & Brokerage accounts, Transfers into Savings, and Purchases Funded from Savings.
     """
-    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
+    db = get_db()
+    starting_ym = get_starting_budget_month(db)
+    current_ym = max(date.today().strftime("%Y-%m"), starting_ym)
     raw_req_month = (request.args.get("month") or "").strip()[:7]
     selected_month = raw_req_month if len(raw_req_month) == 7 else current_ym
-
-    db = get_db()
     household_partners = [
         dict(r)
         for r in db.execute(
@@ -5220,16 +5236,16 @@ def get_savings_analytics():
             savings_spends.append(tx)
 
     # Build timeline of months
-    raw_months = {STARTING_BUDGET_MONTH, current_ym, selected_month}
+    raw_months = {starting_ym, current_ym, selected_month}
     raw_months.update(snapshot_months)
     for tr in savings_transfers:
-        if tr["budget_month"] and tr["budget_month"] >= STARTING_BUDGET_MONTH:
+        if tr["budget_month"] and tr["budget_month"] >= starting_ym:
             raw_months.add(tr["budget_month"])
     for sp in savings_spends:
-        if sp["budget_month"] and sp["budget_month"] >= STARTING_BUDGET_MONTH:
+        if sp["budget_month"] and sp["budget_month"] >= starting_ym:
             raw_months.add(sp["budget_month"])
     for mb in db.execute("SELECT DISTINCT budget_month FROM monthly_budgets WHERE is_active = 1").fetchall():
-        if mb["budget_month"] and mb["budget_month"] >= STARTING_BUDGET_MONTH:
+        if mb["budget_month"] and mb["budget_month"] >= starting_ym:
             raw_months.add(mb["budget_month"])
 
     valid_months = sorted(m for m in raw_months if m and len(m) == 7)
@@ -5486,6 +5502,7 @@ def get_savings_analytics():
     }
 
     return jsonify({
+        "starting_budget_month": starting_ym,
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
         "available_months": list(reversed(chron_months)),
@@ -5662,9 +5679,8 @@ def upsert_savings_snapshot():
         return jsonify({"error": "Invalid balance amount"}), 400
 
     notes = (data.get("notes") or "").strip()
-    current_ym = max(date.today().strftime("%Y-%m"), STARTING_BUDGET_MONTH)
-
     db = get_db()
+    current_ym = max(date.today().strftime("%Y-%m"), get_starting_budget_month(db))
     _upsert_account_balance_snapshot(db, account_id, balance, snapshot_month, notes or "Manual snapshot")
 
     # If updating the current month (or if update_current_balance is requested), sync live account balance

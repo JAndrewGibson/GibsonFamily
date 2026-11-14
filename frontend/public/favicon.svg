@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="hubGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#hubGrad)" />
+  <path
+    d="M15 30.5L32 16L49 30.5V47C49 48.6569 47.6569 50 46 50H18C16.3431 50 15 48.6569 15 47V30.5Z"
+    fill="rgba(255,255,255,0.18)"
+    stroke="#ffffff"
+    stroke-width="3"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M23 39L29 33L34 37.5L42 28.5"
+    stroke="#ffffff"
+    stroke-width="3.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="42" cy="28.5" r="2.2" fill="#ffffff" />
+</svg>

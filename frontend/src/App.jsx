@@ -13,6 +13,7 @@ import {
   Menu,
   PiggyBank,
   Radio,
+  RefreshCw,
   Settings,
   ShoppingCart,
   Wallet,
@@ -58,7 +59,10 @@ export default function App() {
   const [loadingInit, setLoadingInit] = useState(true);
   const [onboardingCompleted, setOnboardingCompleted] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
-  const [householdName, setHouseholdName] = useState('GibsonFamily');
+  const [householdName, setHouseholdName] = useState('Our Household');
+  const [startingBudgetMonth, setStartingBudgetMonth] = useState(() =>
+    new Date().toISOString().slice(0, 7)
+  );
   const [partners, setPartners] = useState([]);
   const [activePartner, setActivePartner] = useState(null);
   const [modules, setModules] = useState([]);
@@ -101,31 +105,55 @@ export default function App() {
   const [showPasskeyModal, setShowPasskeyModal] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [syncVersion, setSyncVersion] = useState(1);
+  const [topbarSyncing, setTopbarSyncing] = useState(false);
+  const [topbarSyncNote, setTopbarSyncNote] = useState(null);
 
   const [theme, setThemeState] = useState(() => {
     const saved = getCookie('gibson_theme', '');
-    if (saved === 'light' || saved === 'dark') return saved;
+    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
     try {
       const local = window.localStorage.getItem('gibson_theme');
-      if (local === 'light' || local === 'dark') return local;
+      if (local === 'light' || local === 'dark' || local === 'system') return local;
     } catch {
       // ignore
     }
-    return 'dark';
+    return 'system';
   });
 
   useEffect(() => {
-    if (typeof document !== 'undefined') {
-      document.documentElement.setAttribute('data-theme', theme);
+    if (typeof document === 'undefined') return undefined;
+    const mediaQuery =
+      typeof window !== 'undefined' && window.matchMedia
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : null;
+
+    const applyResolvedTheme = () => {
+      const resolved =
+        theme === 'system'
+          ? mediaQuery && mediaQuery.matches
+            ? 'dark'
+            : 'light'
+          : theme;
+      document.documentElement.setAttribute('data-theme', resolved);
       const metaTheme = document.querySelector('meta[name="theme-color"]');
       if (metaTheme) {
-        metaTheme.setAttribute('content', theme === 'light' ? '#f8fafc' : '#0b0f19');
+        metaTheme.setAttribute('content', resolved === 'light' ? '#f8fafc' : '#0b0f19');
       }
+    };
+
+    applyResolvedTheme();
+    if (theme === 'system' && mediaQuery) {
+      mediaQuery.addEventListener('change', applyResolvedTheme);
+      return () => mediaQuery.removeEventListener('change', applyResolvedTheme);
     }
+    return undefined;
   }, [theme]);
 
   const changeTheme = (nextTheme) => {
-    const next = nextTheme === 'light' ? 'light' : 'dark';
+    const next =
+      nextTheme === 'light' || nextTheme === 'dark' || nextTheme === 'system'
+        ? nextTheme
+        : 'system';
     setThemeState(next);
     setCookie('gibson_theme', next, 365);
     try {
@@ -155,6 +183,12 @@ export default function App() {
 
       if (setupData.household_name) {
         setHouseholdName(setupData.household_name);
+        if (typeof document !== 'undefined') {
+          document.title = `${formatFamilyBrand(setupData.household_name)} Hub — Couples Finance, Requests & Life OS`;
+        }
+      }
+      if (setupData.starting_budget_month) {
+        setStartingBudgetMonth(setupData.starting_budget_month);
       }
       const pList = setupData.partners || [];
       setPartners(pList);
@@ -264,10 +298,59 @@ export default function App() {
     await loadCoreState();
   };
 
+  const handleTopBarResync = () => {
+    if (topbarSyncing) return;
+    setTopbarSyncing(true);
+    setTopbarSyncNote(null);
+
+    // Run asynchronously so the user can continue navigating and working uninterrupted
+    (async () => {
+      try {
+        let res = null;
+        let firstFailed = false;
+        try {
+          res = await apiFetch('/api/finance/plaid/sync', {
+            method: 'POST',
+            body: JSON.stringify({ reset_cursor: false, force: true }),
+          });
+          if (res?.item_errors?.length > 0) {
+            firstFailed = true;
+          }
+        } catch {
+          firstFailed = true;
+        }
+
+        if (firstFailed) {
+          res = await apiFetch('/api/finance/plaid/sync', {
+            method: 'POST',
+            body: JSON.stringify({ reset_cursor: true, force: true }),
+          });
+        }
+
+        setSyncVersion((v) => v + 1);
+        await loadCoreState();
+        if (res?.item_errors?.length > 0) {
+          setTopbarSyncNote('Sync warning');
+        } else {
+          setTopbarSyncNote(
+            res?.imported_transactions > 0
+              ? `+${res.imported_transactions} synced`
+              : 'Synced'
+          );
+        }
+      } catch {
+        setTopbarSyncNote('Sync failed');
+      } finally {
+        setTopbarSyncing(false);
+        setTimeout(() => setTopbarSyncNote(null), 4000);
+      }
+    })();
+  };
+
   if (loadingInit) {
     return (
       <div className="onboarding-shell">
-        <div className="card">Loading GibsonFamily Hub...</div>
+        <div className="card">Loading Family Hub...</div>
       </div>
     );
   }
@@ -499,11 +582,15 @@ export default function App() {
 
             <button
               type="button"
-              className="btn btn-secondary btn-sm hide-on-mobile"
-              onClick={() => setShowPasskeyModal(true)}
+              className="btn btn-secondary btn-sm"
+              onClick={handleTopBarResync}
+              disabled={topbarSyncing}
+              title="Re-sync bank transactions in the background (falls back to full cursor reset if needed)"
             >
-              <Fingerprint size={16} />
-              <span>Passkeys ({activePartner.passkeys?.length || 0})</span>
+              <RefreshCw size={15} className={topbarSyncing ? 'spin' : ''} />
+              <span className="hide-on-mobile">
+                {topbarSyncing ? 'Syncing...' : topbarSyncNote || 'Resync'}
+              </span>
             </button>
             <button
               type="button"
@@ -537,6 +624,7 @@ export default function App() {
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
                   onNavigateTab={selectTab}
+                  startingMonth={startingBudgetMonth}
                 />
               )}
               {activeTab === 'requests' && (
@@ -559,6 +647,7 @@ export default function App() {
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
                   onNavigateTab={selectTab}
+                  startingMonth={startingBudgetMonth}
                 />
               )}
               {activeTab === 'savings' && (
@@ -567,6 +656,7 @@ export default function App() {
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
                   onNavigateTab={selectTab}
+                  startingMonth={startingBudgetMonth}
                 />
               )}
               {activeTab === 'admin_docs' && (
@@ -596,11 +686,14 @@ export default function App() {
                 <ModuleManagerSubModule
                   modules={modules}
                   partners={partners}
+                  activePartner={activePartner}
                   householdName={householdName}
+                  startingBudgetMonth={startingBudgetMonth}
                   theme={theme}
                   onChangeTheme={changeTheme}
                   onToggleModule={handleToggleModule}
                   onRefreshState={loadCoreState}
+                  onOpenPasskeyModal={() => setShowPasskeyModal(true)}
                 />
               )}
             </ErrorBoundary>

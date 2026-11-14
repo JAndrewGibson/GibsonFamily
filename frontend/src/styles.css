@@ -5470,3 +5470,57 @@ html[data-theme='light'] .dashboard-month-pill {
   margin-bottom: 14px;
 }
 
+/* Transactions Ledger Filter Bar */
+.ledger-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+  margin-bottom: 0.9rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.ledger-filter-search-wrap {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.ledger-filter-search-icon {
+  position: absolute;
+  left: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.ledger-filter-search-input {
+  width: 100%;
+  padding-left: 2rem !important;
+}
+
+.ledger-filter-select {
+  flex: 0 1 180px;
+  min-width: 140px;
+}
+
+@media (max-width: 768px) {
+  .ledger-filter-bar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+    padding: 0.6rem;
+  }
+
+  .ledger-filter-search-wrap,
+  .ledger-filter-select {
+    width: 100%;
+    flex: none;
+  }
+}
+

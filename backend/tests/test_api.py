@@ -2516,14 +2516,22 @@ def test_facelift_modules_household_and_spending_money_sync(client):
     alex_p = next(p for p in setup_data["partners"] if p["id"] == alex_id)
     assert alex_p["monthly_fun_allowance"] == 450.0
 
-    # 4. Updating household_name via PUT /api/auth/household
+    # 4. Updating household_name & starting_budget_month via PUT /api/auth/household
     hh_res = client.put(
         "/api/auth/household",
         headers=headers,
-        json={"household_name": "Smith"},
+        json={"household_name": "Smith", "starting_budget_month": "2026-06"},
     )
     assert hh_res.status_code == 200
     assert hh_res.get_json()["household_name"] == "Smith"
+    assert hh_res.get_json()["starting_budget_month"] == "2026-06"
+
+    setup_after = client.get("/api/auth/setup-status", headers=headers).get_json()
+    assert setup_after["starting_budget_month"] == "2026-06"
+
+    sum_after = client.get("/api/finance/summary?month=2026-06", headers=headers).get_json()
+    assert sum_after["starting_budget_month"] == "2026-06"
+    assert "2026-06" in sum_after["available_months"]
 
 
 

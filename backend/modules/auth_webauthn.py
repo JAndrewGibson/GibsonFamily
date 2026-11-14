@@ -1,8 +1,9 @@
 import base64
 import hashlib
 import json
+import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from flask import Blueprint, current_app, g, jsonify, make_response, request
 from werkzeug.security import check_password_hash, generate_password_hash
 from backend.database import get_db
@@ -56,6 +57,19 @@ def _get_partners_with_passkeys(db):
     return partners, len(creds)
 
 
+def _is_valid_ym(val: str) -> bool:
+    return bool(re.match(r"^\d{4}-(0[1-9]|1[0-2])$", (val or "").strip()))
+
+
+def _get_starting_budget_month(db) -> str:
+    row = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'starting_budget_month'"
+    ).fetchone()
+    if row and _is_valid_ym(row["value"]):
+        return row["value"].strip()
+    return date.today().strftime("%Y-%m")
+
+
 def _is_onboarding_completed(db) -> bool:
     row = db.execute("SELECT value FROM app_settings WHERE key = 'onboarding_completed'").fetchone()
     partner_cnt = db.execute("SELECT COUNT(*) AS cnt FROM partners").fetchone()["cnt"]
@@ -69,7 +83,8 @@ def setup_status():
     household_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'household_name'"
     ).fetchone()
-    household_name = household_row["value"] if household_row else "Gibson Household"
+    household_name = household_row["value"] if household_row else "Our Household"
+    starting_budget_month = _get_starting_budget_month(db)
 
     partners, total_passkeys = _get_partners_with_passkeys(db)
 
@@ -80,6 +95,7 @@ def setup_status():
             "is_screen_locked": bool(g.current_session.get("is_screen_locked")),
             "current_partner": g.current_partner,
             "household_name": household_name,
+            "starting_budget_month": starting_budget_month,
             "partners": partners,
             "total_passkeys": total_passkeys,
         })
@@ -101,6 +117,7 @@ def setup_status():
         "is_screen_locked": False,
         "current_partner": None,
         "household_name": household_name,
+        "starting_budget_month": starting_budget_month,
         "partners": public_partners,
         "total_passkeys": total_passkeys,
     })
@@ -239,6 +256,16 @@ def create_partners():
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
             (str(data["household_name"]).strip(),),
         )
+    if "starting_budget_month" in data and _is_valid_ym(str(data["starting_budget_month"])):
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
+            (str(data["starting_budget_month"]).strip(),),
+        )
+    if "starting_budget_month" in data and _is_valid_ym(str(data["starting_budget_month"])):
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
+            (str(data["starting_budget_month"]).strip(),),
+        )
 
     partner_inputs = data.get("partners")
     if isinstance(partner_inputs, list):
@@ -247,7 +274,7 @@ def create_partners():
             name = (p_in.get("name") or "").strip()
             if not name:
                 continue
-            email = (p_in.get("email") or f"{name.lower().replace(' ', '.')}@gibsonfamily.local").strip().lower()
+            email = (p_in.get("email") or f"{name.lower().replace(' ', '.')}@familyhub.local").strip().lower()
             raw_password = p_in.get("password") or ""
             existing_id = p_in.get("id")
 
@@ -351,16 +378,38 @@ def update_household_settings():
     if not getattr(g, "current_partner", None):
         return jsonify({"error": "Authentication required"}), 401
     data = request.get_json(silent=True) or {}
-    household_name = (data.get("household_name") or "").strip()
-    if not household_name:
-        return jsonify({"error": "Family / Last Name is required"}), 400
     db = get_db()
-    db.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
-        (household_name,),
-    )
+
+    updated = {}
+    if "household_name" in data:
+        household_name = (data.get("household_name") or "").strip()
+        if not household_name:
+            return jsonify({"error": "Family / Last Name is required"}), 400
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
+            (household_name,),
+        )
+        updated["household_name"] = household_name
+
+    if "starting_budget_month" in data:
+        starting_month = (data.get("starting_budget_month") or "").strip()
+        if not _is_valid_ym(starting_month):
+            return jsonify({"error": "Beginning month must be in YYYY-MM format"}), 400
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
+            (starting_month,),
+        )
+        updated["starting_budget_month"] = starting_month
+
+    if not updated:
+        return jsonify({"error": "No valid household settings provided"}), 400
+
     db.commit()
-    return jsonify({"household_name": household_name})
+    household_row = db.execute("SELECT value FROM app_settings WHERE key = 'household_name'").fetchone()
+    return jsonify({
+        "household_name": household_row["value"] if household_row else "Our Household",
+        "starting_budget_month": _get_starting_budget_month(db),
+    })
 
 
 @auth_bp.route("/onboarding/complete", methods=["POST"])
@@ -378,6 +427,16 @@ def complete_onboarding():
         db.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('household_name', ?)",
             (str(data["household_name"]).strip(),),
+        )
+    if "starting_budget_month" in data and _is_valid_ym(str(data["starting_budget_month"])):
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
+            (str(data["starting_budget_month"]).strip(),),
+        )
+    if "starting_budget_month" in data and _is_valid_ym(str(data["starting_budget_month"])):
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
+            (str(data["starting_budget_month"]).strip(),),
         )
 
     budgets = data.get("budgets")
@@ -488,7 +547,7 @@ def webauthn_register_options():
         rp_id = "localhost"
 
     user_id_b64 = _b64url_encode(f"gibson-partner-{partner['id']}".encode("utf-8"))
-    user_handle = partner["email"] if partner["email"] else f"{partner['name'].lower().replace(' ', '.')}@gibsonfamily.local"
+    user_handle = partner["email"] if partner["email"] else f"{partner['name'].lower().replace(' ', '.')}@familyhub.local"
 
     options = {
         "rp": {

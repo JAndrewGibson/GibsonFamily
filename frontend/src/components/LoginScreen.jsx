@@ -60,7 +60,7 @@ export default function LoginScreen({ householdName, partners, onLoginSuccess })
           <Lock size={26} />
         </div>
 
-        <h2>Sign In to {householdName || 'GibsonFamily Hub'}</h2>
+        <h2>Sign In to {householdName || 'Family Hub'}</h2>
         <p className="lock-subtitle">
           Select your account to sign in with your Passkey or password.
         </p>

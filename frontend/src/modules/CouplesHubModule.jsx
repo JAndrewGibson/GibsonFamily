@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   CheckSquare,
   FileHeart,
+  Fingerprint,
   Layers,
   Plus,
   RotateCcw,
@@ -703,11 +704,14 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
 export function ModuleManagerSubModule({
   modules,
   partners,
+  activePartner,
   householdName,
-  theme = 'dark',
+  startingBudgetMonth,
+  theme = 'system',
   onChangeTheme,
   onToggleModule,
   onRefreshState,
+  onOpenPasskeyModal,
 }) {
   const [editingPartner, setEditingPartner] = useState(null);
   const [editName, setEditName] = useState('');
@@ -717,10 +721,21 @@ export function ModuleManagerSubModule({
   const [familyNameInput, setFamilyNameInput] = useState(householdName || '');
   const [savingHousehold, setSavingHousehold] = useState(false);
   const [householdSavedMsg, setHouseholdSavedMsg] = useState('');
+  const [startMonthInput, setStartMonthInput] = useState(
+    startingBudgetMonth || new Date().toISOString().slice(0, 7)
+  );
+  const [savingStartMonth, setSavingStartMonth] = useState(false);
+  const [startMonthSavedMsg, setStartMonthSavedMsg] = useState('');
 
   useEffect(() => {
     setFamilyNameInput(householdName || '');
   }, [householdName]);
+
+  useEffect(() => {
+    if (startingBudgetMonth) {
+      setStartMonthInput(startingBudgetMonth);
+    }
+  }, [startingBudgetMonth]);
 
   const handleSaveHouseholdName = async (e) => {
     e.preventDefault();
@@ -736,6 +751,23 @@ export function ModuleManagerSubModule({
       await onRefreshState?.();
     } finally {
       setSavingHousehold(false);
+    }
+  };
+
+  const handleSaveStartMonth = async (e) => {
+    e.preventDefault();
+    if (!startMonthInput) return;
+    setSavingStartMonth(true);
+    setStartMonthSavedMsg('');
+    try {
+      await apiFetch('/api/auth/household', {
+        method: 'PUT',
+        body: JSON.stringify({ starting_budget_month: startMonthInput }),
+      });
+      setStartMonthSavedMsg('Saved!');
+      await onRefreshState?.();
+    } finally {
+      setSavingStartMonth(false);
     }
   };
 
@@ -794,7 +826,7 @@ export function ModuleManagerSubModule({
       </div>
 
       <div className="card">
-        <h3>Appearance & Family Branding</h3>
+        <h3>Appearance, Family Branding &amp; Budget Start</h3>
         <div className="plans-grid" style={{ marginTop: '0.85rem' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="settings-theme-select">Color Theme</label>
@@ -804,6 +836,7 @@ export function ModuleManagerSubModule({
               value={theme}
               onChange={(e) => onChangeTheme?.(e.target.value)}
             >
+              <option value="system">Follow Device Settings</option>
               <option value="dark">Dark Mode</option>
               <option value="light">Light Mode</option>
             </select>
@@ -815,7 +848,7 @@ export function ModuleManagerSubModule({
                 id="settings-family-name"
                 type="text"
                 className="input"
-                placeholder="e.g., Gibson"
+                placeholder="e.g., Smith"
                 value={familyNameInput}
                 onChange={(e) => setFamilyNameInput(e.target.value)}
                 required
@@ -830,6 +863,42 @@ export function ModuleManagerSubModule({
               </small>
             )}
           </form>
+          <form className="form-group" style={{ marginBottom: 0 }} onSubmit={handleSaveStartMonth}>
+            <label htmlFor="settings-start-month">Beginning Budget Month</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                id="settings-start-month"
+                type="month"
+                className="input"
+                value={startMonthInput}
+                onChange={(e) => setStartMonthInput(e.target.value)}
+                required
+              />
+              <button type="submit" className="btn btn-primary btn-sm" disabled={savingStartMonth}>
+                {savingStartMonth ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+            {startMonthSavedMsg && (
+              <small className="text-success" style={{ marginTop: '0.25rem', display: 'block' }}>
+                {startMonthSavedMsg}
+              </small>
+            )}
+          </form>
+          {onOpenPasskeyModal && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>WebAuthn Passkeys &amp; Biometric Lock</label>
+              <div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={onOpenPasskeyModal}
+                >
+                  <Fingerprint size={15} />
+                  Manage Passkeys ({activePartner?.passkeys?.length || 0})
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

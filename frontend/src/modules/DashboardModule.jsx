@@ -14,12 +14,10 @@ import {
 import MonthCloseModal from '../components/MonthCloseModal';
 import MonthRecapModal from '../components/MonthRecapModal';
 
-const STARTING_MONTH = '2026-11';
-
-function getCurrentYearMonth() {
+function getCurrentYearMonth(startingMonth) {
   const d = new Date();
   const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  return ym < STARTING_MONTH ? STARTING_MONTH : ym;
+  return startingMonth && ym < startingMonth ? startingMonth : ym;
 }
 
 function shiftYearMonth(ym, deltaMonths) {
@@ -58,12 +56,14 @@ export default function DashboardModule({
   activePartner,
   onDataChanged,
   syncVersion,
+  startingMonth,
 }) {
-  const currentCalendarMonth = getCurrentYearMonth();
+  const effectiveStartingMonth = startingMonth || new Date().toISOString().slice(0, 7);
+  const currentCalendarMonth = getCurrentYearMonth(effectiveStartingMonth);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const saved = getCookie('gibson_finance_month');
-    const initial = saved && /^\d{4}-\d{2}$/.test(saved) ? saved : getCurrentYearMonth();
-    return initial < STARTING_MONTH ? STARTING_MONTH : initial;
+    const initial = saved && /^\d{4}-\d{2}$/.test(saved) ? saved : currentCalendarMonth;
+    return initial < effectiveStartingMonth ? effectiveStartingMonth : initial;
   });
 
   const [summary, setSummary] = useState(null);
@@ -96,7 +96,7 @@ export default function DashboardModule({
   const [showMonthRecapModal, setShowMonthRecapModal] = useState(false);
 
   const selectBudgetMonth = (ym) => {
-    const clamped = ym < STARTING_MONTH ? STARTING_MONTH : ym;
+    const clamped = ym < effectiveStartingMonth ? effectiveStartingMonth : ym;
     setSelectedMonth(clamped);
     setCookie('gibson_finance_month', clamped);
   };
@@ -260,7 +260,7 @@ export default function DashboardModule({
           <button
             type="button"
             className="dashboard-month-arrow"
-            disabled={selectedMonth <= STARTING_MONTH}
+            disabled={selectedMonth <= effectiveStartingMonth}
             onClick={() => selectBudgetMonth(shiftYearMonth(selectedMonth, -1))}
             title="Previous Month"
             aria-label="Previous Month"

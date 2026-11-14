@@ -66,9 +66,10 @@ function formatCurrency(val, showSign = false) {
   return num < 0 ? `-$${absFormatted}` : `$${absFormatted}`;
 }
 
-export default function SavingsModule({ activePartner, onDataChanged, syncVersion, onNavigateTab }) {
+export default function SavingsModule({ activePartner, onDataChanged, syncVersion, onNavigateTab, startingMonth }) {
   const rawCalendarMonth = new Date().toISOString().slice(0, 7);
-  const defaultMonth = rawCalendarMonth < '2026-11' ? '2026-11' : rawCalendarMonth;
+  const effectiveStartingMonth = startingMonth || rawCalendarMonth;
+  const defaultMonth = rawCalendarMonth < effectiveStartingMonth ? effectiveStartingMonth : rawCalendarMonth;
 
   const [selectedMonth, setSelectedMonthState] = useState(() =>
     getCookie('gibson_savings_month', defaultMonth) || defaultMonth
@@ -304,8 +305,8 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
       idx > 0
         ? yearlyChron[idx - 1].filtered_combined_balance
         : firstMonthOfYr
-        ? firstMonthOfYr.filtered_starting_balance
-        : Math.max(0, Number((yrRow.filtered_combined_balance - yrRow.filtered_net_flow).toFixed(2)));
+          ? firstMonthOfYr.filtered_starting_balance
+          : Math.max(0, Number((yrRow.filtered_combined_balance - yrRow.filtered_net_flow).toFixed(2)));
     const yoyChg = Number((yrRow.filtered_combined_balance - startBal).toFixed(2));
     const yoyPct = startBal > 0 ? Number(((yoyChg / startBal) * 100).toFixed(1)) : 0.0;
     yrRow.filtered_starting_balance = startBal;
@@ -681,9 +682,8 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
             )}
           </div>
           <div
-            className={`kpi-value ${
-              (currentMonthEntry?.filtered_mom_change || 0) >= 0 ? 'text-green' : 'text-amber'
-            }`}
+            className={`kpi-value ${(currentMonthEntry?.filtered_mom_change || 0) >= 0 ? 'text-green' : 'text-amber'
+              }`}
           >
             {formatCurrency(currentMonthEntry?.filtered_mom_change || 0, true)} (
             {(currentMonthEntry?.filtered_mom_change_pct || 0) >= 0 ? '+' : ''}
@@ -705,9 +705,8 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
             )}
           </div>
           <div
-            className={`kpi-value ${
-              (currentYearEntry?.filtered_yoy_change || 0) >= 0 ? 'text-cyan' : 'text-amber'
-            }`}
+            className={`kpi-value ${(currentYearEntry?.filtered_yoy_change || 0) >= 0 ? 'text-cyan' : 'text-amber'
+              }`}
           >
             {formatCurrency(currentYearEntry?.filtered_yoy_change || 0, true)} (
             {(currentYearEntry?.filtered_yoy_change_pct || 0) >= 0 ? '+' : ''}
@@ -943,17 +942,17 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
               const series =
                 timeframeMode === 'yoy'
                   ? yearlyChron.map((yr) => ({
-                      label: yr.year,
-                      balance: Number(yr.account_ending_balances?.[String(acc.id)] || 0),
-                      transfers_in: Number(yr.account_transfers_in?.[String(acc.id)] || 0),
-                      savings_spent: Number(yr.account_savings_spent?.[String(acc.id)] || 0),
-                    }))
+                    label: yr.year,
+                    balance: Number(yr.account_ending_balances?.[String(acc.id)] || 0),
+                    transfers_in: Number(yr.account_transfers_in?.[String(acc.id)] || 0),
+                    savings_spent: Number(yr.account_savings_spent?.[String(acc.id)] || 0),
+                  }))
                   : rawMonthSeries.map((m) => ({
-                      label: formatShortMonth(m.month),
-                      balance: Number(m.balance || 0),
-                      transfers_in: Number(m.transfers_in || 0),
-                      savings_spent: Number(m.savings_spent || 0),
-                    }));
+                    label: formatShortMonth(m.month),
+                    balance: Number(m.balance || 0),
+                    transfers_in: Number(m.transfers_in || 0),
+                    savings_spent: Number(m.savings_spent || 0),
+                  }));
 
               const maxAccBal = Math.max(100, ...series.map((s) => s.balance));
 
@@ -1213,9 +1212,8 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
                     <td className="font-mono text-green">+{formatCurrency(row.filtered_transfers_in)}</td>
                     <td className="font-mono text-amber">-{formatCurrency(row.filtered_savings_spent)}</td>
                     <td
-                      className={`font-mono ${
-                        row.filtered_net_flow >= 0 ? 'text-green' : 'text-amber'
-                      }`}
+                      className={`font-mono ${row.filtered_net_flow >= 0 ? 'text-green' : 'text-amber'
+                        }`}
                     >
                       <strong>{formatCurrency(row.filtered_net_flow, true)}</strong>
                     </td>
@@ -1853,9 +1851,8 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
                         <button
                           key={hex}
                           type="button"
-                          className={`account-color-swatch-btn ${
-                            newAccColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''
-                          }`}
+                          className={`account-color-swatch-btn ${newAccColor.toLowerCase() === hex.toLowerCase() ? 'active' : ''
+                            }`}
                           style={{ backgroundColor: hex }}
                           onClick={() => setNewAccColor(hex)}
                         />

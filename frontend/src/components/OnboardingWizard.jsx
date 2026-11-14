@@ -4,6 +4,7 @@ import {
   Building2,
   CheckCircle2,
   Fingerprint,
+  Home,
   Layers,
   Link2,
   PieChart,
@@ -32,6 +33,9 @@ export default function OnboardingWizard({ onComplete }) {
 
   // Step 1: Household & Partners
   const [householdName, setHouseholdName] = useState('');
+  const [startingBudgetMonth, setStartingBudgetMonth] = useState(() =>
+    new Date().toISOString().slice(0, 7)
+  );
   const [p1Name, setP1Name] = useState('');
   const [p1Email, setP1Email] = useState('');
   const [p1Password, setP1Password] = useState('');
@@ -108,6 +112,7 @@ export default function OnboardingWizard({ onComplete }) {
         method: 'POST',
         body: JSON.stringify({
           household_name: householdName.trim() || 'Our Family',
+          starting_budget_month: startingBudgetMonth,
           partners: [
             {
               id: createdPartners[0]?.id,
@@ -315,6 +320,7 @@ export default function OnboardingWizard({ onComplete }) {
         method: 'POST',
         body: JSON.stringify({
           household_name: householdName.trim() || 'Our Family',
+          starting_budget_month: startingBudgetMonth,
           budgets,
           enabled_modules: enabledModules,
         }),
@@ -331,9 +337,14 @@ export default function OnboardingWizard({ onComplete }) {
     <div className="onboarding-shell">
       <div className="onboarding-container">
         <div className="onboarding-header">
-          <div className="brand-logo">GF</div>
+          <div className="brand-logo brand-logo-house">
+            <Home size={20} />
+          </div>
           <div>
-            <h1>Welcome to GibsonFamily Hub</h1>
+            <h1>
+              Welcome to{' '}
+              {householdName.trim() ? `${householdName.trim()} Family Hub` : 'Family Hub'}
+            </h1>
             <p className="text-muted">
               Let's set up your couple profiles, WebAuthn Passkey lock, Plaid bank accounts, and modules.
             </p>
@@ -374,18 +385,33 @@ export default function OnboardingWizard({ onComplete }) {
               Create profiles for yourself and your partner so you can submit financial requests to each other, approve or build savings timelines, and share tasks.
             </p>
 
-            <div className="form-group">
-              <label>Family / Last Name</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="e.g., Gibson"
-                value={householdName}
-                onChange={(e) => setHouseholdName(e.target.value)}
-              />
-              <small className="text-muted">
-                This name will be used for branding around the app (e.g., "{householdName.trim() ? householdName.trim() : 'Gibson'} Family").
-              </small>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label>Family / Last Name</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g., Smith"
+                  value={householdName}
+                  onChange={(e) => setHouseholdName(e.target.value)}
+                />
+                <small className="text-muted">
+                  Used for branding around the app (e.g., &ldquo;{householdName.trim() ? householdName.trim() : 'Smith'} Family&rdquo;).
+                </small>
+              </div>
+              <div className="form-group">
+                <label>Beginning Budget Month *</label>
+                <input
+                  type="month"
+                  className="input"
+                  value={startingBudgetMonth}
+                  onChange={(e) => setStartingBudgetMonth(e.target.value)}
+                  required
+                />
+                <small className="text-muted">
+                  First month to track budgets and synced bank transactions.
+                </small>
+              </div>
             </div>
 
             <div className="onboarding-partners-split">
@@ -396,7 +422,7 @@ export default function OnboardingWizard({ onComplete }) {
                   <input
                     type="text"
                     className="input"
-                    placeholder="e.g., Alex Gibson"
+                    placeholder="e.g., Alex Smith"
                     value={p1Name}
                     onChange={(e) => setP1Name(e.target.value)}
                     required
@@ -460,7 +486,7 @@ export default function OnboardingWizard({ onComplete }) {
                   <input
                     type="text"
                     className="input"
-                    placeholder="e.g., Jordan Gibson"
+                    placeholder="e.g., Jordan Smith"
                     value={p2Name}
                     onChange={(e) => setP2Name(e.target.value)}
                     required
@@ -940,7 +966,9 @@ export default function OnboardingWizard({ onComplete }) {
                 onClick={handleFinishOnboarding}
               >
                 <Sparkles size={16} />
-                {busy ? 'Launching Hub...' : 'Complete Setup & Open GibsonFamily Hub'}
+                {busy
+                  ? 'Launching Hub...'
+                  : `Complete Setup & Open ${householdName.trim() ? `${householdName.trim()} ` : ''}Family Hub`}
               </button>
             </div>
           </div>
