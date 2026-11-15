@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -6,6 +6,7 @@ import {
   Building2,
   Calendar,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -25,6 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setCookie } from '../api';
+import InfoTip from '../components/InfoTip';
 
 const ACCOUNT_COLOR_PALETTE = [
   '#10b981',
@@ -88,11 +90,28 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Modals
+  // Modals & Options Menu
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const optionsMenuRef = useRef(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showSpendModal, setShowSpendModal] = useState(false);
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const [showSnapshotModal, setShowSnapshotModal] = useState(false);
+
+  useEffect(() => {
+    if (!showOptionsMenu) return;
+    const handleOutside = (e) => {
+      if (optionsMenuRef.current && !optionsMenuRef.current.contains(e.target)) {
+        setShowOptionsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [showOptionsMenu]);
 
   // Transfer Form State
   const [trAccountId, setTrAccountId] = useState('');
@@ -499,56 +518,122 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
   return (
     <div className="module-container">
       {/* Top Header */}
-      <div className="module-header-Clean">
-        <div className="module-header-title-group">
-          <h2 className="module-clean-title">
-            <PiggyBank size={22} style={{ verticalAlign: 'middle', marginRight: '0.45rem', color: 'var(--emerald)' }} />
-            Savings & Long-Term Analytics
-          </h2>
-          <span className="module-clean-subtitle">
-            MoM & YoY savings/brokerage balances, transfers into savings, and big purchases funded from savings
-          </span>
+      <div className="section-header-bar finance-header-bar">
+        <div className="finance-header-title-area">
+          <div className="finance-title-row">
+            <h2 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+              <PiggyBank size={22} style={{ color: 'var(--emerald)' }} />
+              Savings
+            </h2>
+            <InfoTip text="MoM & YoY savings/brokerage balances, transfers into savings, and big purchases funded from savings" />
+          </div>
         </div>
 
-        <div className="finance-clean-toolbar">
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => setShowTransferModal(true)}
-          >
-            <ArrowDownLeft size={15} /> + Transfer to Savings
-          </button>
+        <div className="finance-top-actions" ref={optionsMenuRef}>
+          <div className="finance-options-wrapper">
+            <button
+              type="button"
+              className={`btn btn-secondary finance-options-trigger ${showOptionsMenu ? 'active' : ''}`}
+              onClick={() => setShowOptionsMenu((prev) => !prev)}
+              aria-expanded={showOptionsMenu}
+            >
+              <SlidersHorizontal size={16} />
+              <span>Options</span>
+              <ChevronDown size={14} />
+            </button>
 
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowSpendModal(true)}
-            title="Log a big purchase funded from savings without affecting your monthly budget"
-          >
-            <ShoppingBag size={15} /> + Spend from Savings
-          </button>
+            {showOptionsMenu && (
+              <>
+                <div
+                  className="finance-options-backdrop"
+                  onClick={() => setShowOptionsMenu(false)}
+                />
+                <div className="finance-options-dropdown">
+                  <div className="finance-options-header">
+                    <strong>Savings Tools</strong>
+                    <button
+                      type="button"
+                      className="btn-icon-subtle"
+                      onClick={() => setShowOptionsMenu(false)}
+                      aria-label="Close options menu"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
 
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowSnapshotModal(true)}
-            title="Record or adjust a monthly account balance snapshot"
-          >
-            <Calendar size={15} /> Balance Snapshot
-          </button>
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowTransferModal(true);
+                    }}
+                  >
+                    <ArrowDownLeft size={16} className="text-green" />
+                    <div className="finance-option-copy">
+                      <strong>Transfer to Savings</strong>
+                      <small>Log a deposit or transfer into savings/brokerage</small>
+                    </div>
+                  </button>
 
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowAccountsModal(true)}
-          >
-            <SlidersHorizontal size={15} /> Accounts ({savingsAccounts.length})
-          </button>
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowSpendModal(true);
+                    }}
+                  >
+                    <ShoppingBag size={16} className="text-purple" />
+                    <div className="finance-option-copy">
+                      <strong>Spend from Savings</strong>
+                      <small>Log a purchase funded from savings (excl. monthly budget)</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowSnapshotModal(true);
+                    }}
+                  >
+                    <Calendar size={16} className="text-cyan" />
+                    <div className="finance-option-copy">
+                      <strong>Balance Snapshot</strong>
+                      <small>Record or adjust a monthly account balance</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowAccountsModal(true);
+                    }}
+                  >
+                    <SlidersHorizontal size={16} className="text-amber" />
+                    <div className="finance-option-copy">
+                      <div className="request-badges">
+                        <strong>Manage Accounts</strong>
+                        <span className="pill pill-outline" style={{ fontSize: '0.68rem' }}>
+                          {savingsAccounts.length}
+                        </span>
+                      </div>
+                      <small>Configure savings &amp; brokerage account classifications</small>
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Combined View Account Filter & Bucket Selector */}
-      <div className="card" style={{ marginBottom: '1rem', padding: '0.9rem 1.1rem' }}>
+      <div className="card" style={{ padding: '0.9rem 1.1rem' }}>
         <div
           style={{
             display: 'flex',
@@ -559,13 +644,11 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
             marginBottom: savingsAccounts.length > 0 ? '0.75rem' : 0,
           }}
         >
-          <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <strong style={{ fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Layers size={15} className="text-cyan" /> Combined View Account Filter
+              <Layers size={15} className="text-cyan" /> Account Filter
             </strong>
-            <small className="text-muted">
-              Select which Savings & Brokerage accounts are aggregated in the Combined View and KPIs
-            </small>
+            <InfoTip text="Select which Savings & Brokerage accounts are aggregated in the Combined View and KPIs" />
           </div>
 
           <div className="chart-selector-tabs" style={{ margin: 0 }}>
@@ -743,14 +826,12 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
             gap: '0.75rem',
           }}
         >
-          <div>
-            <h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <h3 style={{ margin: 0 }}>
               <BarChart3 size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
-              Savings & Brokerage Visualizations ({timeframeMode === 'yoy' ? 'Year-over-Year' : 'Month-over-Month'})
+              Analytics
             </h3>
-            <small className="text-muted">
-              Analyze individual account balances, combined savings/brokerage growth, and long-term savings flow
-            </small>
+            <InfoTip text="Analyze individual account balances, combined savings/brokerage growth, and long-term savings flow" />
           </div>
 
           {/* MoM vs YoY Switcher */}
@@ -1171,15 +1252,11 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
           className="card-header"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
         >
-          <div>
-            <h3>
-              {timeframeMode === 'yoy'
-                ? 'Year-over-Year (YoY) Savings & Brokerage Summary'
-                : 'Month-over-Month (MoM) Savings & Brokerage Summary'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <h3 style={{ margin: 0 }}>
+              {timeframeMode === 'yoy' ? 'YoY Summary' : 'MoM Summary'}
             </h3>
-            <small className="text-muted">
-              Long-term flow of transfers into savings, purchases funded from savings, and ending balances
-            </small>
+            <InfoTip text="Long-term flow of transfers into savings, purchases funded from savings, and ending balances" />
           </div>
         </div>
 
@@ -1246,11 +1323,9 @@ export default function SavingsModule({ activePartner, onDataChanged, syncVersio
             gap: '0.75rem',
           }}
         >
-          <div>
-            <h3>Long-Term Savings Activity & "Spent from Savings" Category</h3>
-            <small className="text-muted">
-              Every transfer into a savings/brokerage account and every big purchase marked as funded from savings
-            </small>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <h3 style={{ margin: 0 }}>Activity Ledger</h3>
+            <InfoTip text="Every transfer into a savings/brokerage account and every big purchase marked as funded from savings" />
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>

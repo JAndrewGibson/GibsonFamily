@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarClock, PiggyBank, Plus, Sparkles, Target, Trash2, X } from 'lucide-react';
 import { apiFetch } from '../api';
+import InfoTip from '../components/InfoTip';
 
 export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
   const [plans, setPlans] = useState([]);
@@ -85,36 +86,33 @@ export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Future Purchases & Shared Savings Roadmap</h2>
-          <p className="text-muted">
-            Plan upcoming couple purchases, vacations, home upgrades, and approved partner request timelines.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>Future Purchases</h2>
+          <InfoTip text="Plan upcoming couple purchases, vacations, home upgrades, and approved partner request timelines." />
         </div>
         <button type="button" className="btn btn-primary" onClick={() => setShowAdd(true)}>
           <Plus size={18} />
-          Plan Future Purchase
+          Add Plan
         </button>
       </div>
 
       <div className="kpi-grid-3">
         <div className="kpi-card">
-          <span className="kpi-label">Total Saved Across Goals</span>
+          <span className="kpi-label">Total Saved</span>
           <strong className="kpi-value text-green">${totalSaved.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
-          <small className="kpi-sub">of ${totalTarget.toLocaleString('en-US', { minimumFractionDigits: 2 })} total planned</small>
+          <small className="kpi-sub">of ${totalTarget.toLocaleString('en-US', { minimumFractionDigits: 2 })} planned</small>
         </div>
         <div className="kpi-card">
-          <span className="kpi-label">Combined Monthly Goal Commitment</span>
+          <span className="kpi-label">Monthly Pace</span>
           <strong className="kpi-value text-cyan">${totalMonthlyPlanned.toLocaleString('en-US', { minimumFractionDigits: 0 })}/mo</strong>
-          <small className="kpi-sub">Across {plans.length} active purchase plans</small>
+          <small className="kpi-sub">{plans.length} active</small>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Overall Roadmap Progress</span>
+        <div className="kpi-card" title="Synced with Partner Request timelines">
+          <span className="kpi-label">Progress</span>
           <strong className="kpi-value">
             {totalTarget > 0 ? Math.round((totalSaved / totalTarget) * 100) : 0}%
           </strong>
-          <small className="kpi-sub">Synced with Partner Request timelines</small>
         </div>
       </div>
 
@@ -128,14 +126,12 @@ export default function FuturePurchasesModule({ onDataChanged, syncVersion }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="finance-modal-header">
-              <div>
-                <h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <h3 style={{ margin: 0 }}>
                   <Target size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
-                  Create a Future Purchase Plan
+                  New Plan
                 </h3>
-                <p className="text-muted">
-                  Set a target cost, monthly contribution, and ideal date for an upcoming purchase.
-                </p>
+                <InfoTip text="Set a target cost, monthly contribution, and ideal date for an upcoming purchase." />
               </div>
               <button
                 type="button"

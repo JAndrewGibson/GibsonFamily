@@ -17,6 +17,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { apiFetch } from '../api';
+import InfoTip from '../components/InfoTip';
 
 const CATEGORIES = [
   'Entertainment & Gaming',
@@ -192,20 +193,21 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Partner Purchase Requests & Approvals</h2>
-          <p className="text-muted">
-            Submit a purchase idea to <strong>{otherPartner.name}</strong> — approve right away, hold off, or set up a custom monthly savings budget & timeline together.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>Requests</h2>
+          <InfoTip
+            text={`Submit a purchase idea to ${otherPartner.name} — approve right away, hold off, or set up a custom monthly savings budget & timeline together.`}
+          />
         </div>
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => setShowNewForm(true)}
+          title={`Request purchase from ${otherPartner.name}`}
         >
           <Plus size={18} />
-          Request Purchase from {otherPartner.name.split(' ')[0]}
+          New Request
         </button>
       </div>
 
@@ -219,12 +221,11 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
             onClick={(e) => e.stopPropagation()}
           >
             <div className="finance-modal-header">
-              <div>
-                <h3>Submit a New Financial Request</h3>
-                <p className="text-muted">
-                  Requesting as <strong>{activePartner.name}</strong> → Sent to{' '}
-                  <strong>{otherPartner.name}</strong> for review
-                </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <h3 style={{ margin: 0 }}>New Request</h3>
+                <InfoTip
+                  text={`Requesting as ${activePartner.name} → Sent to ${otherPartner.name} for review`}
+                />
               </div>
               <button
                 type="button"
@@ -614,15 +615,12 @@ export default function RequestsModule({ activePartner, partners, onDataChanged,
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="finance-modal-header">
-                        <div>
-                          <h3>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <h3 style={{ margin: 0 }}>
                             <CalendarClock size={18} style={{ verticalAlign: 'middle', marginRight: '0.35rem' }} />
-                            Configure Budget & Timeline for "{req.title}"
+                            Budget &amp; Timeline
                           </h3>
-                          <p className="text-muted">
-                            Setting up a timeline automatically creates a linked goal in{' '}
-                            <strong>Future Purchases</strong> so you can track monthly savings together.
-                          </p>
+                          <InfoTip text="Setting up a timeline automatically creates a linked goal in Future Purchases so you can track monthly savings together." />
                         </div>
                         <button
                           type="button"

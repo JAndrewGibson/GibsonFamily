@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../api';
+import InfoTip from '../components/InfoTip';
 
 export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syncVersion }) {
   const [records, setRecords] = useState([]);
@@ -72,19 +73,17 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syn
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Couples Admin & Medical Paperwork</h2>
-          <p className="text-muted">
-            Keep medical forms, HSA claims, open enrollment deadlines, insurance policies, and household documents organized in one place.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>Admin &amp; Medical</h2>
+          <InfoTip text="Keep medical forms, HSA claims, open enrollment deadlines, insurance policies, and household documents organized in one place." />
         </div>
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => setShowAddModal(true)}
         >
-          <Plus size={18} /> Add Admin / Medical Record
+          <Plus size={18} /> Add Record
         </button>
       </div>
 
@@ -98,11 +97,9 @@ export function AdminDocsSubModule({ activePartner, partners, onDataChanged, syn
             onClick={(e) => e.stopPropagation()}
           >
             <div className="finance-modal-header">
-              <div>
-                <h3>Add Medical Paperwork or Couples Admin Task</h3>
-                <p className="text-muted">
-                  Track medical paperwork, insurance renewals, tax filings, or household documents.
-                </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <h3 style={{ margin: 0 }}>Add Record</h3>
+                <InfoTip text="Track medical paperwork, insurance renewals, tax filings, or household documents." />
               </div>
               <button
                 type="button"
@@ -323,12 +320,10 @@ export function TodosSubModule({ activePartner, partners, onDataChanged, syncVer
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Shared Couples To-Do List</h2>
-          <p className="text-muted">
-            Coordinate errands, household chores, financial check-ins, and medical follow-ups together.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>To-Do List</h2>
+          <InfoTip text="Coordinate errands, household chores, financial check-ins, and medical follow-ups together." />
         </div>
         <button
           type="button"
@@ -349,11 +344,9 @@ export function TodosSubModule({ activePartner, partners, onDataChanged, syncVer
             onClick={(e) => e.stopPropagation()}
           >
             <div className="finance-modal-header">
-              <div>
-                <h3>Add Shared Couples Task</h3>
-                <p className="text-muted">
-                  Assign a household, finance, or medical errand to a partner.
-                </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <h3 style={{ margin: 0 }}>Add Task</h3>
+                <InfoTip text="Assign a household, finance, or medical errand to a partner." />
               </div>
               <button
                 type="button"
@@ -540,17 +533,15 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Shared Grocery List & Basket Estimator</h2>
-          <p className="text-muted">
-            Add groceries from either phone or laptop — automatically estimates your weekly grocery run cost against your Groceries budget.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>Groceries</h2>
+          <InfoTip text="Add groceries from either phone or laptop — automatically estimates your weekly grocery run cost against your Groceries budget." />
         </div>
         <div className="topbar-right">
           {groceries.some((g) => g.checked) && (
             <button type="button" className="btn btn-secondary" onClick={handleClearChecked}>
-              Clear Checked Items
+              Clear Checked
             </button>
           )}
           <button
@@ -558,21 +549,20 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
             className="btn btn-primary"
             onClick={() => setShowAddModal(true)}
           >
-            <Plus size={18} /> Add Grocery Item
+            <Plus size={18} /> Add Item
           </button>
         </div>
       </div>
 
       <div className="kpi-grid-2">
         <div className="kpi-card">
-          <span className="kpi-label">Remaining Cart Estimate</span>
+          <span className="kpi-label">Remaining Cart</span>
           <strong className="kpi-value text-green">${totals.unchecked_total.toFixed(2)}</strong>
-          <small className="kpi-sub">Unchecked items left to pick up</small>
         </div>
         <div className="kpi-card">
-          <span className="kpi-label">Total List Estimate</span>
+          <span className="kpi-label">Total List</span>
           <strong className="kpi-value">${totals.estimated_total.toFixed(2)}</strong>
-          <small className="kpi-sub">{groceries.length} items on list</small>
+          <small className="kpi-sub">{groceries.length} items</small>
         </div>
       </div>
 
@@ -587,10 +577,7 @@ export function GroceriesSubModule({ activePartner, onDataChanged, syncVersion }
           >
             <div className="finance-modal-header">
               <div>
-                <h3>Add Grocery Item</h3>
-                <p className="text-muted">
-                  Add an item to your shared household shopping list.
-                </p>
+                <h3 style={{ margin: 0 }}>Add Item</h3>
               </div>
               <button
                 type="button"
@@ -809,24 +796,23 @@ export function ModuleManagerSubModule({
 
   return (
     <div className="module-container">
-      <div className="section-header-bar">
-        <div>
-          <h2>Settings & Modules</h2>
-          <p className="text-muted">
-            Customize appearance, family branding, partner profiles, and active modules.
-          </p>
+      <div className="section-header-bar" style={{ alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <h2>Settings</h2>
+          <InfoTip text="Customize appearance, family branding, partner profiles, and active modules." />
         </div>
         <button
           type="button"
           className="btn btn-danger-outline btn-sm"
           onClick={handleResetWorkspace}
+          title="Reset & Re-Run First-Time Setup"
         >
-          <RotateCcw size={15} /> Reset & Re-Run First-Time Setup
+          <RotateCcw size={15} /> Reset Setup
         </button>
       </div>
 
       <div className="card">
-        <h3>Appearance, Family Branding &amp; Budget Start</h3>
+        <h3>Appearance &amp; Branding</h3>
         <div className="plans-grid" style={{ marginTop: '0.85rem' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="settings-theme-select">Color Theme</label>
