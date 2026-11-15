@@ -1,13 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { apiFetch, getCookie, setCookie } from '../api';
 import {
   Calendar,
+  Check,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   History,
-  Plus,
+  Menu,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -18,13 +17,6 @@ function getCurrentYearMonth(startingMonth) {
   const d = new Date();
   const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   return startingMonth && ym < startingMonth ? startingMonth : ym;
-}
-
-function shiftYearMonth(ym, deltaMonths) {
-  if (!ym || ym.length < 7) return getCurrentYearMonth();
-  const [y, m] = ym.split('-').map(Number);
-  const d = new Date(y, m - 1 + deltaMonths, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function formatMonthLabel(ym) {
@@ -81,19 +73,26 @@ export default function DashboardModule({
     setCookie('gibson_dismiss_rollover_info', '1', 365);
   };
 
-  // Quick Log Purchase Modal
-  const [showLogSpendModal, setShowLogSpendModal] = useState(false);
-  const [txMerchant, setTxMerchant] = useState('');
-  const [txAmount, setTxAmount] = useState('');
-  const [txCategory, setTxCategory] = useState('');
-  const [txAccountId, setTxAccountId] = useState('');
-  const [txDate, setTxDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [txNotes, setTxNotes] = useState('');
-  const [savingTx, setSavingTx] = useState(false);
-
   const [showMonthModal, setShowMonthModal] = useState(false);
   const [showMonthCloseModal, setShowMonthCloseModal] = useState(false);
   const [showMonthRecapModal, setShowMonthRecapModal] = useState(false);
+  const [showLedgerMenu, setShowLedgerMenu] = useState(false);
+  const ledgerMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showLedgerMenu) return;
+    const handleOutside = (e) => {
+      if (ledgerMenuRef.current && !ledgerMenuRef.current.contains(e.target)) {
+        setShowLedgerMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [showLedgerMenu]);
 
   const selectBudgetMonth = (ym) => {
     const clamped = ym < effectiveStartingMonth ? effectiveStartingMonth : ym;
@@ -192,48 +191,6 @@ export default function DashboardModule({
     projectedIncome > 0 ? Math.min(projPct, (savingsReserve / barMax) * 100) : 0;
   const savingsStartPct = Math.max(0, projPct - savingsWidthPct);
 
-  const openLogPurchaseModal = (defaultCat) => {
-    setTxMerchant('');
-    setTxAmount('');
-    setTxCategory(defaultCat || mySpendingMoney?.category || 'General');
-    setTxAccountId('');
-    setTxDate(
-      selectedMonth === currentCalendarMonth
-        ? new Date().toISOString().slice(0, 10)
-        : `${selectedMonth}-01`
-    );
-    setTxNotes('');
-    setShowLogSpendModal(true);
-  };
-
-  const handleSaveTransaction = async (e) => {
-    e.preventDefault();
-    if (!txMerchant.trim() || !txAmount || Number(txAmount) <= 0) return;
-    setSavingTx(true);
-    try {
-      await apiFetch('/api/finance/transactions', {
-        method: 'POST',
-        body: JSON.stringify({
-          partner_id: activePartner?.id,
-          account_id: txAccountId ? Number(txAccountId) : null,
-          merchant: txMerchant.trim(),
-          amount: parseFloat(txAmount),
-          category: txCategory || mySpendingMoney?.category || 'General',
-          date: txDate,
-          budget_month: txDate ? txDate.slice(0, 7) : selectedMonth,
-          notes: txNotes.trim(),
-        }),
-      });
-      setShowLogSpendModal(false);
-      await loadDashboardData(selectedMonth, true);
-      if (onDataChanged) onDataChanged();
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSavingTx(false);
-    }
-  };
-
   const mySpendTxs = mySpendingMoney
     ? txFilterScope === 'month'
       ? mySpendingMoney.month_transactions || []
@@ -245,51 +202,24 @@ export default function DashboardModule({
   return (
     <div className="module-container">
       {/* Top Dashboard Header */}
-      <div
-        className="module-header finance-clean-header"
-        style={{ alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}
-      >
-        <div>
-          <h1 className="module-title" style={{ margin: 0, fontSize: '1.65rem', fontWeight: 800 }}>
-            Hello, {userName}!
-          </h1>
-        </div>
+      <div className="section-header-bar dashboard-header-bar">
+        <h1 className="module-title" style={{ margin: 0, fontSize: '1.65rem', fontWeight: 800 }}>
+          Hello, {userName}!
+        </h1>
 
-        {/* Clean, Styled Month Navigation Picker */}
-        <div className="dashboard-month-nav">
-          <button
-            type="button"
-            className="dashboard-month-arrow"
-            disabled={selectedMonth <= effectiveStartingMonth}
-            onClick={() => selectBudgetMonth(shiftYearMonth(selectedMonth, -1))}
-            title="Previous Month"
-            aria-label="Previous Month"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            type="button"
-            className="dashboard-month-pill"
-            onClick={() => setShowMonthModal(true)}
-            title="Switch Budget Month"
-          >
-            <Calendar size={14} />
-            <span>{formatMonthLabel(selectedMonth)}</span>
-            {selectedMonth === currentCalendarMonth && (
-              <span className="month-now-dot" title="Current Month" />
-            )}
-            <ChevronDown size={13} />
-          </button>
-          <button
-            type="button"
-            className="dashboard-month-arrow"
-            onClick={() => selectBudgetMonth(shiftYearMonth(selectedMonth, 1))}
-            title="Next Month"
-            aria-label="Next Month"
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="dashboard-month-pill"
+          onClick={() => setShowMonthModal(true)}
+          title="Switch Budget Month"
+        >
+          <Calendar size={14} />
+          <span>{formatMonthLabel(selectedMonth)}</span>
+          {selectedMonth === currentCalendarMonth && (
+            <span className="month-now-dot" title="Current Month" />
+          )}
+          <ChevronDown size={13} />
+        </button>
       </div>
 
       {/* Month Close & Recap Banner */}
@@ -397,7 +327,7 @@ export default function DashboardModule({
       ) : null}
 
       {/* SECTION 1: Pure Layered Budget & Savings Graph (No title or clutter) */}
-      <div className="card mb-20" style={{ padding: '16px 20px' }}>
+      <div className="card" style={{ padding: '16px 20px' }}>
         <div className="layered-budget-track-wrapper" style={{ padding: '0.65rem 0 1rem' }}>
           <div className="layered-budget-track">
             {/* Layer 1: Planned Expense Budgets */}
@@ -506,7 +436,7 @@ export default function DashboardModule({
       </div>
 
       {/* SECTION 2: Slimmed-down Spending Money & Accumulated Rollover Ledger */}
-      <div className="finance-two-col mb-20">
+      <div className="finance-two-col">
         {/* Left Card: Logged-in Partner's Dedicated Spending Money */}
         {mySpendingMoney && (
           <div className="card spending-money-hero-card" style={{ padding: '16px 18px' }}>
@@ -534,19 +464,12 @@ export default function DashboardModule({
                   {mySpendingMoney.category}
                 </h3>
               </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-xs"
-                onClick={() => openLogPurchaseModal(mySpendingMoney.category)}
-              >
-                <Plus size={13} /> Log Purchase
-              </button>
             </div>
 
             {/* 4 Compact Rollover Metrics for Selected Month */}
             <div className="spending-money-metrics-grid" style={{ marginTop: 8 }}>
               <div className="sm-metric-box">
-                <div className="sm-metric-label">Rollover from Prior Months</div>
+                <div className="sm-metric-label">Rollover</div>
                 <div
                   className={`sm-metric-value ${
                     mySpendingMoney.rollover_in > 0
@@ -558,23 +481,11 @@ export default function DashboardModule({
                 >
                   {fmtSignedMoney(mySpendingMoney.rollover_in)}
                 </div>
-                <div className="sm-metric-sub">
-                  {mySpendingMoney.rollover_in > 0
-                    ? 'Saved surplus'
-                    : mySpendingMoney.rollover_in < 0
-                    ? 'Prior category debt'
-                    : '$0.00 prior'}
-                </div>
               </div>
 
               <div className="sm-metric-box">
-                <div className="sm-metric-label">
-                  {formatShortMonthLabel(selectedMonth)} Spending Money
-                </div>
+                <div className="sm-metric-label">Spending Money</div>
                 <div className="sm-metric-value">${fmtMoney(mySpendingMoney.monthly_limit)}</div>
-                <div className="sm-metric-sub">
-                  Pool: <strong>${fmtMoney(mySpendingMoney.effective_available)}</strong>
-                </div>
               </div>
 
               <div className="sm-metric-box">
@@ -589,9 +500,6 @@ export default function DashboardModule({
                   }`}
                 >
                   ${fmtMoney(mySpendingMoney.spent)}
-                </div>
-                <div className="sm-metric-sub">
-                  {(mySpendingMoney.month_transactions || []).length} purchase(s)
                 </div>
               </div>
 
@@ -616,18 +524,12 @@ export default function DashboardModule({
                     ? `$${fmtMoney(mySpendingMoney.rollover_out)}`
                     : fmtSignedMoney(mySpendingMoney.rollover_out)}
                 </div>
-                <div className="sm-metric-sub">
-                  {mySpendingMoney.is_in_debt ? 'Carries as debt' : 'Carries forward'}
-                </div>
               </div>
             </div>
 
             {/* Spending Money Progress Bar */}
             <div className="budget-row-card" style={{ marginTop: 12 }}>
-              <div className="budget-row-top">
-                <span style={{ fontWeight: 600, fontSize: 13 }}>
-                  Spending Money Progress
-                </span>
+              <div className="budget-row-top" style={{ justifyContent: 'flex-end' }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>
                   ${fmtMoney(mySpendingMoney.spent)} / ${fmtMoney(mySpendingMoney.monthly_limit)}
                   {mySpendingMoney.is_using_rollover && (
@@ -668,38 +570,6 @@ export default function DashboardModule({
                     }%`,
                   }}
                 />
-              </div>
-
-              {/* Rollover Subtext Note */}
-              <div className="budget-row-sub" style={{ marginTop: 8, fontSize: 12 }}>
-                {mySpendingMoney.is_using_rollover ? (
-                  <span className="rollover-rainbow-note">
-                    🌈{' '}
-                    <strong>
-                      ${fmtMoney(mySpendingMoney.spent_from_rollover)} spent from rollover saving
-                    </strong>{' '}
-                    • ${fmtMoney(mySpendingMoney.rollover_out)} remaining in rollover pool
-                  </span>
-                ) : mySpendingMoney.is_in_debt ? (
-                  <span className="text-danger" style={{ fontWeight: 600 }}>
-                    ⚠️ Category is in negative rollover debt (
-                    {fmtSignedMoney(mySpendingMoney.rollover_out)}). Stays red until future monthly
-                    spending money pays off the negative balance above $0.00.
-                  </span>
-                ) : (
-                  <span className="text-muted">
-                    ↻ Rollover: <strong>{fmtSignedMoney(mySpendingMoney.rollover_in)}</strong> from
-                    prior months •{' '}
-                    <strong>
-                      +${fmtMoney(Math.max(0, mySpendingMoney.monthly_limit - mySpendingMoney.spent))}
-                    </strong>{' '}
-                    unspent this month →{' '}
-                    <strong className="text-success">
-                      ${fmtMoney(mySpendingMoney.rollover_out)}
-                    </strong>{' '}
-                    available
-                  </span>
-                )}
               </div>
             </div>
 
@@ -802,24 +672,57 @@ export default function DashboardModule({
               <History size={18} className="text-accent" />
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>
-                  Accumulated Spending Rollover Ledger
+                  Rollover Ledger
                 </div>
               </div>
             </div>
 
             {rolloverCategories.length > 1 && (
-              <select
-                className="input"
-                style={{ width: 'auto', minWidth: 170, fontSize: 12, padding: '4px 8px' }}
-                value={activeLedgerCategory}
-                onChange={(e) => setSelectedRolloverCategory(e.target.value)}
-              >
-                {rolloverCategories.map((rc) => (
-                  <option key={rc.category} value={rc.category}>
-                    {rc.category}
-                  </option>
-                ))}
-              </select>
+              <div className="tx-hamburger-cell" ref={ledgerMenuRef}>
+                <button
+                  type="button"
+                  className={`btn btn-secondary btn-xs tx-hamburger-btn ${showLedgerMenu ? 'active' : ''}`}
+                  onClick={() => setShowLedgerMenu((prev) => !prev)}
+                  title={`Switch rollover category (Current: ${activeLedgerCategory})`}
+                  aria-label="Rollover ledger category menu"
+                  aria-expanded={showLedgerMenu}
+                >
+                  <Menu size={15} />
+                </button>
+                {showLedgerMenu && (
+                  <div className="tx-hamburger-popover" style={{ top: 'calc(100% + 4px)', right: 0 }}>
+                    <div className="tx-popover-header">
+                      <span>Rollover Category</span>
+                      <button
+                        type="button"
+                        className="btn-icon-subtle"
+                        onClick={() => setShowLedgerMenu(false)}
+                        aria-label="Close menu"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {rolloverCategories.map((rc) => {
+                      const isActiveCat = rc.category === activeLedgerCategory;
+                      return (
+                        <button
+                          key={rc.category}
+                          type="button"
+                          className="tx-popover-item"
+                          style={isActiveCat ? { fontWeight: 700, color: 'var(--accent)' } : undefined}
+                          onClick={() => {
+                            setSelectedRolloverCategory(rc.category);
+                            setShowLedgerMenu(false);
+                          }}
+                        >
+                          <span style={{ flex: 1 }}>{rc.category}</span>
+                          {isActiveCat && <Check size={14} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -947,114 +850,7 @@ export default function DashboardModule({
         </div>
       </div>
 
-      {/* MODAL 1: Quick Log Purchase in Spending Money */}
-      {showLogSpendModal && (
-        <div
-          className="finance-modal-backdrop"
-          onClick={() => setShowLogSpendModal(false)}
-        >
-          <div
-            className="finance-modal-card"
-            style={{ maxWidth: 480 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="finance-modal-header">
-              <div>
-                <h3 className="finance-modal-title">Log Spending Money Purchase</h3>
-                <p className="text-xs text-muted">
-                  Automatically deducts from {txCategory || mySpendingMoney?.category} and its
-                  accumulated rollover pool.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setShowLogSpendModal(false)}
-              >
-                <X size={15} />
-              </button>
-            </div>
-            <div className="finance-modal-body">
-              <form onSubmit={handleSaveTransaction} className="form-grid">
-                <div className="grid-2">
-                  <div className="form-group">
-                    <label>Merchant / Item</label>
-                    <input
-                      className="input"
-                      placeholder="e.g. Steam, Coffee, Hobby Gear"
-                      value={txMerchant}
-                      onChange={(e) => setTxMerchant(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Amount ($)</label>
-                    <input
-                      className="input"
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      placeholder="24.99"
-                      value={txAmount}
-                      onChange={(e) => setTxAmount(e.target.value)}
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="grid-2">
-                  <div className="form-group">
-                    <label>Category</label>
-                    <select
-                      className="input"
-                      value={txCategory}
-                      onChange={(e) => setTxCategory(e.target.value)}
-                    >
-                      {(summary.all_categories || []).map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>Purchase Date</label>
-                    <input
-                      className="input"
-                      type="date"
-                      value={txDate}
-                      onChange={(e) => setTxDate(e.target.value)}
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label>Notes (Optional)</label>
-                  <input
-                    className="input"
-                    placeholder="Optional note shown on transaction..."
-                    value={txNotes}
-                    onChange={(e) => setTxNotes(e.target.value)}
-                  />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => setShowLogSpendModal(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary" disabled={savingTx}>
-                    {savingTx ? 'Logging...' : 'Log Purchase'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: Switch Budget Month */}
+      {/* Switch Budget Month Modal */}
       {showMonthModal && (
         <div className="finance-modal-backdrop" onClick={() => setShowMonthModal(false)}>
           <div
@@ -1065,9 +861,6 @@ export default function DashboardModule({
             <div className="finance-modal-header">
               <div>
                 <h3 className="finance-modal-title">Select Budget Month</h3>
-                <p className="text-xs text-muted">
-                  Budgets separate on the 1st of each month, while rollover carries forward.
-                </p>
               </div>
               <button
                 type="button"

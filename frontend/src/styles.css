@@ -5524,3 +5524,63 @@ html[data-theme='light'] .dashboard-month-pill {
   }
 }
 
+/* Dashboard Header & Reusable InfoTip ("i") Popover */
+.dashboard-header-bar {
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.infotip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.infotip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.infotip-btn:hover,
+.infotip-btn.active {
+  color: var(--accent);
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.35);
+}
+
+.infotip-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: min(290px, 78vw);
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+  color: var(--text-main);
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.45;
+  z-index: 600;
+  text-align: left;
+  white-space: normal;
+}
+
+.infotip-popover.infotip-right {
+  left: auto;
+  right: 0;
+}
+

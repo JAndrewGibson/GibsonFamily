@@ -42,6 +42,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch, getCookie, setCookie } from '../api';
+import InfoTip from '../components/InfoTip';
 import MonthCloseModal from '../components/MonthCloseModal';
 import MonthRecapModal from '../components/MonthRecapModal';
 
@@ -825,9 +826,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       const remainder = (Number(tx.amount || 0) - Number(half)).toFixed(2);
       const cat1 =
         tx.category &&
-        tx.category !== 'General' &&
-        tx.category !== 'Credit Card Payment' &&
-        tx.category !== 'Spent from Savings'
+          tx.category !== 'General' &&
+          tx.category !== 'Credit Card Payment' &&
+          tx.category !== 'Spent from Savings'
           ? tx.category
           : availableCategories[0] || 'Groceries & Dining';
       const cat2 =
@@ -1904,7 +1905,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       <div className="section-header-bar finance-header-bar">
         <div className="finance-header-title-area">
           <div className="finance-title-row">
-            <h2>Finances & Budgeting</h2>
+            <h2>Budget</h2>
             <button
               type="button"
               className="active-period-trigger-pill"
@@ -1958,40 +1959,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         </div>
 
         <div className="finance-top-actions" ref={optionsMenuRef}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              setShowOptionsMenu(false);
-              setShowAddTx(true);
-            }}
-          >
-            <Plus size={16} /> Log Expense
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-accent"
-            onClick={() => {
-              setShowOptionsMenu(false);
-              setShowAddIncome(true);
-            }}
-          >
-            <DollarSign size={16} /> Log Income
-          </button>
-
-          {/* Desktop Quick Period Button */}
-          <button
-            type="button"
-            className="btn btn-secondary hide-on-mobile"
-            onClick={() => {
-              setShowOptionsMenu(false);
-              setShowPeriodModal(true);
-            }}
-          >
-            <History size={16} /> Budget Period & History
-          </button>
-
           {/* Generic Options Button (Houses Modals & Tools Cleanly on Mobile & Desktop) */}
           <div className="finance-options-wrapper">
             <button
@@ -2027,6 +1994,36 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       <X size={16} />
                     </button>
                   </div>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowAddTx(true);
+                    }}
+                  >
+                    <Plus size={16} className="text-primary" />
+                    <div className="finance-option-copy">
+                      <strong>Log Expense</strong>
+                      <small>Record a manual purchase or transaction</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowAddIncome(true);
+                    }}
+                  >
+                    <DollarSign size={16} className="text-green" />
+                    <div className="finance-option-copy">
+                      <strong>Log Income</strong>
+                      <small>Record a paycheck, bonus, return, or transfer</small>
+                    </div>
+                  </button>
 
                   <button
                     type="button"
@@ -2071,9 +2068,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       setShowPeriodModal(true);
                     }}
                   >
-                    <Calendar size={16} className="text-cyan" />
+                    <History size={16} className="text-cyan" />
                     <div className="finance-option-copy">
-                      <strong>Budget Period & Historical Months</strong>
+                      <strong>Budget Period & History</strong>
                       <small>
                         Active: {formatMonthLabel(selectedMonth)} • Compare past months
                       </small>
@@ -2225,8 +2222,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       {plaidBanner && (
         <div
           className={`alert ${plaidBanner.type === 'error'
-              ? 'alert-error'
-              : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
+            ? 'alert-error'
+            : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
             }`}
           style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
         >
@@ -2377,17 +2374,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
          ===================================================================== */}
       <div
         className={`card income-fluctuation-card ${budgetExceedsProjected || spentExceedsProjected
-            ? 'card-overbudget-alert'
-            : ''
+          ? 'card-overbudget-alert'
+          : ''
           }`}
       >
         <div className="plan-card-header" style={{ flexWrap: 'wrap', gap: '0.65rem' }}>
           <div>
-            <div className="request-badges">
-              <h3>{formatMonthLabel(selectedMonth)} Income & Fluctuation Tracker</h3>
+            <div className="request-badges" style={{ alignItems: 'center' }}>
+              <h3>Overview</h3>
+              <InfoTip text="Goal: Keep budgeted categories + grey savings within your Projected Income ceiling without overlapping." />
               {isBalancedBudget ? (
                 <span className="pill pill-green">
-                  <CheckCircle2 size={12} /> Balanced Budget (${totalGreySavings.toFixed(0)} Savings)
+                  <CheckCircle2 size={12} /> ${totalGreySavings.toFixed(0)} to Savings
                 </span>
               ) : budgetExceedsProjected ? (
                 <span className="pill pill-red">
@@ -2401,26 +2399,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 </span>
               ) : null}
             </div>
-            <small className="text-muted">
-              Goal: Keep budgeted categories + grey savings within your{' '}
-              <strong>Projected Income</strong> ceiling without overlapping.
-            </small>
-          </div>
-          <div className="topbar-right">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowPeriodModal(true)}
-            >
-              <Calendar size={14} /> {formatShortMonth(selectedMonth)} Period
-            </button>
-            <button
-              type="button"
-              className="btn btn-accent btn-sm"
-              onClick={() => setShowAddIncome(true)}
-            >
-              <Plus size={14} /> Log Income / Paycheck
-            </button>
           </div>
         </div>
 
@@ -2543,23 +2521,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             LAYERED HORIZONTAL BAR: PROJECTED INCOME MAX + GREY SAVINGS AT END
            =================================================================== */}
         <div className="layered-budget-bar-section">
-          <div className="layered-bar-header">
-            <div>
-              <strong>
-                Layered Budget & Savings vs. Projected Income (Max: $
-                {projectedIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })})
-              </strong>
-              <small className="text-muted" style={{ display: 'block' }}>
-                Spending Categories: <strong>${expenseBudgetLimit.toFixed(0)}</strong> • Grey Savings at End:{' '}
-                <strong>${totalGreySavings.toFixed(0)}</strong> (
-                {savingsBudgetLimit > 0
-                  ? `$${savingsBudgetLimit.toFixed(0)} budgeted + $${unallocatedProjectedSavings.toFixed(0)} unallocated`
-                  : `$${unallocatedProjectedSavings.toFixed(0)} unallocated`}
-                ) • Actual Spent: <strong>${totalSpent.toFixed(2)}</strong>
-              </small>
-            </div>
-
-            {(budgetExceedsProjected || spentExceedsProjected) && (
+          {(budgetExceedsProjected || spentExceedsProjected) && (
+            <div className="layered-bar-header" style={{ justifyContent: 'flex-end' }}>
               <div className="layered-bar-overflow-pill">
                 <AlertTriangle size={14} />
                 <span>
@@ -2570,8 +2533,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       : `Spending Exceeds Projected Max by +$${spentOverProjectedAmt.toFixed(2)}`}
                 </span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Horizontal Layered Bar Track (0% to 100% = Projected Income) */}
           <div className="layered-bar-outer">
@@ -2624,8 +2587,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 {safeSpentWidthPct > 0 && (
                   <div
                     className={`layer-spend-fill ${spentExceedsExpenseBudget
-                        ? 'spend-fill-warn'
-                        : 'spend-fill-ok'
+                      ? 'spend-fill-warn'
+                      : 'spend-fill-ok'
                       }`}
                     style={{
                       left: '0%',
@@ -2764,9 +2727,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 <strong>
                   Manage Inflow & Income Entries ({summary.income_entries.length})
                 </strong>
-                <span className="text-muted">
-                  — Tap to open modal (paychecks, returns, CC payments & transfers)
-                </span>
               </div>
               <div className="income-summary-badges">
                 <span className="pill pill-green" title="Real earned payroll income">
@@ -2797,7 +2757,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           <div className="category-budgets-header">
             <div className="category-budgets-title-block">
               <div className="category-budgets-title-row">
-                <h3 style={{ margin: 0 }}>{formatMonthLabel(selectedMonth)} Category Budgets</h3>
+                <h3 style={{ margin: 0 }}>Categories</h3>
                 {dismissCategoryBalanceStrip && (
                   <button
                     type="button"
@@ -2822,9 +2782,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   </button>
                 )}
               </div>
-              <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
-                Adjust or cancel categories for {formatShortMonth(selectedMonth)} without altering prior months
-              </small>
             </div>
             <div className="budget-card-controls">
               <div className="budget-sort-box" title="Sort order is saved in your browser cookie">
@@ -2872,10 +2829,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           {!dismissCategoryBalanceStrip && (
             <div
               className={`category-budgets-balance-strip ${budgetExceedsProjected
-                  ? 'strip-danger'
-                  : spentDippingIntoSavings
-                    ? 'strip-warn'
-                    : 'strip-balanced'
+                ? 'strip-danger'
+                : spentDippingIntoSavings
+                  ? 'strip-warn'
+                  : 'strip-balanced'
                 }`}
             >
               <div className="balance-strip-left">
@@ -2934,8 +2891,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                 const fillClass = isUsingRollover
                   ? 'fill-rainbow'
                   : isInDebt
-                  ? 'fill-danger'
-                  : 'fill-success';
+                    ? 'fill-danger'
+                    : 'fill-success';
                 return (
                   <div key={b.id || b.category} className="budget-row-item">
                     <div className="budget-row-top">
@@ -4035,420 +3992,420 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     </thead>
                     <tbody>
                       {filteredTransactions.map((tx) => {
-                  const isShifted =
-                    tx.budget_month &&
-                    tx.original_date_month &&
-                    tx.budget_month !== tx.original_date_month;
-                  const isEditingCustomCat = customCatTxId === tx.id;
-                  const isMenuOpen = openMenuTxId === tx.id;
-                  const txAccColor = tx.account_color || '#06b6d4';
+                        const isShifted =
+                          tx.budget_month &&
+                          tx.original_date_month &&
+                          tx.budget_month !== tx.original_date_month;
+                        const isEditingCustomCat = customCatTxId === tx.id;
+                        const isMenuOpen = openMenuTxId === tx.id;
+                        const txAccColor = tx.account_color || '#06b6d4';
 
-                  return (
-                    <tr
-                      key={tx.id}
-                      className="tx-row"
-                      style={{
-                        borderLeft: tx.account_name ? `4px solid ${txAccColor}` : undefined,
-                      }}
-                    >
-                      <td className="tx-cell-date">
-                        <span className="tx-date-text">{tx.date}</span>
-                        {(isShifted || showAllMonthsInLedger) && (
-                          <span
-                            className={`pill ${isShifted ? 'pill-cyan' : 'pill-outline'}`}
-                            style={{ fontSize: '0.68rem', marginTop: '0.2rem' }}
-                            title={
-                              isShifted
-                                ? `Allocated to ${formatMonthLabel(tx.budget_month)} (purchased ${tx.date})`
-                                : `Budget month: ${formatMonthLabel(tx.budget_month)}`
-                            }
+                        return (
+                          <tr
+                            key={tx.id}
+                            className="tx-row"
+                            style={{
+                              borderLeft: tx.account_name ? `4px solid ${txAccColor}` : undefined,
+                            }}
                           >
-                            Budget: {formatShortMonth(tx.budget_month)}
-                          </span>
-                        )}
-                      </td>
-                      <td className="tx-cell-desc">
-                        <div className="tx-desc-main-line">
-                          <strong>{tx.name}</strong>
-                          {tx.account_name && (
-                            <span
-                              className="tx-account-color-pill"
-                              style={{
-                                borderColor: txAccColor,
-                                backgroundColor: `${txAccColor}1f`,
-                                color: txAccColor,
-                              }}
-                              title={`Paid with ${tx.account_name}${tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
-                                }`}
-                            >
-                              <span
-                                className="tx-account-color-dot"
-                                style={{ backgroundColor: txAccColor }}
-                              />
-                              {tx.account_name}
-                              {tx.account_mask ? ` ••${tx.account_mask}` : ''}
-                            </span>
-                          )}
-                          {Boolean(tx.is_pending) && (
-                            <span
-                              className="tx-pending-pill"
-                              title="Pending transaction with bank — counting towards your budget"
-                            >
-                              <Clock size={11} /> Pending
-                            </span>
-                          )}
-                          {Boolean(tx.is_savings_spend) && (
-                            <span
-                              className="pill pill-purple"
-                              style={{ fontSize: '0.68rem' }}
-                              title="Funded from savings — excluded from monthly budget spending"
-                            >
-                              <PiggyBank size={11} /> From Savings (Excl. Budget)
-                            </span>
-                          )}
-                          {Boolean(tx.is_cc_payment) && (
-                            <span
-                              className="pill pill-amber"
-                              style={{ fontSize: '0.68rem', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
-                              title="Credit card payoff — excluded from monthly budget spending"
-                            >
-                              <CreditCard size={11} /> CC Payment (Excl. Budget)
-                            </span>
-                          )}
-                          {Boolean(tx.is_split) && (
-                            <span
-                              className="pill pill-cyan"
-                              style={{ fontSize: '0.68rem', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', borderColor: 'rgba(6, 182, 212, 0.3)', cursor: 'pointer' }}
-                              onClick={() => handleOpenSplitModal(tx)}
-                              title="Click to view or edit category splits"
-                            >
-                              <Scissors size={11} /> Split ({tx.splits?.length || 2})
-                            </span>
-                          )}
-                        </div>
-                        {Boolean(tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid') && (
-                          <small className="tx-note"> — {tx.notes.trim()}</small>
-                        )}
-                      </td>
-
-                      {/* Reassignable Category Column */}
-                      <td className="tx-cell-cat">
-                        {tx.is_split ? (
-                          <div className="tx-split-display">
-                            <button
-                              type="button"
-                              className="tx-split-badge-btn"
-                              onClick={() => handleOpenSplitModal(tx)}
-                              title="Click to edit or adjust category split"
-                            >
-                              <Scissors size={12} />
-                              <span>Split ({tx.splits?.length || 0})</span>
-                              <Edit3 size={11} style={{ opacity: 0.7 }} />
-                            </button>
-                            <div className="tx-split-chips-list">
-                              {tx.splits?.map((sp, idx) => (
+                            <td className="tx-cell-date">
+                              <span className="tx-date-text">{tx.date}</span>
+                              {(isShifted || showAllMonthsInLedger) && (
                                 <span
-                                  key={sp.id || idx}
-                                  className="tx-split-chip"
-                                  title={sp.notes ? `${sp.category}: $${Number(sp.amount).toFixed(2)} (${sp.notes})` : `${sp.category}: $${Number(sp.amount).toFixed(2)}`}
+                                  className={`pill ${isShifted ? 'pill-cyan' : 'pill-outline'}`}
+                                  style={{ fontSize: '0.68rem', marginTop: '0.2rem' }}
+                                  title={
+                                    isShifted
+                                      ? `Allocated to ${formatMonthLabel(tx.budget_month)} (purchased ${tx.date})`
+                                      : `Budget month: ${formatMonthLabel(tx.budget_month)}`
+                                  }
                                 >
-                                  <span className="tx-split-chip-cat">{sp.category}</span>:
-                                  <span className="tx-split-chip-amt">${Number(sp.amount).toFixed(2)}</span>
+                                  Budget: {formatShortMonth(tx.budget_month)}
                                 </span>
-                              ))}
-                            </div>
-                          </div>
-                        ) : isEditingCustomCat ? (
-                          <div className="inline-custom-cat-box">
-                            <input
-                              type="text"
-                              className="input input-sm"
-                              placeholder="Type custom category..."
-                              value={customCatInput}
-                              onChange={(e) => setCustomCatInput(e.target.value)}
-                              autoFocus
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleSaveCustomCategoryOnTx(tx.id);
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-sm"
-                              onClick={() => handleSaveCustomCategoryOnTx(tx.id)}
-                            >
-                              <Check size={13} />
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => setCustomCatTxId(null)}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="tx-cat-select-stack">
-                            <select
-                              className="input input-sm tx-cat-select"
-                              value={tx.category}
-                              onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
-                            >
-                              <option value="Credit Card Payment">
-                                💳 Credit Card Payment (Exclude from Budget)
-                              </option>
-                              <option value="Spent from Savings">
-                                🏦 Spent from Savings (Exclude from Budget)
-                              </option>
-                              {Array.from(
-                                new Set(
-                                  [...availableCategories, tx.category].filter(
-                                    (c) => c && c !== 'Spent from Savings' && c !== 'Credit Card Payment' && c !== 'Split'
-                                  )
-                                )
-                              ).map((cat) => (
-                                <option key={cat} value={cat}>
-                                  {cat}
-                                </option>
-                              ))}
-                              <option value="__split__">✂️ Split across categories...</option>
-                              <option value="__custom__">+ Custom Category...</option>
-                            </select>
-                            {Boolean(tx.is_cc_payment) ? (
-                              <span
-                                className="pill pill-amber"
-                                style={{ fontSize: '0.68rem', alignSelf: 'flex-start', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
-                              >
-                                <CreditCard size={11} /> CC Payoff — Excluded from Budget
-                              </span>
-                            ) : Boolean(tx.is_savings_spend) ? (
-                              <span
-                                className="pill pill-purple"
-                                style={{ fontSize: '0.68rem', alignSelf: 'flex-start' }}
-                              >
-                                <PiggyBank size={11} /> Excluded from Monthly Budget
-                              </span>
-                            ) : (
-                              tx.is_category_tracked === false && (
-                                <button
-                                  type="button"
-                                  className="pill pill-amber tx-untracked-pill"
-                                  onClick={() => handleQuickTrackCategory(tx.category)}
-                                  title={`"${tx.category}" is not tracked in your monthly budget. Tap to set a budget limit.`}
-                                >
-                                  <AlertTriangle size={11} /> Untracked — Set Budget
-                                </button>
-                              )
-                            )}
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="text-right font-mono tx-cell-amount">
-                        ${Number(tx.amount).toFixed(2)}
-                      </td>
-
-                      {/* Hamburger Menu for Budget Month Allocation & Row Actions */}
-                      <td className="text-right tx-hamburger-cell">
-                        <button
-                          type="button"
-                          className={`btn btn-secondary btn-xs tx-hamburger-btn ${isMenuOpen ? 'active' : ''
-                            }`}
-                          onClick={() =>
-                            setOpenMenuTxId(isMenuOpen ? null : tx.id)
-                          }
-                          title="Budget month allocation & transaction options"
-                          aria-label="Transaction options menu"
-                        >
-                          <Menu size={15} />
-                        </button>
-
-                        {isMenuOpen && (
-                          <>
-                            <div
-                              className="tx-popover-backdrop"
-                              onClick={() => setOpenMenuTxId(null)}
-                            />
-                            <div className="tx-hamburger-popover">
-                              <div className="tx-popover-header">
-                                <div>
-                                  <span style={{ display: 'block' }}>{tx.name}</span>
-                                  <small>
-                                    Allocated to:{' '}
-                                    <strong className="text-cyan">
-                                      {formatMonthLabel(tx.budget_month)}
-                                    </strong>
-                                  </small>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="btn-icon-subtle"
-                                  onClick={() => setOpenMenuTxId(null)}
-                                  aria-label="Close menu"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </div>
-
-                              {/* Mark as CC Payment */}
-                              <button
-                                type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleToggleCcPayment(tx)}
-                                style={{
-                                  fontWeight: 600,
-                                  color: tx.is_cc_payment ? '#10b981' : '#f59e0b',
-                                }}
-                              >
-                                <CreditCard size={14} />
-                                {tx.is_cc_payment
-                                  ? 'Restore to Monthly Budget (Unmark CC Payment)'
-                                  : 'Mark as CC Payment (Exclude from Budget)'}
-                              </button>
-
-                              {/* Split category transaction */}
-                              <button
-                                type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleOpenSplitModal(tx)}
-                                style={{
-                                  fontWeight: 600,
-                                  color: tx.is_split ? '#06b6d4' : 'var(--text-main)',
-                                }}
-                              >
-                                <Scissors size={14} />
-                                {tx.is_split
-                                  ? `Edit Split Categories (${tx.splits?.length || 2})`
-                                  : 'Split Category Transaction'}
-                              </button>
-
-                              {Boolean(tx.is_split) && (
-                                <button
-                                  type="button"
-                                  className="tx-popover-item tx-popover-danger"
-                                  onClick={() => handleRevertSplit(tx)}
-                                >
-                                  <RotateCcw size={14} />
-                                  Revert to Single Category
-                                </button>
                               )}
-
-                              {/* Add / Edit Note */}
-                              <button
-                                type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleOpenNoteModal(tx)}
-                                style={{ fontWeight: 500 }}
-                              >
-                                <FileText size={14} className="text-cyan" />
-                                {tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid'
-                                  ? 'Edit Note'
-                                  : 'Add Note'}
-                              </button>
-
-                              <button
-                                type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleToggleSavingsSpend(tx)}
-                                style={{
-                                  fontWeight: 600,
-                                  color: tx.is_savings_spend ? '#06b6d4' : '#a855f7',
-                                }}
-                              >
-                                <PiggyBank size={14} />
-                                {tx.is_savings_spend
-                                  ? 'Restore to Monthly Budget (Unmark Savings Spend)'
-                                  : 'Mark as Spent from Savings (Exclude from Budget)'}
-                              </button>
-
-                              <div className="tx-popover-divider" />
-
-                              {summary.accounts?.length > 0 && (
-                                <div className="tx-popover-month-picker">
-                                  <label>Account / Card Used:</label>
-                                  <select
-                                    className="input input-sm"
-                                    value={tx.account_id || ''}
-                                    onChange={(e) =>
-                                      handleReassignAccount(tx.id, e.target.value)
-                                    }
+                            </td>
+                            <td className="tx-cell-desc">
+                              <div className="tx-desc-main-line">
+                                <strong>{tx.name}</strong>
+                                {tx.account_name && (
+                                  <span
+                                    className="tx-account-color-pill"
+                                    style={{
+                                      borderColor: txAccColor,
+                                      backgroundColor: `${txAccColor}1f`,
+                                      color: txAccColor,
+                                    }}
+                                    title={`Paid with ${tx.account_name}${tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
+                                      }`}
                                   >
-                                    <option value="">No specific account</option>
-                                    {summary.accounts.map((a) => (
-                                      <option key={a.id} value={a.id}>
-                                        {a.name} (•••• {a.mask})
+                                    <span
+                                      className="tx-account-color-dot"
+                                      style={{ backgroundColor: txAccColor }}
+                                    />
+                                    {tx.account_name}
+                                    {tx.account_mask ? ` ••${tx.account_mask}` : ''}
+                                  </span>
+                                )}
+                                {Boolean(tx.is_pending) && (
+                                  <span
+                                    className="tx-pending-pill"
+                                    title="Pending transaction with bank — counting towards your budget"
+                                  >
+                                    <Clock size={11} /> Pending
+                                  </span>
+                                )}
+                                {Boolean(tx.is_savings_spend) && (
+                                  <span
+                                    className="pill pill-purple"
+                                    style={{ fontSize: '0.68rem' }}
+                                    title="Funded from savings — excluded from monthly budget spending"
+                                  >
+                                    <PiggyBank size={11} /> From Savings (Excl. Budget)
+                                  </span>
+                                )}
+                                {Boolean(tx.is_cc_payment) && (
+                                  <span
+                                    className="pill pill-amber"
+                                    style={{ fontSize: '0.68rem', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+                                    title="Credit card payoff — excluded from monthly budget spending"
+                                  >
+                                    <CreditCard size={11} /> CC Payment (Excl. Budget)
+                                  </span>
+                                )}
+                                {Boolean(tx.is_split) && (
+                                  <span
+                                    className="pill pill-cyan"
+                                    style={{ fontSize: '0.68rem', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', borderColor: 'rgba(6, 182, 212, 0.3)', cursor: 'pointer' }}
+                                    onClick={() => handleOpenSplitModal(tx)}
+                                    title="Click to view or edit category splits"
+                                  >
+                                    <Scissors size={11} /> Split ({tx.splits?.length || 2})
+                                  </span>
+                                )}
+                              </div>
+                              {Boolean(tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid') && (
+                                <small className="tx-note"> — {tx.notes.trim()}</small>
+                              )}
+                            </td>
+
+                            {/* Reassignable Category Column */}
+                            <td className="tx-cell-cat">
+                              {tx.is_split ? (
+                                <div className="tx-split-display">
+                                  <button
+                                    type="button"
+                                    className="tx-split-badge-btn"
+                                    onClick={() => handleOpenSplitModal(tx)}
+                                    title="Click to edit or adjust category split"
+                                  >
+                                    <Scissors size={12} />
+                                    <span>Split ({tx.splits?.length || 0})</span>
+                                    <Edit3 size={11} style={{ opacity: 0.7 }} />
+                                  </button>
+                                  <div className="tx-split-chips-list">
+                                    {tx.splits?.map((sp, idx) => (
+                                      <span
+                                        key={sp.id || idx}
+                                        className="tx-split-chip"
+                                        title={sp.notes ? `${sp.category}: $${Number(sp.amount).toFixed(2)} (${sp.notes})` : `${sp.category}: $${Number(sp.amount).toFixed(2)}`}
+                                      >
+                                        <span className="tx-split-chip-cat">{sp.category}</span>:
+                                        <span className="tx-split-chip-amt">${Number(sp.amount).toFixed(2)}</span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : isEditingCustomCat ? (
+                                <div className="inline-custom-cat-box">
+                                  <input
+                                    type="text"
+                                    className="input input-sm"
+                                    placeholder="Type custom category..."
+                                    value={customCatInput}
+                                    onChange={(e) => setCustomCatInput(e.target.value)}
+                                    autoFocus
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSaveCustomCategoryOnTx(tx.id);
+                                      }
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => handleSaveCustomCategoryOnTx(tx.id)}
+                                  >
+                                    <Check size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => setCustomCatTxId(null)}
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="tx-cat-select-stack">
+                                  <select
+                                    className="input input-sm tx-cat-select"
+                                    value={tx.category}
+                                    onChange={(e) => handleReassignCategory(tx.id, e.target.value)}
+                                  >
+                                    <option value="Credit Card Payment">
+                                      💳 Credit Card Payment (Exclude from Budget)
+                                    </option>
+                                    <option value="Spent from Savings">
+                                      🏦 Spent from Savings (Exclude from Budget)
+                                    </option>
+                                    {Array.from(
+                                      new Set(
+                                        [...availableCategories, tx.category].filter(
+                                          (c) => c && c !== 'Spent from Savings' && c !== 'Credit Card Payment' && c !== 'Split'
+                                        )
+                                      )
+                                    ).map((cat) => (
+                                      <option key={cat} value={cat}>
+                                        {cat}
                                       </option>
                                     ))}
+                                    <option value="__split__">✂️ Split across categories...</option>
+                                    <option value="__custom__">+ Custom Category...</option>
                                   </select>
+                                  {Boolean(tx.is_cc_payment) ? (
+                                    <span
+                                      className="pill pill-amber"
+                                      style={{ fontSize: '0.68rem', alignSelf: 'flex-start', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+                                    >
+                                      <CreditCard size={11} /> CC Payoff — Excluded from Budget
+                                    </span>
+                                  ) : Boolean(tx.is_savings_spend) ? (
+                                    <span
+                                      className="pill pill-purple"
+                                      style={{ fontSize: '0.68rem', alignSelf: 'flex-start' }}
+                                    >
+                                      <PiggyBank size={11} /> Excluded from Monthly Budget
+                                    </span>
+                                  ) : (
+                                    tx.is_category_tracked === false && (
+                                      <button
+                                        type="button"
+                                        className="pill pill-amber tx-untracked-pill"
+                                        onClick={() => handleQuickTrackCategory(tx.category)}
+                                        title={`"${tx.category}" is not tracked in your monthly budget. Tap to set a budget limit.`}
+                                      >
+                                        <AlertTriangle size={11} /> Untracked — Set Budget
+                                      </button>
+                                    )
+                                  )}
                                 </div>
                               )}
+                            </td>
 
-                              {tx.previous_budget_month >= effectiveStartingMonth && (
-                                <button
-                                  type="button"
-                                  className="tx-popover-item"
-                                  onClick={() => handleAllocateMonth(tx.id, 'prev')}
-                                >
-                                  <ChevronLeft size={14} />
-                                  Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
-                                </button>
-                              )}
+                            <td className="text-right font-mono tx-cell-amount">
+                              ${Number(tx.amount).toFixed(2)}
+                            </td>
 
+                            {/* Hamburger Menu for Budget Month Allocation & Row Actions */}
+                            <td className="text-right tx-hamburger-cell">
                               <button
                                 type="button"
-                                className="tx-popover-item"
-                                onClick={() => handleAllocateMonth(tx.id, 'next')}
+                                className={`btn btn-secondary btn-xs tx-hamburger-btn ${isMenuOpen ? 'active' : ''
+                                  }`}
+                                onClick={() =>
+                                  setOpenMenuTxId(isMenuOpen ? null : tx.id)
+                                }
+                                title="Budget month allocation & transaction options"
+                                aria-label="Transaction options menu"
                               >
-                                <ChevronRight size={14} />
-                                Allocate to Next Month ({formatShortMonth(tx.next_budget_month)})
+                                <Menu size={15} />
                               </button>
 
-                              <div className="tx-popover-month-picker">
-                                <label>Reassign to Specific Month:</label>
-                                <input
-                                  type="month"
-                                  min={effectiveStartingMonth}
-                                  className="input input-sm"
-                                  value={tx.budget_month}
-                                  onChange={(e) =>
-                                    handleAllocateExactMonth(tx.id, e.target.value)
-                                  }
-                                />
-                              </div>
+                              {isMenuOpen && (
+                                <>
+                                  <div
+                                    className="tx-popover-backdrop"
+                                    onClick={() => setOpenMenuTxId(null)}
+                                  />
+                                  <div className="tx-hamburger-popover">
+                                    <div className="tx-popover-header">
+                                      <div>
+                                        <span style={{ display: 'block' }}>{tx.name}</span>
+                                        <small>
+                                          Allocated to:{' '}
+                                          <strong className="text-cyan">
+                                            {formatMonthLabel(tx.budget_month)}
+                                          </strong>
+                                        </small>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="btn-icon-subtle"
+                                        onClick={() => setOpenMenuTxId(null)}
+                                        aria-label="Close menu"
+                                      >
+                                        <X size={16} />
+                                      </button>
+                                    </div>
 
-                              {isShifted && tx.original_date_month >= effectiveStartingMonth && (
-                                <button
-                                  type="button"
-                                  className="tx-popover-item"
-                                  onClick={() => handleAllocateMonth(tx.id, 'reset')}
-                                >
-                                  <RotateCcw size={13} />
-                                  Reset to Original Month ({formatShortMonth(tx.original_date_month)})
-                                </button>
+                                    {/* Mark as CC Payment */}
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleToggleCcPayment(tx)}
+                                      style={{
+                                        fontWeight: 600,
+                                        color: tx.is_cc_payment ? '#10b981' : '#f59e0b',
+                                      }}
+                                    >
+                                      <CreditCard size={14} />
+                                      {tx.is_cc_payment
+                                        ? 'Restore to Monthly Budget (Unmark CC Payment)'
+                                        : 'Mark as CC Payment (Exclude from Budget)'}
+                                    </button>
+
+                                    {/* Split category transaction */}
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleOpenSplitModal(tx)}
+                                      style={{
+                                        fontWeight: 600,
+                                        color: tx.is_split ? '#06b6d4' : 'var(--text-main)',
+                                      }}
+                                    >
+                                      <Scissors size={14} />
+                                      {tx.is_split
+                                        ? `Edit Split Categories (${tx.splits?.length || 2})`
+                                        : 'Split Category Transaction'}
+                                    </button>
+
+                                    {Boolean(tx.is_split) && (
+                                      <button
+                                        type="button"
+                                        className="tx-popover-item tx-popover-danger"
+                                        onClick={() => handleRevertSplit(tx)}
+                                      >
+                                        <RotateCcw size={14} />
+                                        Revert to Single Category
+                                      </button>
+                                    )}
+
+                                    {/* Add / Edit Note */}
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleOpenNoteModal(tx)}
+                                      style={{ fontWeight: 500 }}
+                                    >
+                                      <FileText size={14} className="text-cyan" />
+                                      {tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid'
+                                        ? 'Edit Note'
+                                        : 'Add Note'}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleToggleSavingsSpend(tx)}
+                                      style={{
+                                        fontWeight: 600,
+                                        color: tx.is_savings_spend ? '#06b6d4' : '#a855f7',
+                                      }}
+                                    >
+                                      <PiggyBank size={14} />
+                                      {tx.is_savings_spend
+                                        ? 'Restore to Monthly Budget (Unmark Savings Spend)'
+                                        : 'Mark as Spent from Savings (Exclude from Budget)'}
+                                    </button>
+
+                                    <div className="tx-popover-divider" />
+
+                                    {summary.accounts?.length > 0 && (
+                                      <div className="tx-popover-month-picker">
+                                        <label>Account / Card Used:</label>
+                                        <select
+                                          className="input input-sm"
+                                          value={tx.account_id || ''}
+                                          onChange={(e) =>
+                                            handleReassignAccount(tx.id, e.target.value)
+                                          }
+                                        >
+                                          <option value="">No specific account</option>
+                                          {summary.accounts.map((a) => (
+                                            <option key={a.id} value={a.id}>
+                                              {a.name} (•••• {a.mask})
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
+                                    {tx.previous_budget_month >= effectiveStartingMonth && (
+                                      <button
+                                        type="button"
+                                        className="tx-popover-item"
+                                        onClick={() => handleAllocateMonth(tx.id, 'prev')}
+                                      >
+                                        <ChevronLeft size={14} />
+                                        Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item"
+                                      onClick={() => handleAllocateMonth(tx.id, 'next')}
+                                    >
+                                      <ChevronRight size={14} />
+                                      Allocate to Next Month ({formatShortMonth(tx.next_budget_month)})
+                                    </button>
+
+                                    <div className="tx-popover-month-picker">
+                                      <label>Reassign to Specific Month:</label>
+                                      <input
+                                        type="month"
+                                        min={effectiveStartingMonth}
+                                        className="input input-sm"
+                                        value={tx.budget_month}
+                                        onChange={(e) =>
+                                          handleAllocateExactMonth(tx.id, e.target.value)
+                                        }
+                                      />
+                                    </div>
+
+                                    {isShifted && tx.original_date_month >= effectiveStartingMonth && (
+                                      <button
+                                        type="button"
+                                        className="tx-popover-item"
+                                        onClick={() => handleAllocateMonth(tx.id, 'reset')}
+                                      >
+                                        <RotateCcw size={13} />
+                                        Reset to Original Month ({formatShortMonth(tx.original_date_month)})
+                                      </button>
+                                    )}
+
+                                    <div className="tx-popover-divider" />
+
+                                    <button
+                                      type="button"
+                                      className="tx-popover-item tx-popover-danger"
+                                      onClick={() => handleDeleteTx(tx.id)}
+                                    >
+                                      <Trash2 size={14} />
+                                      Delete Transaction
+                                    </button>
+                                  </div>
+                                </>
                               )}
-
-                              <div className="tx-popover-divider" />
-
-                              <button
-                                type="button"
-                                className="tx-popover-item tx-popover-danger"
-                                onClick={() => handleDeleteTx(tx.id)}
-                              >
-                                <Trash2 size={14} />
-                                Delete Transaction
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </>
           );
@@ -4468,14 +4425,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             onClick={(e) => e.stopPropagation()}
           >
             <div className="finance-modal-header">
-              <div>
-                <h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <h3 style={{ margin: 0 }}>
                   <Calendar size={18} style={{ verticalAlign: 'middle', marginRight: '0.4rem' }} />
-                  Budget Period & Historical Month Comparison
+                  Budget Period
                 </h3>
-                <p className="text-muted">
-                  {formatMonthLabel(effectiveStartingMonth)} is your starting point (changeable in Settings). Switch your active budget month or compare monthly income, spending, and subscription changes forward.
-                </p>
+                <InfoTip
+                  text={`${formatMonthLabel(effectiveStartingMonth)} is your starting point (changeable in Settings). Switch your active budget month or compare monthly income, spending, and subscription changes forward.`}
+                />
               </div>
               <button
                 type="button"
@@ -4513,16 +4470,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   </div>
 
                   <div className="month-selector-controls">
-                    {summary.previous_month >= effectiveStartingMonth && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setSelectedMonth(summary.previous_month)}
-                      >
-                        <ChevronLeft size={16} /> {formatShortMonth(summary.previous_month)}
-                      </button>
-                    )}
-
                     <input
                       type="month"
                       min={effectiveStartingMonth}
@@ -4534,14 +4481,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         }
                       }}
                     />
-
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setSelectedMonth(summary.next_month)}
-                    >
-                      {formatShortMonth(summary.next_month)} <ChevronRight size={16} />
-                    </button>
                   </div>
                 </div>
 
@@ -4571,7 +4510,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
               <div style={{ marginTop: '1.1rem' }}>
                 <h4 style={{ marginBottom: '0.65rem' }}>
-                  Monthly Archive ({filteredHistoryList.length} Month{filteredHistoryList.length === 1 ? '' : 's'})
+                  Monthly Archive
                 </h4>
                 {!filteredHistoryList.length ? (
                   <div className="empty-state-box">
@@ -4705,23 +4644,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                               }}
                             />
                           </div>
-
-                          <div className="history-cat-breakdown">
-                            {(mItem.categories || []).slice(0, 5).map((c) => (
-                              <div key={c.category} className="history-cat-row">
-                                <span>
-                                  {c.category}
-                                  {!c.is_active && (
-                                    <small className="text-muted"> (Inactive)</small>
-                                  )}
-                                </span>
-                                <span className="font-mono">
-                                  <strong>${Number(c.spent).toFixed(0)}</strong> / $
-                                  {Number(c.monthly_limit).toFixed(0)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
                         </div>
                       );
                     })}
@@ -4786,8 +4708,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               {plaidBanner && (
                 <div
                   className={`alert ${plaidBanner.type === 'error'
-                      ? 'alert-error'
-                      : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
+                    ? 'alert-error'
+                    : (plaidBanner.type === 'info' ? 'alert-info' : 'alert-success')
                     }`}
                   style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}
                 >
@@ -6465,10 +6387,10 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                           </button>
                           <strong
                             className={`font-mono ${inc.income_type === 'return'
-                                ? 'text-cyan'
-                                : isEarned
-                                  ? 'text-green'
-                                  : 'text-muted'
+                              ? 'text-cyan'
+                              : isEarned
+                                ? 'text-green'
+                                : 'text-muted'
                               }`}
                           >
                             {isEarned ? '+' : ''}$
@@ -6850,7 +6772,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     splitSaving ||
                     Math.abs(
                       Number(splittingTx.amount || 0) -
-                        splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+                      splitRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
                     ) > 0.01
                   }
                 >
@@ -6883,8 +6805,8 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     className="text-cyan"
                   />
                   {editingNoteTx.notes &&
-                  editingNoteTx.notes.trim() &&
-                  editingNoteTx.notes.trim() !== 'Synced from Plaid'
+                    editingNoteTx.notes.trim() &&
+                    editingNoteTx.notes.trim() !== 'Synced from Plaid'
                     ? 'Edit Transaction Note'
                     : 'Add Transaction Note'}
                 </h3>
@@ -6942,19 +6864,19 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               >
                 {Boolean(
                   editingNoteTx.notes &&
-                    editingNoteTx.notes.trim() &&
-                    editingNoteTx.notes.trim() !== 'Synced from Plaid'
+                  editingNoteTx.notes.trim() &&
+                  editingNoteTx.notes.trim() !== 'Synced from Plaid'
                 ) && (
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    style={{ marginRight: 'auto' }}
-                    onClick={handleClearNote}
-                    disabled={noteSaving}
-                  >
-                    Clear Note
-                  </button>
-                )}
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      style={{ marginRight: 'auto' }}
+                      onClick={handleClearNote}
+                      disabled={noteSaving}
+                    >
+                      Clear Note
+                    </button>
+                  )}
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
