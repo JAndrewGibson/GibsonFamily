@@ -237,7 +237,10 @@ GibsonFamily/
   - **Transaction Date Prioritization**: Uses `authorized_date` falling back to `date` so pending swipes and settled charges reflect the actual purchase date.
   - **Public Webhook Receiver (`POST /api/finance/plaid/webhook`)**: Receives Plaid's asynchronous `TRANSACTIONS` updates (`SYNC_UPDATES_AVAILABLE`) and `ITEM` errors, triggering background syncs and real-time partner notification via `/api/sync-pulse`.
 
-### 3.7 Splendor Digital Board Game & Match Analytics (`splendor_games` table, `SplendorModule.jsx`)
+### 3.7 Games Parent Module & Splendor Digital Board Game (`module_registry.parent_id`, `splendor_games` table, `SplendorModule.jsx`)
+- **Games Module & Individual Game Sub-Modules (`module_registry`)**:
+  - The sidebar displays **"Games"** (`id = "games"`, `icon = "gamepad-2"`).
+  - In **Settings -> Installed Application Modules**, **Games** is the parent module (able to be shown or hidden from the sidebar), and each individual game (currently **Splendor**, `id = "splendor"`, `parent_id = "games"`) is listed inside the **Games** card as its own module that can be individually activated or disabled.
 - **90 Development Cards & 10 Noble Tiles (`backend/modules/splendor.py`)**:
   - Includes all 90 official Splendor development cards across 3 tiers (**40 Tier I**, **30 Tier II**, **20 Tier III**) and 5 gem bonus types (**Diamond**, **Sapphire**, **Emerald**, **Ruby**, **Onyx**), plus **10 Noble tiles** (3 selected per 2-player match) and **Gold** wild tokens.
   - Decluttered, mobile-first layout using `InfoTip` (`"i"`) tooltips instead of long explanatory paragraphs, plus an interactive 5-step guided tutorial (auto-opened on first visit with a Skip button, or launched anytime via the top-right `☰` hamburger menu) that highlights each board section.

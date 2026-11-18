@@ -984,30 +984,98 @@ export function ModuleManagerSubModule({
 
       <h3>Installed Application Modules</h3>
       <div className="plans-grid">
-        {modules.map((mod) => (
-          <div key={mod.id} className="card">
-            <div className="plan-card-header">
-              <div>
-                <span className="pill pill-outline">{mod.category}</span>
-                <h3>{mod.name}</h3>
+        {modules
+          .filter((mod) => !mod.parent_id)
+          .map((mod) => {
+            const childModules = modules.filter((c) => c.parent_id === mod.id);
+            return (
+              <div key={mod.id} className="card">
+                <div className="plan-card-header">
+                  <div>
+                    <span className="pill pill-outline">{mod.category}</span>
+                    <h3>{mod.name}</h3>
+                  </div>
+                  <span className={`pill ${mod.enabled ? 'pill-green' : 'pill-amber'}`}>
+                    {mod.enabled ? 'Active' : 'Disabled'}
+                  </span>
+                </div>
+                <p className="text-muted">{mod.description}</p>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => onToggleModule(mod.id)}
+                  >
+                    <Layers size={15} />
+                    {mod.enabled ? 'Hide from Sidebar' : 'Enable in Sidebar'}
+                  </button>
+                </div>
+
+                {childModules.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: '1rem',
+                      paddingTop: '0.85rem',
+                      borderTop: '1px solid var(--border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.55rem',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
+                      Individual {mod.name} Modules
+                    </span>
+                    {childModules.map((sub) => (
+                      <div
+                        key={sub.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '0.65rem',
+                          padding: '0.55rem 0.7rem',
+                          borderRadius: '8px',
+                          background: 'var(--bg-panel)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <strong style={{ fontSize: '0.88rem' }}>{sub.name}</strong>
+                            <span
+                              className={`pill ${sub.enabled ? 'pill-green' : 'pill-amber'}`}
+                              style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}
+                            >
+                              {sub.enabled ? 'Active' : 'Disabled'}
+                            </span>
+                          </div>
+                          <small className="text-muted" style={{ display: 'block', fontSize: '0.75rem' }}>
+                            {sub.description}
+                          </small>
+                        </div>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${sub.enabled ? 'btn-secondary' : 'btn-primary'}`}
+                          onClick={() => onToggleModule(sub.id)}
+                          style={{ flexShrink: 0 }}
+                        >
+                          {sub.enabled ? 'Disable' : 'Activate'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <span className={`pill ${mod.enabled ? 'pill-green' : 'pill-amber'}`}>
-                {mod.enabled ? 'Active' : 'Disabled'}
-              </span>
-            </div>
-            <p className="text-muted">{mod.description}</p>
-            <div className="form-actions">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => onToggleModule(mod.id)}
-              >
-                <Layers size={15} />
-                {mod.enabled ? 'Hide from Sidebar' : 'Enable in Sidebar'}
-              </button>
-            </div>
-          </div>
-        ))}
+            );
+          })}
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import {
   CheckSquare,
   FileHeart,
   Fingerprint,
+  Gamepad2,
   Gem,
   Handshake,
   Home,
@@ -48,6 +49,7 @@ const ICON_MAP = {
   'file-heart': FileHeart,
   'check-square': CheckSquare,
   'shopping-cart': ShoppingCart,
+  'gamepad-2': Gamepad2,
   gem: Gem,
 };
 
@@ -84,10 +86,10 @@ export default function App() {
       return 'finance';
     }
     const fromCookie = getCookie('gibson_active_tab', '');
-    if (fromCookie) return fromCookie;
+    if (fromCookie) return fromCookie === 'splendor' ? 'games' : fromCookie;
     try {
       const fromStorage = window.localStorage.getItem('gibson_active_tab');
-      if (fromStorage) return fromStorage;
+      if (fromStorage) return fromStorage === 'splendor' ? 'games' : fromStorage;
     } catch {
       // ignore
     }
@@ -95,10 +97,11 @@ export default function App() {
   });
 
   const setActiveTab = (tab) => {
-    setActiveTabState(tab);
-    setCookie('gibson_active_tab', tab, 365);
+    const normalized = tab === 'splendor' ? 'games' : tab;
+    setActiveTabState(normalized);
+    setCookie('gibson_active_tab', normalized, 365);
     try {
-      window.localStorage.setItem('gibson_active_tab', tab);
+      window.localStorage.setItem('gibson_active_tab', normalized);
     } catch {
       // ignore
     }
@@ -377,7 +380,9 @@ export default function App() {
     );
   }
 
-  const enabledModules = modules.filter((m) => m.enabled);
+  const enabledModules = modules.filter((m) => m.enabled && !m.parent_id);
+  const childGameModules = modules.filter((m) => m.parent_id === 'games');
+  const activeGameModules = childGameModules.filter((m) => m.enabled);
 
   const getBadgeForModule = (modId) => {
     switch (modId) {
@@ -391,8 +396,11 @@ export default function App() {
         return overview.unchecked_groceries;
       case 'admin_docs':
         return overview.active_admin_records;
+      case 'games':
       case 'splendor':
-        return overview.splendor_my_turn || 0;
+        return activeGameModules.some((g) => g.id === 'splendor')
+          ? overview.splendor_my_turn || 0
+          : 0;
       default:
         return 0;
     }
@@ -407,7 +415,8 @@ export default function App() {
     groceries: 'Groceries',
     admin_docs: 'Medical',
     todos: 'To Do',
-    splendor: 'Splendor',
+    games: 'Games',
+    splendor: 'Games',
   };
 
   const dashboardModule = enabledModules.find((m) => m.id === 'dashboard');
@@ -688,13 +697,32 @@ export default function App() {
                   syncVersion={syncVersion}
                 />
               )}
-              {activeTab === 'splendor' && (
-                <SplendorModule
-                  activePartner={activePartner}
-                  partners={partners}
-                  onDataChanged={loadCoreState}
-                  syncVersion={syncVersion}
-                />
+              {(activeTab === 'games' || activeTab === 'splendor') && (
+                activeGameModules.some((g) => g.id === 'splendor') ? (
+                  <SplendorModule
+                    activePartner={activePartner}
+                    partners={partners}
+                    onDataChanged={loadCoreState}
+                    syncVersion={syncVersion}
+                  />
+                ) : (
+                  <div className="module-container">
+                    <div className="card" style={{ textAlign: 'center', padding: '2rem 1.25rem' }}>
+                      <Gamepad2 size={32} style={{ color: 'var(--primary)', marginBottom: '0.5rem' }} />
+                      <h3>No Individual Games Activated</h3>
+                      <p className="text-muted" style={{ marginTop: '0.35rem', marginBottom: '1rem' }}>
+                        Enable Splendor under the Games module in Settings to play!
+                      </p>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => selectTab('modules_registry')}
+                      >
+                        <Settings size={15} /> Open Settings
+                      </button>
+                    </div>
+                  </div>
+                )
               )}
               {activeTab === 'modules_registry' && (
                 <ModuleManagerSubModule

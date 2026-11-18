@@ -786,7 +786,7 @@ def create_new_splendor_game():
         notif_type="splendor_new_game",
         title=f"{actor['name']} started a new game of Splendor!{wager_msg}",
         message="Open the Splendor board to collect gems, reserve cards, and race to 15 Prestige Points.",
-        link_tab="splendor",
+        link_tab="games",
         reference_id=game_id,
     )
 
@@ -1143,7 +1143,7 @@ def play_splendor_turn(game_id: int):
             notif_type="splendor_game_over",
             title="Splendor Game Finished!",
             message=action_summary,
-            link_tab="splendor",
+            link_tab="games",
             reference_id=game_id,
         )
 
@@ -1284,7 +1284,7 @@ def forfeit_splendor_game(game_id: int):
         notif_type="splendor_forfeit",
         title=f"{actor['name']} forfeited Splendor — You Win!",
         message=f"You won Game #{game_id}!{wager_note}",
-        link_tab="splendor",
+        link_tab="games",
         reference_id=game_id,
     )
 
@@ -1356,7 +1356,7 @@ def bump_partner_turn(game_id: int):
         notif_type="splendor_bump",
         title=f"💎 {actor['name']} bumped you in Splendor!",
         message=f"It's your turn in Game #{game_id} ({row['player1_points']} - {row['player2_points']} pts). Tap to play your move!",
-        link_tab="splendor",
+        link_tab="games",
         reference_id=game_id,
     )
 

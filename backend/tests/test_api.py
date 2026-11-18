@@ -2492,8 +2492,11 @@ def test_facelift_modules_household_and_spending_money_sync(client):
         "Groceries",
         "Medical",
         "To Do",
+        "Games",
         "Splendor",
     ]
+    splendor_mod = next(m for m in mods if m["id"] == "splendor")
+    assert splendor_mod["parent_id"] == "games"
 
     # 2. Verify Spending Money budget was created from partner profile
     summary = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
@@ -2609,7 +2612,7 @@ def test_splendor_game_turns_bump_cooldown_forfeit_and_analytics(client):
 
     # Verify Partner 1 received the bump notification
     p1_notifs = client.get("/api/notifications", headers=auth_p1).get_json()["notifications"]
-    assert any(n["notif_type"] == "splendor_bump" and n["link_tab"] == "splendor" for n in p1_notifs)
+    assert any(n["notif_type"] == "splendor_bump" and n["link_tab"] == "games" for n in p1_notifs)
 
     # 4. Partner 1 takes 3 different gems
     t1_res = client.post(

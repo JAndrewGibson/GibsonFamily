@@ -307,7 +307,8 @@ CREATE TABLE IF NOT EXISTS module_registry (
     category TEXT NOT NULL,
     icon TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    parent_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS todos (
@@ -390,6 +391,7 @@ DEFAULT_MODULES = [
         "layout-dashboard",
         1,
         0,
+        None,
     ),
     (
         "finance",
@@ -399,6 +401,7 @@ DEFAULT_MODULES = [
         "wallet",
         1,
         1,
+        None,
     ),
     (
         "requests",
@@ -408,6 +411,7 @@ DEFAULT_MODULES = [
         "handshake",
         1,
         2,
+        None,
     ),
     (
         "savings",
@@ -417,6 +421,7 @@ DEFAULT_MODULES = [
         "piggy-bank",
         1,
         3,
+        None,
     ),
     (
         "future_plans",
@@ -426,6 +431,7 @@ DEFAULT_MODULES = [
         "calendar-clock",
         1,
         4,
+        None,
     ),
     (
         "groceries",
@@ -435,6 +441,7 @@ DEFAULT_MODULES = [
         "shopping-cart",
         1,
         5,
+        None,
     ),
     (
         "admin_docs",
@@ -444,6 +451,7 @@ DEFAULT_MODULES = [
         "file-heart",
         1,
         6,
+        None,
     ),
     (
         "todos",
@@ -453,15 +461,27 @@ DEFAULT_MODULES = [
         "check-square",
         1,
         7,
+        None,
+    ),
+    (
+        "games",
+        "Games",
+        "Two-player digital board games, Spending Money wagers, turn notifications, and match analytics.",
+        "Admin",
+        "gamepad-2",
+        1,
+        8,
+        None,
     ),
     (
         "splendor",
         "Splendor",
-        "2-player digital board game with 90 development cards, 10 nobles, 24h turn bump notifications, and match analytics.",
+        "2-player digital board game with 90 development cards, 10 nobles, Spending Money wagers, 24h turn bump notifications, and match analytics.",
         "Games",
         "gem",
         1,
-        8,
+        9,
+        "games",
     ),
 ]
 
@@ -710,6 +730,10 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     if "wager_settled" not in sp_cols:
         db.execute("ALTER TABLE splendor_games ADD COLUMN wager_settled INTEGER NOT NULL DEFAULT 0")
 
+    mr_cols = [r["name"] for r in db.execute("PRAGMA table_info(module_registry)").fetchall()]
+    if "parent_id" not in mr_cols:
+        db.execute("ALTER TABLE module_registry ADD COLUMN parent_id TEXT")
+
     # One-time migration: deduplicate duplicate Plaid accounts
     cleanup_row = db.execute(
         "SELECT value FROM app_settings WHERE key = 'november_start_and_dedup_v1'"
@@ -759,8 +783,8 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
     if module_count == 0:
         db.executemany(
             """
-            INSERT INTO module_registry (id, name, description, category, icon, enabled, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO module_registry (id, name, description, category, icon, enabled, sort_order, parent_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             DEFAULT_MODULES,
         )
@@ -770,15 +794,15 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
             if not existing_mod:
                 db.execute(
                     """
-                    INSERT INTO module_registry (id, name, description, category, icon, enabled, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO module_registry (id, name, description, category, icon, enabled, sort_order, parent_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     mod,
                 )
             else:
                 db.execute(
-                    "UPDATE module_registry SET name = ?, category = ?, sort_order = ?, icon = ? WHERE id = ?",
-                    (mod[1], mod[3], mod[6], mod[4], mod[0]),
+                    "UPDATE module_registry SET name = ?, description = ?, category = ?, sort_order = ?, icon = ?, parent_id = ? WHERE id = ?",
+                    (mod[1], mod[2], mod[3], mod[6], mod[4], mod[7], mod[0]),
                 )
     defaults = {
         "onboarding_completed": "0",
