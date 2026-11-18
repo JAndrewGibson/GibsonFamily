@@ -346,6 +346,35 @@ CREATE TABLE IF NOT EXISTS admin_records (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (owner_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS splendor_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'active',
+    player1_id INTEGER NOT NULL,
+    player2_id INTEGER NOT NULL,
+    current_turn_partner_id INTEGER,
+    winner_partner_id INTEGER,
+    forfeited_by_partner_id INTEGER,
+    player1_points INTEGER NOT NULL DEFAULT 0,
+    player2_points INTEGER NOT NULL DEFAULT 0,
+    player1_cards_played INTEGER NOT NULL DEFAULT 0,
+    player2_cards_played INTEGER NOT NULL DEFAULT 0,
+    player1_nobles_count INTEGER NOT NULL DEFAULT 0,
+    player2_nobles_count INTEGER NOT NULL DEFAULT 0,
+    turns_count INTEGER NOT NULL DEFAULT 0,
+    game_state TEXT NOT NULL DEFAULT '{}',
+    last_bump_at TEXT,
+    last_bump_by_partner_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    FOREIGN KEY (player1_id) REFERENCES partners (id) ON DELETE CASCADE,
+    FOREIGN KEY (player2_id) REFERENCES partners (id) ON DELETE CASCADE,
+    FOREIGN KEY (current_turn_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (winner_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (forfeited_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (last_bump_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL
+);
 """
 
 
@@ -421,6 +450,15 @@ DEFAULT_MODULES = [
         "check-square",
         1,
         7,
+    ),
+    (
+        "splendor",
+        "Splendor",
+        "2-player digital board game with 90 development cards, 10 nobles, 24h turn bump notifications, and match analytics.",
+        "Games",
+        "gem",
+        1,
+        8,
     ),
 ]
 
@@ -621,6 +659,39 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
             notes TEXT,
             FOREIGN KEY (closed_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
             FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS splendor_games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT NOT NULL DEFAULT 'active',
+            player1_id INTEGER NOT NULL,
+            player2_id INTEGER NOT NULL,
+            current_turn_partner_id INTEGER,
+            winner_partner_id INTEGER,
+            forfeited_by_partner_id INTEGER,
+            player1_points INTEGER NOT NULL DEFAULT 0,
+            player2_points INTEGER NOT NULL DEFAULT 0,
+            player1_cards_played INTEGER NOT NULL DEFAULT 0,
+            player2_cards_played INTEGER NOT NULL DEFAULT 0,
+            player1_nobles_count INTEGER NOT NULL DEFAULT 0,
+            player2_nobles_count INTEGER NOT NULL DEFAULT 0,
+            turns_count INTEGER NOT NULL DEFAULT 0,
+            game_state TEXT NOT NULL DEFAULT '{}',
+            last_bump_at TEXT,
+            last_bump_by_partner_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT,
+            FOREIGN KEY (player1_id) REFERENCES partners (id) ON DELETE CASCADE,
+            FOREIGN KEY (player2_id) REFERENCES partners (id) ON DELETE CASCADE,
+            FOREIGN KEY (current_turn_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+            FOREIGN KEY (winner_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+            FOREIGN KEY (forfeited_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+            FOREIGN KEY (last_bump_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL
         )
         """
     )

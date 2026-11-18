@@ -10,6 +10,7 @@ from backend.modules.auth_webauthn import auth_bp
 from backend.modules.finance import finance_bp
 from backend.modules.requests_and_plans import requests_bp
 from backend.modules.couples_hub import hub_bp
+from backend.modules.splendor import splendor_bp
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -139,6 +140,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.register_blueprint(finance_bp)
     app.register_blueprint(requests_bp)
     app.register_blueprint(hub_bp)
+    app.register_blueprint(splendor_bp)
 
     @app.route("/api/health", methods=["GET"])
     def health():
@@ -166,6 +168,10 @@ def create_app(test_config: dict | None = None) -> Flask:
             "SELECT COUNT(*) AS cnt FROM notifications WHERE recipient_partner_id = ? AND is_read = 0",
             (actor["id"],),
         ).fetchone()["cnt"]
+        splendor_my_turn = db.execute(
+            "SELECT COUNT(*) AS cnt FROM splendor_games WHERE status = 'active' AND current_turn_partner_id = ?",
+            (actor["id"],),
+        ).fetchone()["cnt"]
         sv_row = db.execute("SELECT value FROM app_settings WHERE key = 'state_version'").fetchone()
         state_version = int(sv_row["value"]) if sv_row and str(sv_row["value"]).isdigit() else 1
         return {
@@ -178,6 +184,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "active_admin_records": active_admin,
             "future_goals": future_goals,
             "unread_notifications": unread_notifs,
+            "splendor_my_turn": splendor_my_turn,
         }
 
     @app.route("/api/overview", methods=["GET"])

@@ -5584,3 +5584,870 @@ html[data-theme='light'] .dashboard-month-pill {
   right: 0;
 }
 
+/* =========================================================
+   Splendor Digital Board Game & Analytics Module
+   ========================================================= */
+
+.splendor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.splendor-tab-switcher {
+  display: flex;
+  gap: 0.4rem;
+  background: var(--bg-panel);
+  padding: 0.25rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.splendor-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.splendor-alert-error {
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+html[data-theme='light'] .splendor-alert-error {
+  color: #b91c1c;
+}
+
+.splendor-alert-success {
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.38);
+  color: #6ee7b7;
+}
+
+html[data-theme='light'] .splendor-alert-success {
+  color: #047857;
+}
+
+.splendor-turn-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.splendor-turn-banner.my-turn {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), var(--bg-card));
+}
+
+.splendor-turn-banner.partner-turn {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.splendor-turn-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.splendor-turn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.splendor-turn-pill.my-turn-pill {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
+html[data-theme='light'] .splendor-turn-pill.my-turn-pill {
+  color: #047857;
+}
+
+.splendor-turn-pill.waiting-pill {
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+html[data-theme='light'] .splendor-turn-pill.waiting-pill {
+  color: #4338ca;
+}
+
+.splendor-game-meta {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.splendor-final-round-tag {
+  color: var(--amber);
+  font-size: 0.78rem;
+}
+
+.splendor-turn-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.splendor-forfeit-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+}
+
+.splendor-new-game-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.splendor-new-game-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.splendor-first-turn-select {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.splendor-first-turn-select select {
+  padding: 0.4rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-main);
+}
+
+.splendor-players-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 1rem;
+}
+
+.splendor-player-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.splendor-player-card.active-turn-player {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.35);
+}
+
+.splendor-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.splendor-player-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.splendor-mini-turn-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--primary);
+}
+
+.splendor-winner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+html[data-theme='light'] .splendor-winner-badge {
+  color: #b45309;
+}
+
+.splendor-player-score-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.splendor-prestige-pill,
+.splendor-cards-played-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.splendor-prestige-pill strong {
+  font-size: 1rem;
+  color: var(--amber);
+}
+
+.splendor-player-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.splendor-resource-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.splendor-resource-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.splendor-gem-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.splendor-gem-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.splendor-visited-nobles-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.splendor-visited-noble-chip {
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(168, 85, 247, 0.16);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.splendor-reserved-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.splendor-mini-reserved-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.splendor-mini-reserved-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.splendor-mini-reserved-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+/* Bank & Gem Selection */
+.splendor-bank-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.splendor-take-mode-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.splendor-bank-gems-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  gap: 0.6rem;
+}
+
+.splendor-bank-gem-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.splendor-bank-gem-tile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.splendor-bank-gem-tile.selected {
+  background: rgba(99, 102, 241, 0.16);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.35);
+}
+
+.splendor-gem-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.splendor-bank-gem-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.splendor-bank-gem-meta strong {
+  font-size: 0.82rem;
+}
+
+.splendor-bank-gem-meta span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.splendor-selected-gem-tag {
+  margin-left: auto;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+}
+
+.splendor-discard-box {
+  margin-top: 0.85rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.splendor-discard-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.splendor-discard-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  background: var(--bg-card);
+  padding: 0.3rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.splendor-bank-submit-bar {
+  margin-top: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Nobles */
+.splendor-section-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.splendor-nobles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 0.75rem;
+}
+
+.splendor-noble-tile {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.12), var(--bg-panel));
+  border: 1px solid rgba(168, 85, 247, 0.38);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.splendor-noble-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.splendor-noble-pts {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+  font-weight: 800;
+  font-size: 0.76rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+}
+
+html[data-theme='light'] .splendor-noble-pts {
+  color: #b45309;
+}
+
+.splendor-noble-title {
+  font-size: 0.88rem;
+}
+
+/* Development Cards Market (Tier 3, Tier 2, Tier 1) */
+.splendor-tier-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding-top: 0.85rem;
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.splendor-tier-section:first-of-type {
+  margin-top: 0.25rem;
+}
+
+.splendor-tier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.splendor-tier-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.splendor-tier-badge {
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.18rem 0.55rem;
+  border-radius: 6px;
+  letter-spacing: 0.05em;
+}
+
+.splendor-tier-badge.tier-3 {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.splendor-tier-badge.tier-2 {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.splendor-tier-badge.tier-1 {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+}
+
+html[data-theme='light'] .splendor-tier-badge.tier-3 {
+  color: #7e22ce;
+}
+html[data-theme='light'] .splendor-tier-badge.tier-2 {
+  color: #b45309;
+}
+html[data-theme='light'] .splendor-tier-badge.tier-1 {
+  color: #047857;
+}
+
+.splendor-deck-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.splendor-deck-count-pill {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.splendor-cards-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 0.75rem;
+}
+
+.splendor-dev-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.6rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.splendor-dev-card.card-affordable {
+  border-color: rgba(16, 185, 129, 0.65);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.25);
+}
+
+.splendor-dev-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.splendor-dev-card-points {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.splendor-card-bonus-pill {
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 0.18rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.splendor-dev-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.splendor-dev-card-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.splendor-dev-card-subtitle {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.splendor-dev-card-costs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.splendor-cost-header {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.splendor-card-cost-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.splendor-cost-chip,
+.splendor-cost-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.splendor-cost-number.req-met {
+  outline: 2px solid var(--green);
+}
+
+.splendor-dev-card-actions {
+  display: flex;
+  gap: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+}
+
+.splendor-dev-card-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* Turn Log & Analytics */
+.splendor-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.splendor-log-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.splendor-log-turn {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--primary);
+  min-width: 52px;
+}
+
+.splendor-analytics-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.splendor-partner-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.splendor-partner-stat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.splendor-winrate-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+html[data-theme='light'] .splendor-winrate-badge {
+  color: #047857;
+}
+
+.splendor-stat-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 0.6rem;
+}
+
+.splendor-stat-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.splendor-stat-box span {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+}
+
+.splendor-stat-box strong {
+  font-size: 0.98rem;
+}
+
+.splendor-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.splendor-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.splendor-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.splendor-status-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
+.splendor-status-pill.status-completed {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+
+.splendor-status-pill.status-forfeited {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+.splendor-status-pill.status-active {
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+}
+
+.splendor-history-players {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.splendor-history-player-col {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+}
+
+.splendor-history-cards-tag {
+  font-size: 0.75rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .splendor-cards-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .splendor-bank-gems-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .splendor-turn-banner-actions,
+  .splendor-new-game-controls {
+    width: 100%;
+  }
+
+  .splendor-turn-banner-actions .btn,
+  .splendor-new-game-controls .btn {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .splendor-cards-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+

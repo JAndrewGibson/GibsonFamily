@@ -51,7 +51,8 @@ GibsonFamily/
 │   │   ├── auth_webauthn.py          # Partner auth, rate-limited login, WebAuthn Passkeys & notifications API
 │   │   ├── finance.py                # Plaid Production/Sandbox API, per-month budgets, history & transactions
 │   │   ├── requests_and_plans.py     # Partner purchase requests, approvals, timelines & future purchases
-│   │   └── couples_hub.py            # Module registry, medical/admin records, shared todos & groceries
+│   │   ├── couples_hub.py            # Module registry, medical/admin records, shared todos & groceries
+│   │   └── splendor.py               # 2-player digital Splendor board game (90 cards, 10 nobles, 24h bump & stats)
 │   └── tests/
 │       └── test_api.py               # Automated pytest suite
 └── frontend/
@@ -77,7 +78,8 @@ GibsonFamily/
             ├── FuturePurchasesModule.jsx # Shared future purchase savings roadmap
             ├── FinanceModule.jsx     # Plaid link, income & fluctuation tracker, monthly budgets & ledger
             ├── SavingsModule.jsx     # Long-term Savings & Brokerage analytics (MoM, YoY, per-account & combined graphs, savings spend & transfers)
-            └── CouplesHubModule.jsx  # Medical/admin docs, shared to-dos, groceries & module manager
+            ├── CouplesHubModule.jsx  # Medical/admin docs, shared to-dos, groceries & module manager
+            └── SplendorModule.jsx    # Digital Splendor board game (3 tiers, 90 cards, 10 nobles, 24h turn bump & analytics)
 ```
 
 ---
@@ -234,6 +236,17 @@ GibsonFamily/
   - **Deduplication Account Mapping**: When duplicate Plaid accounts sharing `(institution_name, mask, subtype, name)` are linked, their Plaid account IDs map directly to `account_id_map` so transactions are never dropped.
   - **Transaction Date Prioritization**: Uses `authorized_date` falling back to `date` so pending swipes and settled charges reflect the actual purchase date.
   - **Public Webhook Receiver (`POST /api/finance/plaid/webhook`)**: Receives Plaid's asynchronous `TRANSACTIONS` updates (`SYNC_UPDATES_AVAILABLE`) and `ITEM` errors, triggering background syncs and real-time partner notification via `/api/sync-pulse`.
+
+### 3.7 Splendor Digital Board Game & Match Analytics (`splendor_games` table, `SplendorModule.jsx`)
+- **90 Development Cards & 10 Noble Tiles (`backend/modules/splendor.py`)**:
+  - Includes all 90 official Splendor development cards across 3 tiers (**40 Tier I**, **30 Tier II**, **20 Tier III**) and 5 gem bonus colors (**White/Diamond**, **Blue/Sapphire**, **Green/Emerald**, **Red/Ruby**, **Black/Onyx**), plus **10 Noble tiles** (3 selected per 2-player match) and **Gold/Wild** joker tokens.
+  - Cards cleanly display their Prestige Points, title/card type (e.g., *Diamond Mine*, *Sapphire Cutter*, *Emerald Grand Palace*), gem bonus color, and required gem cost numbers without requiring image card art.
+- **Turn Actions, 24-Hour Bump Notification & Forfeit**:
+  - Turn actions via `POST /api/splendor/<id>/turn`: take up to 3 different gem colors (`take_different`), take 2 gems of the same color when 4+ are in the bank (`take_same`), reserve a card from the board or deck for +1 Gold token (`reserve`), or purchase a development card from the board or reserved hand (`buy`), with automatic 10-token cap enforcement and Noble visit checks.
+  - **24-Hour Turn Bump (`POST /api/splendor/<id>/bump`)**: Allows the waiting partner to send a push/in-app bump notification (`notif_type = 'splendor_bump'`, `link_tab = 'splendor'`) to prompt the active player for their turn, rate-limited to **one bump every 24 hours** (`last_bump_at`).
+  - **Forfeit & New Game (`POST /api/splendor/<id>/forfeit`, `POST /api/splendor/new`)**: Partners can forfeit an active match or start a new game at any time.
+- **Database Match History & Analytics (`GET /api/splendor/state`)**:
+  - Stores every match in `splendor_games`, tracking total games played, status (`active`, `completed`, `forfeited`), `player1_cards_played`, `player2_cards_played`, `player1_points`, `player2_points`, `winner_partner_id`, and `turns_count` for head-to-head win rate and card-count analytics.
 
 ---
 

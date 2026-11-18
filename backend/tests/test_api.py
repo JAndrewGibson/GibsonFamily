@@ -2492,6 +2492,7 @@ def test_facelift_modules_household_and_spending_money_sync(client):
         "Groceries",
         "Medical",
         "To Do",
+        "Splendor",
     ]
 
     # 2. Verify Spending Money budget was created from partner profile
@@ -2532,6 +2533,136 @@ def test_facelift_modules_household_and_spending_money_sync(client):
     sum_after = client.get("/api/finance/summary?month=2026-06", headers=headers).get_json()
     assert sum_after["starting_budget_month"] == "2026-06"
     assert "2026-06" in sum_after["available_months"]
+
+
+def test_splendor_game_turns_bump_cooldown_forfeit_and_analytics(client):
+    res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {
+                    "name": "Alex",
+                    "email": "alex@splendor.local",
+                    "password": "Password123!",
+                    "monthly_fun_allowance": 200,
+                },
+                {
+                    "name": "Jordan",
+                    "email": "jordan@splendor.local",
+                    "password": "Password123!",
+                    "monthly_fun_allowance": 200,
+                },
+            ],
+        },
+    )
+    assert res.status_code == 201
+    p_data = res.get_json()
+    p1_id = p_data["partners"][0]["id"]
+    p2_id = p_data["partners"][1]["id"]
+    auth_p1 = {"Authorization": f"Bearer {p_data['token']}"}
+
+    p2_login = client.post(
+        "/api/auth/login",
+        json={"email": "jordan@splendor.local", "password": "Password123!"},
+    )
+    auth_p2 = {"Authorization": f"Bearer {p2_login.get_json()['token']}"}
+
+    # 1. Check initial state & catalog summary (90 cards, 10 nobles)
+    init_state = client.get("/api/splendor/state", headers=auth_p1).get_json()
+    assert init_state["active_game"] is None
+    assert init_state["catalog_summary"]["total_development_cards"] == 90
+    assert init_state["catalog_summary"]["tier_1_cards"] == 40
+    assert init_state["catalog_summary"]["tier_2_cards"] == 30
+    assert init_state["catalog_summary"]["tier_3_cards"] == 20
+    assert init_state["catalog_summary"]["total_nobles"] == 10
+
+    # 2. Start a new game with P1 going first
+    new_res = client.post(
+        "/api/splendor/new",
+        headers=auth_p1,
+        json={"first_turn_partner_id": p1_id},
+    )
+    assert new_res.status_code == 201
+    game = new_res.get_json()["game"]
+    game_id = game["id"]
+    assert game["status"] == "active"
+    assert game["current_turn_partner_id"] == p1_id
+    assert len(game["state"]["nobles"]) == 3
+    assert len(game["state"]["board"]["1"]) == 4
+    assert len(game["state"]["board"]["2"]) == 4
+    assert len(game["state"]["board"]["3"]) == 4
+    assert game["state"]["deck_counts"]["1"] == 36
+    assert game["state"]["deck_counts"]["2"] == 26
+    assert game["state"]["deck_counts"]["3"] == 16
+
+    # 3. Partner 2 (not their turn) sends a bump notification to Partner 1
+    bump_res = client.post(f"/api/splendor/{game_id}/bump", headers=auth_p2)
+    assert bump_res.status_code == 200
+    assert bump_res.get_json()["bumped"] is True
+    assert bump_res.get_json()["game"]["bump_available"] is False
+
+    # Second bump within 24 hours is blocked with 429 cooldown
+    bump_again = client.post(f"/api/splendor/{game_id}/bump", headers=auth_p2)
+    assert bump_again.status_code == 429
+    assert "24 hours" in bump_again.get_json()["error"]
+
+    # Verify Partner 1 received the bump notification
+    p1_notifs = client.get("/api/notifications", headers=auth_p1).get_json()["notifications"]
+    assert any(n["notif_type"] == "splendor_bump" and n["link_tab"] == "splendor" for n in p1_notifs)
+
+    # 4. Partner 1 takes 3 different gems
+    t1_res = client.post(
+        f"/api/splendor/{game_id}/turn",
+        headers=auth_p1,
+        json={"action": "take_different", "gems": ["white", "blue", "green"]},
+    )
+    assert t1_res.status_code == 200
+    g_after_t1 = t1_res.get_json()["game"]
+    assert g_after_t1["current_turn_partner_id"] == p2_id
+    assert g_after_t1["state"]["players"][str(p1_id)]["tokens"]["white"] == 1
+    assert g_after_t1["state"]["bank"]["white"] == 3
+
+    # 5. Partner 2 takes 2 red gems (4 in bank initially)
+    t2_res = client.post(
+        f"/api/splendor/{game_id}/turn",
+        headers=auth_p2,
+        json={"action": "take_same", "gem": "red"},
+    )
+    assert t2_res.status_code == 200
+    g_after_t2 = t2_res.get_json()["game"]
+    assert g_after_t2["current_turn_partner_id"] == p1_id
+    assert g_after_t2["state"]["players"][str(p2_id)]["tokens"]["red"] == 2
+    assert g_after_t2["state"]["bank"]["red"] == 2
+
+    # 6. Partner 1 reserves a card from Tier 1 board & gets 1 gold token
+    card_to_reserve = g_after_t2["state"]["board"]["1"][0]["id"]
+    t3_res = client.post(
+        f"/api/splendor/{game_id}/turn",
+        headers=auth_p1,
+        json={"action": "reserve", "card_id": card_to_reserve},
+    )
+    assert t3_res.status_code == 200
+    g_after_t3 = t3_res.get_json()["game"]
+    assert len(g_after_t3["state"]["players"][str(p1_id)]["reserved_cards"]) == 1
+    assert g_after_t3["state"]["players"][str(p1_id)]["tokens"]["gold"] == 1
+
+    # 7. Partner 2 forfeits the game -> Partner 1 wins, stats recorded
+    forfeit_res = client.post(f"/api/splendor/{game_id}/forfeit", headers=auth_p2)
+    assert forfeit_res.status_code == 200
+    f_data = forfeit_res.get_json()
+    assert f_data["game"]["status"] == "forfeited"
+    assert f_data["game"]["winner_partner_id"] == p1_id
+    assert f_data["game"]["forfeited_by_partner_id"] == p2_id
+
+    analytics = f_data["analytics"]
+    assert analytics["total_games"] == 1
+    assert analytics["completed_games_count"] == 1
+    p1_stats = next(s for s in analytics["partner_stats"] if s["partner_id"] == p1_id)
+    p2_stats = next(s for s in analytics["partner_stats"] if s["partner_id"] == p2_id)
+    assert p1_stats["wins"] == 1
+    assert p2_stats["forfeits"] == 1
+
 
 
 

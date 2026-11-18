@@ -4,6 +4,7 @@ import {
   CheckSquare,
   FileHeart,
   Fingerprint,
+  Gem,
   Handshake,
   Home,
   LayoutDashboard,
@@ -30,6 +31,7 @@ import FuturePurchasesModule from './modules/FuturePurchasesModule';
 import FinanceModule from './modules/FinanceModule';
 import SavingsModule from './modules/SavingsModule';
 import DashboardModule from './modules/DashboardModule';
+import SplendorModule from './modules/SplendorModule';
 import {
   AdminDocsSubModule,
   GroceriesSubModule,
@@ -46,6 +48,7 @@ const ICON_MAP = {
   'file-heart': FileHeart,
   'check-square': CheckSquare,
   'shopping-cart': ShoppingCart,
+  gem: Gem,
 };
 
 function formatFamilyBrand(rawName) {
@@ -388,6 +391,8 @@ export default function App() {
         return overview.unchecked_groceries;
       case 'admin_docs':
         return overview.active_admin_records;
+      case 'splendor':
+        return overview.splendor_my_turn || 0;
       default:
         return 0;
     }
@@ -402,6 +407,7 @@ export default function App() {
     groceries: 'Groceries',
     admin_docs: 'Medical',
     todos: 'To Do',
+    splendor: 'Splendor',
   };
 
   const dashboardModule = enabledModules.find((m) => m.id === 'dashboard');
@@ -678,6 +684,14 @@ export default function App() {
               {activeTab === 'groceries' && (
                 <GroceriesSubModule
                   activePartner={activePartner}
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'splendor' && (
+                <SplendorModule
+                  activePartner={activePartner}
+                  partners={partners}
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
                 />
