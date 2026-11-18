@@ -239,14 +239,18 @@ GibsonFamily/
 
 ### 3.7 Splendor Digital Board Game & Match Analytics (`splendor_games` table, `SplendorModule.jsx`)
 - **90 Development Cards & 10 Noble Tiles (`backend/modules/splendor.py`)**:
-  - Includes all 90 official Splendor development cards across 3 tiers (**40 Tier I**, **30 Tier II**, **20 Tier III**) and 5 gem bonus colors (**White/Diamond**, **Blue/Sapphire**, **Green/Emerald**, **Red/Ruby**, **Black/Onyx**), plus **10 Noble tiles** (3 selected per 2-player match) and **Gold/Wild** joker tokens.
-  - Cards cleanly display their Prestige Points, title/card type (e.g., *Diamond Mine*, *Sapphire Cutter*, *Emerald Grand Palace*), gem bonus color, and required gem cost numbers without requiring image card art.
-- **Turn Actions, 24-Hour Bump Notification & Forfeit**:
-  - Turn actions via `POST /api/splendor/<id>/turn`: take up to 3 different gem colors (`take_different`), take 2 gems of the same color when 4+ are in the bank (`take_same`), reserve a card from the board or deck for +1 Gold token (`reserve`), or purchase a development card from the board or reserved hand (`buy`), with automatic 10-token cap enforcement and Noble visit checks.
+  - Includes all 90 official Splendor development cards across 3 tiers (**40 Tier I**, **30 Tier II**, **20 Tier III**) and 5 gem bonus types (**Diamond**, **Sapphire**, **Emerald**, **Ruby**, **Onyx**), plus **10 Noble tiles** (3 selected per 2-player match) and **Gold** wild tokens.
+  - Decluttered, mobile-first layout using `InfoTip` (`"i"`) tooltips instead of long explanatory paragraphs, plus an interactive 5-step guided tutorial (auto-opened on first visit with a Skip button, or launched anytime via the top-right `☰` hamburger menu) that highlights each board section.
+- **Spending Money Wagers (Current Month Only)**:
+  - When starting a new game (`POST /api/splendor/new`), players can optionally wager an amount (`wager_amount`) from each partner's current-month `"{user}'s Spending Money"` budget (`wager_month`).
+  - Upon winning (by reaching 15+ Prestige Points or opponent forfeit), `_settle_wager_for_current_month()` increases the winner's `"{user}'s Spending Money"` limit in `monthly_budgets` by `wager_amount` and decreases the loser's by `wager_amount` strictly for `wager_month` (materializing `next_ym` from the baseline first so future months remain unaffected).
+- **Turn Actions, Celebratory Screen Animations, 24-Hour Bump Notification & Forfeit**:
+  - Turn actions via `POST /api/splendor/<id>/turn`: take up to 3 different gems (`take_different`), take 2 of the same gem when 4+ are in the bank (`take_same`), reserve a card from the board or deck for +1 Gold token (`reserve`), or purchase a development card from the board or reserved hand (`buy`), with automatic 10-token cap enforcement and Noble visit checks.
+  - Triggers celebratory full-screen particle/banner animations when buying a development card, attracting a visiting Noble, or winning the match.
   - **24-Hour Turn Bump (`POST /api/splendor/<id>/bump`)**: Allows the waiting partner to send a push/in-app bump notification (`notif_type = 'splendor_bump'`, `link_tab = 'splendor'`) to prompt the active player for their turn, rate-limited to **one bump every 24 hours** (`last_bump_at`).
   - **Forfeit & New Game (`POST /api/splendor/<id>/forfeit`, `POST /api/splendor/new`)**: Partners can forfeit an active match or start a new game at any time.
 - **Database Match History & Analytics (`GET /api/splendor/state`)**:
-  - Stores every match in `splendor_games`, tracking total games played, status (`active`, `completed`, `forfeited`), `player1_cards_played`, `player2_cards_played`, `player1_points`, `player2_points`, `winner_partner_id`, and `turns_count` for head-to-head win rate and card-count analytics.
+  - Stores every match in `splendor_games`, tracking total games played, status (`active`, `completed`, `forfeited`), `player1_cards_played`, `player2_cards_played`, `player1_points`, `player2_points`, `winner_partner_id`, `wager_amount`, `net_wager_won`, and `turns_count` for head-to-head win rate and card-count analytics.
 
 ---
 

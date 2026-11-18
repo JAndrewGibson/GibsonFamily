@@ -1,8 +1,15 @@
 import json
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from flask import Blueprint, g, jsonify, request
 from backend.database import create_notification, get_db
+from backend.modules.finance import (
+    _ensure_category_in_catalog,
+    _ensure_monthly_budgets_for_month,
+    _shift_year_month,
+    get_starting_budget_month,
+    resolve_partner_spending_money_category,
+)
 
 splendor_bp = Blueprint("splendor", __name__, url_prefix="/api/splendor")
 
@@ -10,12 +17,12 @@ GEM_COLORS = ["white", "blue", "green", "red", "black"]
 ALL_TOKEN_TYPES = ["white", "blue", "green", "red", "black", "gold"]
 
 GEM_LABELS = {
-    "white": "White / Diamond",
-    "blue": "Blue / Sapphire",
-    "green": "Green / Emerald",
-    "red": "Red / Ruby",
-    "black": "Black / Onyx",
-    "gold": "Gold / Wild",
+    "white": "Diamond",
+    "blue": "Sapphire",
+    "green": "Emerald",
+    "red": "Ruby",
+    "black": "Onyx",
+    "gold": "Gold",
 }
 
 CARD_TYPE_TITLES = {
@@ -172,6 +179,104 @@ RAW_NOBLES = [
 ]
 
 
+def _get_current_budget_month(db) -> str:
+    return max(get_starting_budget_month(db), date.today().strftime("%Y-%m"))
+
+
+def _get_partner_current_spending_money_limit(db, partner: dict, budget_month: str) -> tuple[str, float]:
+    """Returns (category_name, current_month_limit) for a partner's Spending Money in budget_month."""
+    _ensure_monthly_budgets_for_month(db, budget_month)
+    cat = resolve_partner_spending_money_category(db, partner["name"])
+    row = db.execute(
+        "SELECT monthly_limit, is_active FROM monthly_budgets WHERE budget_month = ? AND category = ?",
+        (budget_month, cat),
+    ).fetchone()
+    if row and row["is_active"]:
+        return cat, round(float(row["monthly_limit"] or 0.0), 2)
+    b_row = db.execute(
+        "SELECT monthly_limit FROM budgets WHERE category = ?",
+        (cat,),
+    ).fetchone()
+    if b_row:
+        return cat, round(float(b_row["monthly_limit"] or 0.0), 2)
+    return cat, round(float(partner.get("monthly_fun_allowance") or 0.0), 2)
+
+
+def _settle_wager_for_current_month(
+    db,
+    winner_id: int,
+    loser_id: int,
+    wager_amount: float,
+    wager_month: str,
+) -> dict | None:
+    """
+    Transfers `wager_amount` from the loser's Spending Money budget to the winner's
+    Spending Money budget ONLY for `wager_month` (current month).
+    """
+    wager_val = round(float(wager_amount or 0.0), 2)
+    if wager_val <= 0 or not winner_id or not loser_id or winner_id == loser_id:
+        return None
+
+    target_ym = wager_month or _get_current_budget_month(db)
+    next_ym = _shift_year_month(target_ym, 1)
+    _ensure_monthly_budgets_for_month(db, target_ym)
+    _ensure_monthly_budgets_for_month(db, next_ym)
+
+    winner_row = db.execute("SELECT * FROM partners WHERE id = ?", (winner_id,)).fetchone()
+    loser_row = db.execute("SELECT * FROM partners WHERE id = ?", (loser_id,)).fetchone()
+    if not winner_row or not loser_row:
+        return None
+
+    winner = dict(winner_row)
+    loser = dict(loser_row)
+
+    w_cat, w_old = _get_partner_current_spending_money_limit(db, winner, target_ym)
+    l_cat, l_old = _get_partner_current_spending_money_limit(db, loser, target_ym)
+
+    w_new = round(w_old + wager_val, 2)
+    l_new = round(max(0.0, l_old - wager_val), 2)
+
+    for cat_name, p_obj, new_lim in [
+        (w_cat, winner, w_new),
+        (l_cat, loser, l_new),
+    ]:
+        color = p_obj.get("avatar_color") or "#6366f1"
+        _ensure_category_in_catalog(
+            db,
+            cat_name,
+            is_preloaded=1,
+            unarchive=True,
+            allow_rollover=1,
+            color=color,
+        )
+        db.execute(
+            """
+            INSERT INTO monthly_budgets (budget_month, category, monthly_limit, color, is_active, allow_rollover)
+            VALUES (?, ?, ?, ?, 1, 1)
+            ON CONFLICT(budget_month, category) DO UPDATE SET
+                monthly_limit = excluded.monthly_limit,
+                is_active = 1,
+                allow_rollover = 1
+            """,
+            (target_ym, cat_name, new_lim, color),
+        )
+
+    return {
+        "wager_amount": wager_val,
+        "budget_month": target_ym,
+        "winner_id": winner_id,
+        "winner_name": winner["name"],
+        "winner_category": w_cat,
+        "winner_old_limit": w_old,
+        "winner_new_limit": w_new,
+        "loser_id": loser_id,
+        "loser_name": loser["name"],
+        "loser_category": l_cat,
+        "loser_old_limit": l_old,
+        "loser_new_limit": l_new,
+    }
+
+
 def _serialize_card(t):
     cid, tier, bonus, points, cost = t
     full_cost = {c: int(cost.get(c, 0)) for c in GEM_COLORS if int(cost.get(c, 0)) > 0}
@@ -201,7 +306,13 @@ CARDS_BY_ID = {c[0]: _serialize_card(c) for c in RAW_CARDS}
 NOBLES_BY_ID = {n[0]: _serialize_noble(n) for n in RAW_NOBLES}
 
 
-def _create_initial_game_state(p1_id: int, p2_id: int, first_turn_id: int) -> dict:
+def _create_initial_game_state(
+    p1_id: int,
+    p2_id: int,
+    first_turn_id: int,
+    wager_amount: float = 0.0,
+    wager_month: str = "",
+) -> dict:
     t1 = [_serialize_card(c) for c in RAW_CARDS if c[1] == 1]
     t2 = [_serialize_card(c) for c in RAW_CARDS if c[1] == 2]
     t3 = [_serialize_card(c) for c in RAW_CARDS if c[1] == 3]
@@ -236,6 +347,12 @@ def _create_initial_game_state(p1_id: int, p2_id: int, first_turn_id: int) -> di
             "nobles": [],
         }
 
+    wager_note = (
+        f" 💰 Spending Money Wager: ${wager_amount:.2f} ({wager_month})."
+        if wager_amount > 0
+        else ""
+    )
+
     return {
         # Official 2-player Splendor rules: 4 of each gem color, 5 gold jokers
         "bank": {
@@ -255,10 +372,11 @@ def _create_initial_game_state(p1_id: int, p2_id: int, first_turn_id: int) -> di
         },
         "first_player_id": first_turn_id,
         "final_round_triggered": False,
+        "wager_settlement": None,
         "move_log": [
             {
                 "turn": 0,
-                "text": "New game of Splendor started! 4 gems per color and 3 Nobles on the board (2-player rules). First to 15 Prestige Points triggers the final round.",
+                "text": f"New game of Splendor started!{wager_note}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         ],
@@ -339,6 +457,7 @@ def _sanitize_state_for_client(state: dict) -> dict:
         "players": state.get("players", {}),
         "first_player_id": state.get("first_player_id"),
         "final_round_triggered": bool(state.get("final_round_triggered", False)),
+        "wager_settlement": state.get("wager_settlement"),
         "move_log": state.get("move_log", [])[-25:],
     }
 
@@ -347,6 +466,9 @@ def _format_game_row(row, partners_by_id: dict) -> dict:
     d = dict(row)
     raw_state = json.loads(d.pop("game_state", "{}") or "{}")
     d["state"] = _sanitize_state_for_client(raw_state)
+    d["wager_amount"] = round(float(d.get("wager_amount") or 0.0), 2)
+    d["wager_month"] = d.get("wager_month") or ""
+    d["wager_settled"] = bool(d.get("wager_settled"))
     d["player1_name"] = partners_by_id.get(d["player1_id"], {}).get("name", "Player 1")
     d["player1_color"] = partners_by_id.get(d["player1_id"], {}).get("avatar_color", "#6366f1")
     d["player2_name"] = partners_by_id.get(d["player2_id"], {}).get("name", "Player 2")
@@ -361,7 +483,7 @@ def _format_game_row(row, partners_by_id: dict) -> dict:
 
     # Bump cooldown calculation (1 every 24 hours)
     bump_available = True
-    bump_Wait_seconds = 0
+    bump_wait_seconds = 0
     next_bump_at = None
     if d.get("last_bump_at"):
         try:
@@ -372,12 +494,12 @@ def _format_game_row(row, partners_by_id: dict) -> dict:
             next_dt = last_dt + timedelta(hours=24)
             if now_dt < next_dt:
                 bump_available = False
-                bump_Wait_seconds = int((next_dt - now_dt).total_seconds())
+                bump_wait_seconds = int((next_dt - now_dt).total_seconds())
                 next_bump_at = next_dt.isoformat()
         except Exception:
             pass
     d["bump_available"] = bump_available
-    d["bump_cooldown_seconds"] = bump_Wait_seconds
+    d["bump_cooldown_seconds"] = bump_wait_seconds
     d["next_bump_at"] = next_bump_at
     return d
 
@@ -391,7 +513,8 @@ def _build_analytics(db, partners: list[dict]) -> dict:
                player1_points, player2_points,
                player1_cards_played, player2_cards_played,
                player1_nobles_count, player2_nobles_count,
-               turns_count, created_at, completed_at
+               turns_count, wager_amount, wager_month, wager_settled,
+               created_at, completed_at
         FROM splendor_games
         ORDER BY id DESC
         """
@@ -420,6 +543,7 @@ def _build_analytics(db, partners: list[dict]) -> dict:
             "avg_points_per_game": 0.0,
             "high_score": 0,
             "total_nobles_visited": 0,
+            "net_wager_won": 0.0,
         }
 
     history_entries = []
@@ -436,6 +560,7 @@ def _build_analytics(db, partners: list[dict]) -> dict:
         p2_pts = int(d["player2_points"] or 0)
         p1_nobles = int(d["player1_nobles_count"] or 0)
         p2_nobles = int(d["player2_nobles_count"] or 0)
+        wager_amt = round(float(d.get("wager_amount") or 0.0), 2)
 
         total_cards_all_games += p1_cards + p2_cards
 
@@ -458,8 +583,10 @@ def _build_analytics(db, partners: list[dict]) -> dict:
                 ps["games_played"] += 1
                 if d["winner_partner_id"] == pid:
                     ps["wins"] += 1
+                    ps["net_wager_won"] = round(ps["net_wager_won"] + wager_amt, 2)
                 elif d["winner_partner_id"] is not None:
                     ps["losses"] += 1
+                    ps["net_wager_won"] = round(ps["net_wager_won"] - wager_amt, 2)
                 if d["forfeited_by_partner_id"] == pid:
                     ps["forfeits"] += 1
 
@@ -494,6 +621,9 @@ def _build_analytics(db, partners: list[dict]) -> dict:
                 else None
             ),
             "turns_count": int(d["turns_count"] or 0),
+            "wager_amount": wager_amt,
+            "wager_month": d.get("wager_month") or "",
+            "wager_settled": bool(d.get("wager_settled")),
             "created_at": d["created_at"],
             "completed_at": d["completed_at"],
         })
@@ -526,12 +656,18 @@ def _build_analytics(db, partners: list[dict]) -> dict:
 @splendor_bp.route("/state", methods=["GET"])
 def get_splendor_state():
     db = get_db()
+    current_ym = _get_current_budget_month(db)
     partners = [
         dict(r)
         for r in db.execute(
-            "SELECT id, name, email, avatar_color FROM partners ORDER BY id ASC"
+            "SELECT id, name, email, avatar_color, monthly_fun_allowance FROM partners ORDER BY id ASC"
         ).fetchall()
     ]
+    for p in partners:
+        cat_name, lim = _get_partner_current_spending_money_limit(db, p, current_ym)
+        p["spending_money_category"] = cat_name
+        p["current_spending_money_limit"] = lim
+
     partners_by_id = {p["id"]: p for p in partners}
 
     active_row = db.execute(
@@ -557,6 +693,7 @@ def get_splendor_state():
         "latest_finished_game": latest_finished_game,
         "analytics": analytics,
         "partners": partners,
+        "current_budget_month": current_ym,
         "catalog_summary": {
             "total_development_cards": len(RAW_CARDS),
             "tier_1_cards": 40,
@@ -572,16 +709,16 @@ def get_splendor_state():
 def create_new_splendor_game():
     actor = g.current_partner
     db = get_db()
+    current_ym = _get_current_budget_month(db)
     partners = [
         dict(r)
         for r in db.execute(
-            "SELECT id, name, email, avatar_color FROM partners ORDER BY id ASC"
+            "SELECT id, name, email, avatar_color, monthly_fun_allowance FROM partners ORDER BY id ASC"
         ).fetchall()
     ]
     if len(partners) < 2:
         return jsonify({"error": "Two partner accounts are required to play Splendor."}), 400
 
-    # Check if there is already an active game
     existing = db.execute(
         "SELECT id FROM splendor_games WHERE status = 'active' ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -592,34 +729,62 @@ def create_new_splendor_game():
     p1_id = partners[0]["id"]
     p2_id = partners[1]["id"]
 
+    try:
+        wager_amount = round(max(0.0, float(data.get("wager_amount") or 0.0)), 2)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Wager amount must be a valid number."}), 400
+
+    for p in partners:
+        cat_name, lim = _get_partner_current_spending_money_limit(db, p, current_ym)
+        p["spending_money_category"] = cat_name
+        p["current_spending_money_limit"] = lim
+
+    if wager_amount > 0:
+        for p in partners[:2]:
+            if wager_amount > p["current_spending_money_limit"]:
+                return jsonify({
+                    "error": (
+                        f"Wager of ${wager_amount:.2f} exceeds {p['name']}'s current month "
+                        f"Spending Money budget (${p['current_spending_money_limit']:.2f})."
+                    )
+                }), 400
+
     requested_first = data.get("first_turn_partner_id")
     if requested_first in (p1_id, p2_id):
         first_turn_id = int(requested_first)
     else:
         first_turn_id = actor["id"] if actor["id"] in (p1_id, p2_id) else p1_id
 
-    initial_state = _create_initial_game_state(p1_id, p2_id, first_turn_id)
+    initial_state = _create_initial_game_state(
+        p1_id,
+        p2_id,
+        first_turn_id,
+        wager_amount=wager_amount,
+        wager_month=current_ym,
+    )
 
     cur = db.execute(
         """
         INSERT INTO splendor_games (
             status, player1_id, player2_id, current_turn_partner_id,
             player1_points, player2_points, player1_cards_played, player2_cards_played,
-            player1_nobles_count, player2_nobles_count, turns_count, game_state
+            player1_nobles_count, player2_nobles_count, turns_count,
+            wager_amount, wager_month, wager_settled, game_state
         )
-        VALUES ('active', ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?)
+        VALUES ('active', ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?, ?, 0, ?)
         """,
-        (p1_id, p2_id, first_turn_id, json.dumps(initial_state)),
+        (p1_id, p2_id, first_turn_id, wager_amount, current_ym, json.dumps(initial_state)),
     )
     game_id = cur.lastrowid
 
     other_partner_id = p2_id if actor["id"] == p1_id else p1_id
+    wager_msg = f" (Wager: ${wager_amount:.2f} Spending Money!)" if wager_amount > 0 else ""
     create_notification(
         db,
         recipient_partner_id=other_partner_id,
         actor_partner_id=actor["id"],
         notif_type="splendor_new_game",
-        title=f"{actor['name']} started a new game of Splendor!",
+        title=f"{actor['name']} started a new game of Splendor!{wager_msg}",
         message="Open the Splendor board to collect gems, reserve cards, and race to 15 Prestige Points.",
         link_tab="splendor",
         reference_id=game_id,
@@ -630,6 +795,7 @@ def create_new_splendor_game():
     return jsonify({
         "game": _format_game_row(row, partners_by_id),
         "analytics": _build_analytics(db, partners),
+        "partners": partners,
     }), 201
 
 
@@ -644,7 +810,7 @@ def _validate_and_apply_discard(p_state: dict, bank: dict, return_tokens: dict) 
         if cnt < 0:
             return "Return token count cannot be negative."
         if cnt > int(p_state["tokens"].get(color, 0)):
-            return f"Cannot return more {color} tokens than you hold."
+            return f"Cannot return more {GEM_LABELS.get(color, color)} tokens than you hold."
 
     for color, count in return_tokens.items():
         cnt = int(count or 0)
@@ -682,23 +848,24 @@ def play_splendor_turn(game_id: int):
     p_state = state["players"][p_key]
 
     action_summary = ""
+    purchased_card_obj = None
 
     if action == "take_different":
         gems = data.get("gems") or []
         if not isinstance(gems, list) or len(gems) == 0 or len(gems) > 3:
-            return jsonify({"error": "Select 1 to 3 different gem colors to take."}), 400
+            return jsonify({"error": "Select 1 to 3 different gem types to take."}), 400
         if len(set(gems)) != len(gems):
-            return jsonify({"error": "All selected gems must be of different colors."}), 400
+            return jsonify({"error": "All selected gems must be of different types."}), 400
         for g_color in gems:
             if g_color not in GEM_COLORS:
-                return jsonify({"error": f"Invalid gem color: {g_color}. Gold cannot be taken directly."}), 400
+                return jsonify({"error": f"Invalid gem: {g_color}. Gold cannot be taken directly."}), 400
             if int(bank.get(g_color, 0)) < 1:
-                return jsonify({"error": f"No {g_color} gems remaining in the bank."}), 400
+                return jsonify({"error": f"No {GEM_LABELS[g_color]} gems remaining in the bank."}), 400
 
         available_colors_in_bank = sum(1 for c in GEM_COLORS if int(bank.get(c, 0)) > 0)
         if len(gems) < min(3, available_colors_in_bank):
             return jsonify({
-                "error": f"You must take {min(3, available_colors_in_bank)} different gem colors when available in the bank."
+                "error": f"You must take {min(3, available_colors_in_bank)} different gems when available in the bank."
             }), 400
 
         for g_color in gems:
@@ -709,15 +876,15 @@ def play_splendor_turn(game_id: int):
         if discard_err:
             return jsonify({"error": discard_err}), 400
 
-        gem_names = ", ".join(g.capitalize() for g in gems)
+        gem_names = ", ".join(GEM_LABELS[g] for g in gems)
         action_summary = f"{actor['name']} took {len(gems)} gems ({gem_names})."
 
     elif action == "take_same":
         g_color = (data.get("gem") or "").strip().lower()
         if g_color not in GEM_COLORS:
-            return jsonify({"error": "Select a valid gem color to take 2 of."}), 400
+            return jsonify({"error": "Select a valid gem to take 2 of."}), 400
         if int(bank.get(g_color, 0)) < 4:
-            return jsonify({"error": f"There must be at least 4 {g_color} gems in the bank to take 2 of the same color."}), 400
+            return jsonify({"error": f"At least 4 {GEM_LABELS[g_color]} gems must be in the bank to take 2."}), 400
 
         bank[g_color] -= 2
         p_state["tokens"][g_color] = int(p_state["tokens"].get(g_color, 0)) + 2
@@ -726,11 +893,11 @@ def play_splendor_turn(game_id: int):
         if discard_err:
             return jsonify({"error": discard_err}), 400
 
-        action_summary = f"{actor['name']} took 2 {g_color.capitalize()} gems."
+        action_summary = f"{actor['name']} took 2 {GEM_LABELS[g_color]} gems."
 
     elif action == "reserve":
         if len(p_state.get("reserved_cards", [])) >= 3:
-            return jsonify({"error": "You already have 3 reserved cards (maximum limit is 3)."}), 400
+            return jsonify({"error": "You already have 3 reserved cards (max 3)."}), 400
 
         card_id = data.get("card_id")
         tier = str(data.get("tier") or "")
@@ -755,7 +922,7 @@ def play_splendor_turn(game_id: int):
                 return jsonify({"error": f"Tier {tier} deck is empty."}), 400
             reserved_card = deck_list.pop(0)
         else:
-            return jsonify({"error": "Provide a card_id from the board or a deck tier (1, 2, or 3) to reserve."}), 400
+            return jsonify({"error": "Provide a card_id or deck tier (1, 2, or 3) to reserve."}), 400
 
         p_state.setdefault("reserved_cards", []).append(reserved_card)
         got_gold = False
@@ -770,7 +937,7 @@ def play_splendor_turn(game_id: int):
 
         action_summary = (
             f"{actor['name']} reserved {reserved_card['title']} (Tier {reserved_card['tier']})"
-            + (" and received 1 Gold token." if got_gold else ".")
+            + (" and received 1 Gold." if got_gold else ".")
         )
 
     elif action == "buy":
@@ -784,7 +951,6 @@ def play_splendor_turn(game_id: int):
         source_tier = None
         source_idx = None
 
-        # Check player's reserved cards first
         res_list = p_state.get("reserved_cards", [])
         r_idx = next((i for i, c in enumerate(res_list) if c["id"] == card_id), None)
         if r_idx is not None:
@@ -807,15 +973,13 @@ def play_splendor_turn(game_id: int):
 
         can_afford, spend = _can_afford_card(p_state, target_card)
         if not can_afford:
-            return jsonify({"error": "You do not have enough tokens and bonuses to purchase this card."}), 400
+            return jsonify({"error": "You do not have enough tokens and bonuses to buy this card."}), 400
 
-        # Spend tokens back to bank
         for color, amt in spend.items():
             if amt > 0:
                 p_state["tokens"][color] -= amt
                 bank[color] = int(bank.get(color, 0)) + amt
 
-        # Move card to purchased_cards
         if source_location == "reserved":
             res_list.pop(source_idx)
         else:
@@ -827,17 +991,18 @@ def play_splendor_turn(game_id: int):
 
         p_state.setdefault("purchased_cards", []).append(target_card)
         _recalculate_player_metrics(p_state)
+        purchased_card_obj = target_card
 
         pts_str = f" (+{target_card['points']} pts)" if target_card["points"] > 0 else ""
         action_summary = (
             f"{actor['name']} bought {target_card['title']} "
-            f"[{target_card['bonus'].capitalize()} bonus{pts_str}]."
+            f"[{GEM_LABELS[target_card['bonus']]} bonus{pts_str}]."
         )
 
     elif action == "pass":
         action_summary = f"{actor['name']} passed their turn."
     else:
-        return jsonify({"error": f"Unknown action '{action}'. Expected take_different, take_same, reserve, buy, or pass."}), 400
+        return jsonify({"error": f"Unknown action '{action}'."}), 400
 
     # Check Noble visit at end of turn
     awarded_noble = _check_and_award_noble(state, p_state)
@@ -875,18 +1040,19 @@ def play_splendor_turn(game_id: int):
     second_player_id = p2_id if first_player_id == p1_id else p1_id
     other_partner_id = p2_id if actor["id"] == p1_id else p1_id
 
-    # In Splendor, both players play an equal number of turns.
-    # The game completes when final_round_triggered is True AND the second player finishes their turn.
     game_finished = bool(state.get("final_round_triggered")) and (actor["id"] == second_player_id)
 
     new_status = "active"
     winner_id = None
     completed_at = None
+    wager_settled = int(row["wager_settled"] or 0)
+    wager_amount = round(float(row["wager_amount"] or 0.0), 2)
+    wager_month = row["wager_month"] or _get_current_budget_month(db)
+    settlement_info = None
 
     if game_finished:
         new_status = "completed"
         completed_at = datetime.now(timezone.utc).isoformat()
-        # Official Splendor tie-breaker: player with FEWER purchased development cards wins
         if p1_pts > p2_pts:
             winner_id = p1_id
         elif p2_pts > p1_pts:
@@ -899,14 +1065,33 @@ def play_splendor_turn(game_id: int):
             else:
                 winner_id = actor["id"]
 
+        loser_id = p2_id if winner_id == p1_id else p1_id
+
+        if wager_amount > 0 and not wager_settled:
+            settlement_info = _settle_wager_for_current_month(
+                db,
+                winner_id=winner_id,
+                loser_id=loser_id,
+                wager_amount=wager_amount,
+                wager_month=wager_month,
+            )
+            if settlement_info:
+                wager_settled = 1
+                state["wager_settlement"] = settlement_info
+
         partners_map = {
             r["id"]: r["name"]
             for r in db.execute("SELECT id, name FROM partners").fetchall()
         }
         winner_name = partners_map.get(winner_id, "Winner")
+        wager_win_str = (
+            f" 💰 +${wager_amount:.2f} Spending Money won for {wager_month}!"
+            if settlement_info
+            else ""
+        )
         state["move_log"].append({
             "turn": new_turns_count,
-            "text": f"🏆 Game Over! {winner_name} wins ({p1_pts} to {p2_pts} pts, {p1_cards_cnt} vs {p2_cards_cnt} cards)!",
+            "text": f"🏆 Game Over! {winner_name} wins ({p1_pts} to {p2_pts} pts)!{wager_win_str}",
             "timestamp": completed_at,
         })
 
@@ -925,6 +1110,7 @@ def play_splendor_turn(game_id: int):
             player1_nobles_count = ?,
             player2_nobles_count = ?,
             turns_count = ?,
+            wager_settled = ?,
             game_state = ?,
             updated_at = datetime('now'),
             completed_at = COALESCE(?, completed_at)
@@ -941,6 +1127,7 @@ def play_splendor_turn(game_id: int):
             p1_nobles_cnt,
             p2_nobles_cnt,
             new_turns_count,
+            wager_settled,
             json.dumps(state),
             completed_at,
             game_id,
@@ -960,17 +1147,31 @@ def play_splendor_turn(game_id: int):
             reference_id=game_id,
         )
 
+    current_ym = _get_current_budget_month(db)
     partners = [
         dict(r)
         for r in db.execute(
-            "SELECT id, name, email, avatar_color FROM partners ORDER BY id ASC"
+            "SELECT id, name, email, avatar_color, monthly_fun_allowance FROM partners ORDER BY id ASC"
         ).fetchall()
     ]
+    for p in partners:
+        cat_name, lim = _get_partner_current_spending_money_limit(db, p, current_ym)
+        p["spending_money_category"] = cat_name
+        p["current_spending_money_limit"] = lim
+
     partners_by_id = {p["id"]: p for p in partners}
     updated_row = db.execute("SELECT * FROM splendor_games WHERE id = ?", (game_id,)).fetchone()
     return jsonify({
         "game": _format_game_row(updated_row, partners_by_id),
         "analytics": _build_analytics(db, partners),
+        "partners": partners,
+        "events": {
+            "bought_card": purchased_card_obj,
+            "awarded_noble": awarded_noble,
+            "game_won": new_status == "completed",
+            "winner_id": winner_id,
+            "wager_settlement": settlement_info,
+        },
     })
 
 
@@ -990,6 +1191,7 @@ def forfeit_splendor_game(game_id: int):
         return jsonify({"error": "You are not a player in this game."}), 403
 
     winner_id = p2_id if actor["id"] == p1_id else p1_id
+    loser_id = actor["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
 
     state = json.loads(row["game_state"])
@@ -1003,20 +1205,44 @@ def forfeit_splendor_game(game_id: int):
     p1_cards_cnt = len(p1_state.get("purchased_cards", []))
     p2_cards_cnt = len(p2_state.get("purchased_cards", []))
 
+    wager_settled = int(row["wager_settled"] or 0)
+    wager_amount = round(float(row["wager_amount"] or 0.0), 2)
+    wager_month = row["wager_month"] or _get_current_budget_month(db)
+    settlement_info = None
+
+    if wager_amount > 0 and not wager_settled:
+        settlement_info = _settle_wager_for_current_month(
+            db,
+            winner_id=winner_id,
+            loser_id=loser_id,
+            wager_amount=wager_amount,
+            wager_month=wager_month,
+        )
+        if settlement_info:
+            wager_settled = 1
+            state["wager_settlement"] = settlement_info
+
+    current_ym = _get_current_budget_month(db)
     partners = [
         dict(r)
         for r in db.execute(
-            "SELECT id, name, email, avatar_color FROM partners ORDER BY id ASC"
+            "SELECT id, name, email, avatar_color, monthly_fun_allowance FROM partners ORDER BY id ASC"
         ).fetchall()
     ]
+    for p in partners:
+        cat_name, lim = _get_partner_current_spending_money_limit(db, p, current_ym)
+        p["spending_money_category"] = cat_name
+        p["current_spending_money_limit"] = lim
+
     partners_by_id = {p["id"]: p for p in partners}
     winner_name = partners_by_id.get(winner_id, {}).get("name", "Partner")
 
+    wager_note = f" 💰 ${wager_amount:.2f} Spending Money transferred to {winner_name}!" if settlement_info else ""
     state.setdefault("move_log", []).append({
         "turn": int(row["turns_count"] or 0),
         "actor_id": actor["id"],
         "actor_name": actor["name"],
-        "text": f"🏳️ {actor['name']} forfeited the game. {winner_name} wins!",
+        "text": f"🏳️ {actor['name']} forfeited. {winner_name} wins!{wager_note}",
         "timestamp": now_iso,
     })
 
@@ -1030,6 +1256,7 @@ def forfeit_splendor_game(game_id: int):
             player2_points = ?,
             player1_cards_played = ?,
             player2_cards_played = ?,
+            wager_settled = ?,
             game_state = ?,
             updated_at = datetime('now'),
             completed_at = ?
@@ -1042,6 +1269,7 @@ def forfeit_splendor_game(game_id: int):
             p2_pts,
             p1_cards_cnt,
             p2_cards_cnt,
+            wager_settled,
             json.dumps(state),
             now_iso,
             game_id,
@@ -1055,7 +1283,7 @@ def forfeit_splendor_game(game_id: int):
         actor_partner_id=actor["id"],
         notif_type="splendor_forfeit",
         title=f"{actor['name']} forfeited Splendor — You Win!",
-        message=f"You won Game #{game_id}! Tap to view stats or start a new match.",
+        message=f"You won Game #{game_id}!{wager_note}",
         link_tab="splendor",
         reference_id=game_id,
     )
@@ -1064,6 +1292,12 @@ def forfeit_splendor_game(game_id: int):
     return jsonify({
         "game": _format_game_row(updated_row, partners_by_id),
         "analytics": _build_analytics(db, partners),
+        "partners": partners,
+        "events": {
+            "game_won": True,
+            "winner_id": winner_id,
+            "wager_settlement": settlement_info,
+        },
     })
 
 

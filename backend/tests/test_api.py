@@ -2663,6 +2663,54 @@ def test_splendor_game_turns_bump_cooldown_forfeit_and_analytics(client):
     assert p1_stats["wins"] == 1
     assert p2_stats["forfeits"] == 1
 
+    # 8. Start a second game with a $25 Spending Money wager (current month only)
+    # First verify wager > 200 is rejected
+    over_wager = client.post(
+        "/api/splendor/new",
+        headers=auth_p1,
+        json={"first_turn_partner_id": p1_id, "wager_amount": 500},
+    )
+    assert over_wager.status_code == 400
+    assert "exceeds" in over_wager.get_json()["error"]
+
+    g2_res = client.post(
+        "/api/splendor/new",
+        headers=auth_p1,
+        json={"first_turn_partner_id": p1_id, "wager_amount": 25.0},
+    )
+    assert g2_res.status_code == 201
+    g2 = g2_res.get_json()["game"]
+    g2_id = g2["id"]
+    wager_month = g2["wager_month"]
+    assert g2["wager_amount"] == 25.0
+
+    # Partner 2 forfeits Game #2 -> Partner 1 wins $25 Spending Money for wager_month ONLY
+    f2_res = client.post(f"/api/splendor/{g2_id}/forfeit", headers=auth_p2)
+    assert f2_res.status_code == 200
+    f2_data = f2_res.get_json()
+    assert f2_data["game"]["wager_settled"] is True
+    settlement = f2_data["events"]["wager_settlement"]
+    assert settlement["wager_amount"] == 25.0
+    assert settlement["winner_old_limit"] == 200.0
+    assert settlement["winner_new_limit"] == 225.0
+    assert settlement["loser_old_limit"] == 200.0
+    assert settlement["loser_new_limit"] == 175.0
+
+    # Verify current month summary has Alex at $225 and Jordan at $175
+    curr_sum = client.get(f"/api/finance/summary?month={wager_month}", headers=auth_p1).get_json()
+    alex_curr = next(b for b in curr_sum["budgets"] if b["category"] == "Alex's Spending Money")
+    jordan_curr = next(b for b in curr_sum["budgets"] if b["category"] == "Jordan's Spending Money")
+    assert alex_curr["monthly_limit"] == 225.0
+    assert jordan_curr["monthly_limit"] == 175.0
+
+    # Verify next month (e.g. 2026-12) still uses the baseline $200.00 each (current month only!)
+    next_sum = client.get("/api/finance/summary?month=2026-12", headers=auth_p1).get_json()
+    alex_next = next(b for b in next_sum["budgets"] if b["category"] == "Alex's Spending Money")
+    jordan_next = next(b for b in next_sum["budgets"] if b["category"] == "Jordan's Spending Money")
+    assert alex_next["monthly_limit"] == 200.0
+    assert jordan_next["monthly_limit"] == 200.0
+
+
 
 
 

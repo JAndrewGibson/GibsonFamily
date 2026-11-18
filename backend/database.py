@@ -362,6 +362,9 @@ CREATE TABLE IF NOT EXISTS splendor_games (
     player1_nobles_count INTEGER NOT NULL DEFAULT 0,
     player2_nobles_count INTEGER NOT NULL DEFAULT 0,
     turns_count INTEGER NOT NULL DEFAULT 0,
+    wager_amount REAL NOT NULL DEFAULT 0.0,
+    wager_month TEXT NOT NULL DEFAULT '',
+    wager_settled INTEGER NOT NULL DEFAULT 0,
     game_state TEXT NOT NULL DEFAULT '{}',
     last_bump_at TEXT,
     last_bump_by_partner_id INTEGER,
@@ -680,6 +683,9 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
             player1_nobles_count INTEGER NOT NULL DEFAULT 0,
             player2_nobles_count INTEGER NOT NULL DEFAULT 0,
             turns_count INTEGER NOT NULL DEFAULT 0,
+            wager_amount REAL NOT NULL DEFAULT 0.0,
+            wager_month TEXT NOT NULL DEFAULT '',
+            wager_settled INTEGER NOT NULL DEFAULT 0,
             game_state TEXT NOT NULL DEFAULT '{}',
             last_bump_at TEXT,
             last_bump_by_partner_id INTEGER,
@@ -695,6 +701,14 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         )
         """
     )
+
+    sp_cols = [r["name"] for r in db.execute("PRAGMA table_info(splendor_games)").fetchall()]
+    if "wager_amount" not in sp_cols:
+        db.execute("ALTER TABLE splendor_games ADD COLUMN wager_amount REAL NOT NULL DEFAULT 0.0")
+    if "wager_month" not in sp_cols:
+        db.execute("ALTER TABLE splendor_games ADD COLUMN wager_month TEXT NOT NULL DEFAULT ''")
+    if "wager_settled" not in sp_cols:
+        db.execute("ALTER TABLE splendor_games ADD COLUMN wager_settled INTEGER NOT NULL DEFAULT 0")
 
     # One-time migration: deduplicate duplicate Plaid accounts
     cleanup_row = db.execute(

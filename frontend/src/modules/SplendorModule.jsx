@@ -1,30 +1,38 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Award,
   BarChart3,
   BellRing,
   Bookmark,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
+  Coins,
   Crown,
+  DollarSign,
   Flag,
   Gem,
+  HelpCircle,
   History,
   Layers,
+  Menu,
   Play,
   RotateCcw,
   ShoppingBag,
   Sparkles,
   Trophy,
+  X,
 } from 'lucide-react';
-import { apiFetch } from '../api';
+import { apiFetch, getCookie, setCookie } from '../api';
+import InfoTip from '../components/InfoTip';
 
 const GEM_META = {
   white: {
     key: 'white',
-    name: 'White / Diamond',
+    name: 'Diamond',
     short: 'Diamond',
-    code: 'W',
+    code: 'D',
     bg: '#f8fafc',
     text: '#0f172a',
     border: '#cbd5e1',
@@ -32,9 +40,9 @@ const GEM_META = {
   },
   blue: {
     key: 'blue',
-    name: 'Blue / Sapphire',
+    name: 'Sapphire',
     short: 'Sapphire',
-    code: 'U',
+    code: 'S',
     bg: '#2563eb',
     text: '#ffffff',
     border: '#60a5fa',
@@ -42,9 +50,9 @@ const GEM_META = {
   },
   green: {
     key: 'green',
-    name: 'Green / Emerald',
+    name: 'Emerald',
     short: 'Emerald',
-    code: 'G',
+    code: 'E',
     bg: '#059669',
     text: '#ffffff',
     border: '#34d399',
@@ -52,7 +60,7 @@ const GEM_META = {
   },
   red: {
     key: 'red',
-    name: 'Red / Ruby',
+    name: 'Ruby',
     short: 'Ruby',
     code: 'R',
     bg: '#dc2626',
@@ -62,9 +70,9 @@ const GEM_META = {
   },
   black: {
     key: 'black',
-    name: 'Black / Onyx',
+    name: 'Onyx',
     short: 'Onyx',
-    code: 'K',
+    code: 'O',
     bg: '#1e293b',
     text: '#f8fafc',
     border: '#64748b',
@@ -72,7 +80,7 @@ const GEM_META = {
   },
   gold: {
     key: 'gold',
-    name: 'Gold / Wild Joker',
+    name: 'Gold',
     short: 'Gold',
     code: '★',
     bg: '#eab308',
@@ -84,6 +92,44 @@ const GEM_META = {
 
 const GEM_COLORS = ['white', 'blue', 'green', 'red', 'black'];
 const ALL_TOKEN_TYPES = ['white', 'blue', 'green', 'red', 'black', 'gold'];
+
+const TUTORIAL_STEPS = [
+  {
+    id: 'welcome',
+    targetSection: 'status',
+    title: 'Welcome to Splendor!',
+    description:
+      'Race your partner to 15 Prestige Points! You can even wager part of your monthly Spending Money budget on the match. Whoever wins gets their Spending Money increased by the wager for the current month!',
+  },
+  {
+    id: 'bank',
+    targetSection: 'bank',
+    title: '1. Collect Gem Tokens',
+    description:
+      'On your turn, take up to 3 different gems (Diamond, Sapphire, Emerald, Ruby, Onyx) OR 2 of the same gem if at least 4 are in the bank. You can hold up to 10 tokens total.',
+  },
+  {
+    id: 'market',
+    targetSection: 'market',
+    title: '2. Buy or Reserve Development Cards',
+    description:
+      'Spend tokens to buy a card from Tier I, II, or III. Every purchased card gives you a permanent +1 gem bonus that discounts future cards! Or tap Reserve to hold up to 3 cards and gain +1 Gold wild token.',
+  },
+  {
+    id: 'nobles',
+    targetSection: 'nobles',
+    title: '3. Attract Royal Nobles (+3 Pts)',
+    description:
+      'Nobles automatically visit you at the end of your turn as soon as your permanent Card Bonuses match their numbers—worth an instant +3 Prestige Points!',
+  },
+  {
+    id: 'players',
+    targetSection: 'players',
+    title: '4. Track Bonuses, Reserved Cards & Bump Turn',
+    description:
+      'Check both players’ Prestige Points, permanent Card Bonuses, held tokens, and Reserved Cards here. Waiting on your partner? Use the 24-hour Bump button in the top bar!',
+  },
+];
 
 function canPlayerAffordCard(playerState, card) {
   if (!playerState || !card) return { affordable: false, goldNeeded: 0 };
@@ -126,6 +172,8 @@ export default function SplendorModule({
   const [activeGame, setActiveGame] = useState(null);
   const [latestFinishedGame, setLatestFinishedGame] = useState(null);
   const [analytics, setAnalytics] = useState(null);
+  const [enrichedPartners, setEnrichedPartners] = useState(partners);
+  const [currentBudgetMonth, setCurrentBudgetMonth] = useState('');
   const [subTab, setSubTab] = useState('board'); // 'board' | 'analytics'
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
@@ -137,7 +185,42 @@ export default function SplendorModule({
   const [selectedSameGem, setSelectedSameGem] = useState('');
   const [returnTokens, setReturnTokens] = useState({});
   const [firstPlayerChoice, setFirstPlayerChoice] = useState(activePartner?.id || '');
+  const [wagerInput, setWagerInput] = useState('');
+
+  // Hamburger menu, New Game Modal, Forfeit Modal, Tutorial & Screen FX
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showNewGameModal, setShowNewGameModal] = useState(false);
   const [confirmForfeit, setConfirmForfeit] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(() => {
+    const seen = getCookie('gibson_splendor_tutorial_seen', '');
+    if (seen === '1') return null;
+    try {
+      if (window.localStorage.getItem('gibson_splendor_tutorial_seen') === '1') {
+        return null;
+      }
+    } catch {
+      // ignore
+    }
+    return 0;
+  });
+  const [fxAnimation, setFxAnimation] = useState(null); // { type: 'card' | 'noble' | 'win', title, subtitle, accentColor }
+
+  const menuRef = useRef(null);
+  const sectionRefs = {
+    status: useRef(null),
+    players: useRef(null),
+    bank: useRef(null),
+    nobles: useRef(null),
+    market: useRef(null),
+  };
+
+  const triggerScreenFx = (fxPayload) => {
+    setFxAnimation(fxPayload);
+    const duration = fxPayload.type === 'win' ? 4800 : 2400;
+    setTimeout(() => {
+      setFxAnimation((curr) => (curr === fxPayload ? null : curr));
+    }, duration);
+  };
 
   const loadSplendorData = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -146,6 +229,8 @@ export default function SplendorModule({
       setActiveGame(data.active_game || null);
       setLatestFinishedGame(data.latest_finished_game || null);
       setAnalytics(data.analytics || null);
+      if (data.partners) setEnrichedPartners(data.partners);
+      if (data.current_budget_month) setCurrentBudgetMonth(data.current_budget_month);
     } catch (err) {
       if (!silent) setErrorMsg(err.message || 'Failed to load Splendor game state.');
     } finally {
@@ -163,6 +248,52 @@ export default function SplendorModule({
     }
   }, [syncVersion]);
 
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onOutside);
+    document.addEventListener('touchstart', onOutside);
+    return () => {
+      document.removeEventListener('mousedown', onOutside);
+      document.removeEventListener('touchstart', onOutside);
+    };
+  }, [menuOpen]);
+
+  // Scroll highlighted tutorial section into view cleanly
+  useEffect(() => {
+    if (tutorialStepIndex === null) return;
+    const step = TUTORIAL_STEPS[tutorialStepIndex];
+    if (!step) return;
+    const ref = sectionRefs[step.targetSection];
+    if (ref && ref.current && typeof ref.current.scrollIntoView === 'function') {
+      try {
+        ref.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch {
+        // ignore in jsdom
+      }
+    }
+  }, [tutorialStepIndex]);
+
+  const closeTutorial = () => {
+    setTutorialStepIndex(null);
+    setCookie('gibson_splendor_tutorial_seen', '1', 365);
+    try {
+      window.localStorage.setItem('gibson_splendor_tutorial_seen', '1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const openTutorial = () => {
+    setMenuOpen(false);
+    setSubTab('board');
+    setTutorialStepIndex(0);
+  };
+
   const resetTurnSelections = () => {
     setSelectedDiffGems([]);
     setSelectedSameGem('');
@@ -174,18 +305,27 @@ export default function SplendorModule({
     setErrorMsg(null);
     setFeedback(null);
     try {
+      const parsedWager = wagerInput ? Number(wagerInput) : 0;
       const res = await apiFetch('/api/splendor/new', {
         method: 'POST',
         body: JSON.stringify({
           first_turn_partner_id: Number(firstPlayerChoice || activePartner?.id),
+          wager_amount: parsedWager > 0 ? parsedWager : 0,
         }),
       });
       setActiveGame(res.game);
       setLatestFinishedGame(null);
       setAnalytics(res.analytics);
+      if (res.partners) setEnrichedPartners(res.partners);
+      setShowNewGameModal(false);
+      setWagerInput('');
       setSubTab('board');
       resetTurnSelections();
-      setFeedback('New game of Splendor started! 90 development cards shuffled & 3 Nobles revealed.');
+      setFeedback(
+        parsedWager > 0
+          ? `New game started with a $${parsedWager.toFixed(2)} Spending Money wager!`
+          : 'New game of Splendor started!'
+      );
       onDataChanged?.();
     } catch (err) {
       setErrorMsg(err.message);
@@ -204,7 +344,8 @@ export default function SplendorModule({
         method: 'POST',
       });
       setActiveGame(res.game);
-      setFeedback(`Bump notification sent to ${activeGame.current_turn_name}! (1 allowed every 24h)`);
+      setMenuOpen(false);
+      setFeedback(`Bump sent to ${activeGame.current_turn_name}!`);
       onDataChanged?.();
     } catch (err) {
       setErrorMsg(err.message);
@@ -225,9 +366,20 @@ export default function SplendorModule({
       setActiveGame(null);
       setLatestFinishedGame(res.game);
       setAnalytics(res.analytics);
+      if (res.partners) setEnrichedPartners(res.partners);
       setConfirmForfeit(false);
+      setMenuOpen(false);
       resetTurnSelections();
-      setFeedback('Game forfeited. Final card counts and match winner have been saved to analytics.');
+      const settlement = res.events?.wager_settlement;
+      if (settlement) {
+        triggerScreenFx({
+          type: 'win',
+          title: `${res.game.winner_name} Wins!`,
+          subtitle: `+$${Number(settlement.wager_amount).toFixed(2)} Spending Money added for ${settlement.budget_month}!`,
+          accentColor: '#eab308',
+        });
+      }
+      setFeedback('Match forfeited.');
       onDataChanged?.();
     } catch (err) {
       setErrorMsg(err.message);
@@ -253,7 +405,40 @@ export default function SplendorModule({
         setLatestFinishedGame(res.game);
       }
       setAnalytics(res.analytics);
+      if (res.partners) setEnrichedPartners(res.partners);
       resetTurnSelections();
+
+      // Trigger celebratory screen animations for card purchase, noble visit, or winning!
+      const ev = res.events || {};
+      if (ev.game_won) {
+        const wSettlement = ev.wager_settlement;
+        triggerScreenFx({
+          type: 'win',
+          title: `🏆 ${res.game.winner_name} Wins Splendor!`,
+          subtitle: wSettlement
+            ? `💰 +$${Number(wSettlement.wager_amount).toFixed(2)} Spending Money won for ${wSettlement.budget_month}!`
+            : `${res.game.player1_points} – ${res.game.player2_points} Prestige Points`,
+          accentColor: '#eab308',
+        });
+      } else if (ev.awarded_noble) {
+        triggerScreenFx({
+          type: 'noble',
+          title: `👑 Noble Visit! +${ev.awarded_noble.points} PTS`,
+          subtitle: ev.awarded_noble.title,
+          accentColor: '#a855f7',
+        });
+      } else if (ev.bought_card) {
+        const bMeta = GEM_META[ev.bought_card.bonus] || GEM_META.white;
+        triggerScreenFx({
+          type: 'card',
+          title: `✨ Bought ${ev.bought_card.title}!`,
+          subtitle: `+1 ${bMeta.name} Bonus${
+            ev.bought_card.points > 0 ? ` · +${ev.bought_card.points} Prestige Pts` : ''
+          }`,
+          accentColor: bMeta.accent,
+        });
+      }
+
       const latestLog = res.game.state?.move_log?.slice(-1)[0]?.text;
       setFeedback(latestLog || 'Turn completed!');
       onDataChanged?.();
@@ -271,12 +456,12 @@ export default function SplendorModule({
       return;
     }
     if (selectedDiffGems.length >= 3) {
-      setErrorMsg('You can take at most 3 different gem colors.');
+      setErrorMsg('Max 3 different gems.');
       return;
     }
     const bankCount = Number(activeGame?.state?.bank?.[color] || 0);
     if (bankCount < 1) {
-      setErrorMsg(`No ${GEM_META[color].short} gems left in the bank.`);
+      setErrorMsg(`No ${GEM_META[color].name} gems left in the bank.`);
       return;
     }
     setSelectedDiffGems([...selectedDiffGems, color]);
@@ -294,7 +479,7 @@ export default function SplendorModule({
   if (loading) {
     return (
       <div className="module-container">
-        <div className="card">Loading Splendor Board & Match Analytics...</div>
+        <div className="card">Loading Splendor...</div>
       </div>
     );
   }
@@ -324,18 +509,155 @@ export default function SplendorModule({
   const projectedTokensAfterGemTake = currentHeldTokens + addedGemsCount - totalReturnedCount;
   const excessTokensToReturn = Math.max(0, currentHeldTokens + addedGemsCount - 10);
 
+  const maxAllowedWager =
+    enrichedPartners.length >= 2
+      ? Math.min(
+          ...enrichedPartners.slice(0, 2).map((p) => Number(p.current_spending_money_limit || 0))
+        )
+      : 0;
+
+  const activeTutorialStep =
+    tutorialStepIndex !== null ? TUTORIAL_STEPS[tutorialStepIndex] || null : null;
+
+  const isHighlighted = (secKey) => activeTutorialStep?.targetSection === secKey;
+
+  const renderNewGameForm = (inModal = false) => (
+    <div className="splendor-wager-setup-box">
+      <div className="splendor-setup-row">
+        <label className="splendor-setup-field">
+          <span>First Turn</span>
+          <select
+            value={firstPlayerChoice}
+            onChange={(e) => setFirstPlayerChoice(Number(e.target.value))}
+          >
+            {enrichedPartners.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="splendor-setup-field">
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <DollarSign size={14} /> Spending Money Wager ({currentBudgetMonth || 'This Month'})
+            <InfoTip
+              text="Optional: Wager an amount from each player's current-month Spending Money budget. When someone wins, the winner's Spending Money increases by this amount and the loser's decreases for this month only."
+              align="right"
+            />
+          </span>
+          <input
+            type="number"
+            min="0"
+            max={maxAllowedWager > 0 ? maxAllowedWager : undefined}
+            step="1"
+            placeholder="0.00 (Optional)"
+            value={wagerInput}
+            onChange={(e) => setWagerInput(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {/* Quick Wager Preset Chips & Partner Spending Money Limits */}
+      <div className="splendor-wager-presets-row">
+        <div className="splendor-wager-chips">
+          {[0, 5, 10, 20, 50].map((amt) => (
+            <button
+              key={amt}
+              type="button"
+              className={`splendor-wager-chip ${
+                Number(wagerInput || 0) === amt ? 'active' : ''
+              }`}
+              disabled={amt > 0 && amt > maxAllowedWager}
+              onClick={() => setWagerInput(amt === 0 ? '' : String(amt))}
+            >
+              {amt === 0 ? 'No Wager' : `$${amt}`}
+            </button>
+          ))}
+        </div>
+
+        <div className="splendor-partner-allowances-inline">
+          {enrichedPartners.slice(0, 2).map((p) => (
+            <span key={p.id} className="splendor-allowance-pill">
+              <span className="partner-dot" style={{ background: p.avatar_color }} />
+              {p.name.split(' ')[0]}: <strong>${Number(p.current_spending_money_limit || 0).toFixed(0)}</strong>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="splendor-setup-actions">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleStartNewGame}
+          disabled={busy}
+        >
+          <Play size={16} /> Start Match
+          {Number(wagerInput || 0) > 0 ? ` ($${Number(wagerInput).toFixed(2)} Wager)` : ''}
+        </button>
+        {inModal && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowNewGameModal(false)}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="module-container splendor-module">
-      {/* Header & View Switcher */}
-      <div className="section-header-bar">
-        <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Gem size={24} style={{ color: 'var(--primary)' }} />
-            <span>Splendor — Couples Edition</span>
-          </h2>
-          <p className="text-muted">
-            90 development cards across 3 tiers & 5 gem colors + 10 noble tiles. Race to 15 Prestige Points!
-          </p>
+      {/* Celebratory Screen Effects Overlay (Card Bought, Noble Visited, Match Won) */}
+      {fxAnimation && (
+        <div
+          className={`splendor-fx-overlay fx-${fxAnimation.type}`}
+          onClick={() => setFxAnimation(null)}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="splendor-fx-particles" aria-hidden="true">
+            {Array.from({ length: 18 }).map((_, i) => (
+              <span
+                key={i}
+                className={`splendor-particle p-${i % 6}`}
+                style={{
+                  left: `${5 + ((i * 17) % 90)}%`,
+                  animationDelay: `${(i % 5) * 0.08}s`,
+                }}
+              />
+            ))}
+          </div>
+          <div
+            className="splendor-fx-banner"
+            style={{ borderColor: fxAnimation.accentColor || 'var(--primary)' }}
+          >
+            <div className="splendor-fx-icon">
+              {fxAnimation.type === 'win' ? (
+                <Trophy size={32} />
+              ) : fxAnimation.type === 'noble' ? (
+                <Crown size={30} />
+              ) : (
+                <Sparkles size={28} />
+              )}
+            </div>
+            <div className="splendor-fx-copy">
+              <strong>{fxAnimation.title}</strong>
+              {fxAnimation.subtitle && <span>{fxAnimation.subtitle}</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compact Top Header Bar with Tooltips & Hamburger Menu */}
+      <div className="section-header-bar splendor-compact-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Gem size={22} style={{ color: 'var(--primary)' }} />
+          <h2>Splendor</h2>
+          <InfoTip text="90 development cards across 3 tiers (Diamond, Sapphire, Emerald, Ruby, Onyx) + 10 Nobles. First to 15 Prestige Points triggers the final round!" />
         </div>
 
         <div className="splendor-header-actions">
@@ -345,15 +667,85 @@ export default function SplendorModule({
               className={`btn btn-sm ${subTab === 'board' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setSubTab('board')}
             >
-              <Layers size={15} /> Game Board
+              <Layers size={15} /> Board
             </button>
             <button
               type="button"
               className={`btn btn-sm ${subTab === 'analytics' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setSubTab('analytics')}
             >
-              <BarChart3 size={15} /> Stats & Analytics ({analytics?.total_games || 0})
+              <BarChart3 size={15} /> Stats ({analytics?.total_games || 0})
             </button>
+          </div>
+
+          {/* Hamburger Menu for Tutorial, New Game, Bump & Forfeit */}
+          <div className="splendor-hamburger-wrap" ref={menuRef}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm splendor-hamburger-btn"
+              onClick={() => setMenuOpen((prev) => !prev)}
+              aria-label="Splendor Options & Tutorial Menu"
+              title="Game Menu & Tutorial"
+            >
+              <Menu size={17} />
+            </button>
+
+            {menuOpen && (
+              <div className="splendor-hamburger-dropdown">
+                <button
+                  type="button"
+                  className="splendor-menu-item"
+                  onClick={openTutorial}
+                >
+                  <HelpCircle size={16} />
+                  <span>Interactive Tutorial</span>
+                </button>
+
+                {!activeGame && (
+                  <button
+                    type="button"
+                    className="splendor-menu-item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setShowNewGameModal(true);
+                    }}
+                  >
+                    <Play size={16} />
+                    <span>New Game & Wager</span>
+                  </button>
+                )}
+
+                {activeGame && !isMyTurn && (
+                  <button
+                    type="button"
+                    className="splendor-menu-item"
+                    disabled={busy || !activeGame.bump_available}
+                    onClick={handleBumpPartner}
+                  >
+                    <BellRing size={16} />
+                    <span>
+                      {activeGame.bump_available
+                        ? `Bump ${activeGame.current_turn_name}`
+                        : `Bump (${formatCooldown(activeGame.bump_cooldown_seconds)})`}
+                    </span>
+                  </button>
+                )}
+
+                {activeGame && (
+                  <button
+                    type="button"
+                    className="splendor-menu-item danger"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setConfirmForfeit(true);
+                    }}
+                  >
+                    <Flag size={16} />
+                    <span>Forfeit Active Game</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -366,7 +758,7 @@ export default function SplendorModule({
             className="btn btn-ghost btn-sm"
             onClick={() => setErrorMsg(null)}
           >
-            Dismiss
+            <X size={15} />
           </button>
         </div>
       )}
@@ -379,160 +771,143 @@ export default function SplendorModule({
             className="btn btn-ghost btn-sm"
             onClick={() => setFeedback(null)}
           >
-            OK
+            <X size={15} />
           </button>
         </div>
       )}
 
       {subTab === 'board' && (
         <>
-          {/* Turn Status & Bump / Forfeit / New Game Banner */}
-          {activeGame ? (
-            <div className={`card splendor-turn-banner ${isMyTurn ? 'my-turn' : 'partner-turn'}`}>
-              <div className="splendor-turn-banner-main">
+          {/* Compact Turn Status / Wager Pill / New Game Card */}
+          <div
+            ref={sectionRefs.status}
+            className={isHighlighted('status') ? 'splendor-tutorial-highlight' : ''}
+          >
+            {activeGame ? (
+              <div className={`card splendor-turn-banner ${isMyTurn ? 'my-turn' : 'partner-turn'}`}>
                 <div className="splendor-turn-indicator">
                   {isMyTurn ? (
                     <span className="splendor-turn-pill my-turn-pill">
-                      <Sparkles size={15} /> YOUR TURN
+                      <Sparkles size={14} /> YOUR TURN
                     </span>
                   ) : (
                     <span className="splendor-turn-pill waiting-pill">
-                      <Clock size={15} /> WAITING FOR {activeGame.current_turn_name.toUpperCase()}
+                      <Clock size={14} /> {activeGame.current_turn_name.toUpperCase()}&apos;S TURN
                     </span>
                   )}
+
                   <span className="splendor-game-meta">
                     Game #{activeGame.id} · Turn {activeGame.turns_count + 1}
-                    {gState?.final_round_triggered && (
-                      <strong className="splendor-final-round-tag">
-                        🔥 FINAL ROUND (15+ PTS REACHED!)
-                      </strong>
-                    )}
                   </span>
+
+                  {activeGame.wager_amount > 0 && (
+                    <span
+                      className="splendor-wager-badge"
+                      title={`Winner gains +$${activeGame.wager_amount.toFixed(2)} Spending Money for ${activeGame.wager_month}; loser decreases by -$${activeGame.wager_amount.toFixed(2)}.`}
+                    >
+                      <Coins size={13} /> Wager: ${activeGame.wager_amount.toFixed(2)}
+                    </span>
+                  )}
+
+                  {gState?.final_round_triggered && (
+                    <strong className="splendor-final-round-tag">🔥 FINAL ROUND</strong>
+                  )}
+
+                  <InfoTip
+                    text={
+                      isMyTurn
+                        ? 'Take 3 different gems, 2 of the same gem (4+ in bank), buy a card, or reserve a card (+1 Gold).'
+                        : `Waiting on ${activeGame.current_turn_name}. You can send 1 bump notification every 24 hours.`
+                    }
+                  />
                 </div>
 
-                <p className="text-muted" style={{ fontSize: '0.86rem', marginTop: '0.25rem' }}>
-                  {isMyTurn
-                    ? 'Take gems from the bank, buy a development card below, or reserve a card for +1 Gold token.'
-                    : `It is ${activeGame.current_turn_name}'s turn. You can send a bump notification once every 24 hours to remind them.`}
-                </p>
+                <div className="splendor-turn-banner-actions">
+                  {!isMyTurn && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleBumpPartner}
+                      disabled={busy || !activeGame.bump_available}
+                    >
+                      <BellRing size={14} />
+                      {activeGame.bump_available
+                        ? `Bump ${activeGame.current_turn_name.split(' ')[0]}`
+                        : formatCooldown(activeGame.bump_cooldown_seconds)}
+                    </button>
+                  )}
+
+                  {!confirmForfeit ? (
+                    <button
+                      type="button"
+                      className="btn btn-danger-outline btn-sm"
+                      onClick={() => setConfirmForfeit(true)}
+                      disabled={busy}
+                    >
+                      <Flag size={14} /> Forfeit
+                    </button>
+                  ) : (
+                    <div className="splendor-forfeit-confirm">
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        onClick={handleForfeitGame}
+                        disabled={busy}
+                      >
+                        Confirm Forfeit
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setConfirmForfeit(false)}
+                        disabled={busy}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-
-              <div className="splendor-turn-banner-actions">
-                {!isMyTurn && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={handleBumpPartner}
-                    disabled={busy || !activeGame.bump_available}
-                    title={
-                      activeGame.bump_available
-                        ? `Send a push/in-app bump notification to ${activeGame.current_turn_name}`
-                        : `Next bump available in ${formatCooldown(activeGame.bump_cooldown_seconds)}`
-                    }
-                  >
-                    <BellRing size={15} />
-                    {activeGame.bump_available
-                      ? `Bump ${activeGame.current_turn_name}`
-                      : `Bump Cooldown (${formatCooldown(activeGame.bump_cooldown_seconds)})`}
-                  </button>
-                )}
-
-                {!confirmForfeit ? (
-                  <button
-                    type="button"
-                    className="btn btn-danger-outline btn-sm"
-                    onClick={() => setConfirmForfeit(true)}
-                    disabled={busy}
-                  >
-                    <Flag size={14} /> Forfeit Game
-                  </button>
-                ) : (
-                  <div className="splendor-forfeit-confirm">
-                    <span>Forfeit match?</span>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={handleForfeitGame}
-                      disabled={busy}
-                    >
-                      Yes, Forfeit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setConfirmForfeit(false)}
-                      disabled={busy}
-                    >
-                      Cancel
-                    </button>
+            ) : (
+              <div className="card splendor-new-game-card">
+                <div className="splendor-new-game-info">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <h3>
+                      {latestFinishedGame
+                        ? `🏆 Game #${latestFinishedGame.id} — ${latestFinishedGame.winner_name} Won!`
+                        : 'Start a New Game of Splendor'}
+                    </h3>
+                    {latestFinishedGame?.wager_amount > 0 && (
+                      <span className="splendor-wager-badge">
+                        <Coins size={13} /> +${latestFinishedGame.wager_amount.toFixed(2)} Spending Money Won ({latestFinishedGame.wager_month})
+                      </span>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="card splendor-new-game-card">
-              <div className="splendor-new-game-info">
-                <h3>
-                  {latestFinishedGame ? (
-                    <>
-                      🏆 Game #{latestFinishedGame.id}{' '}
-                      {latestFinishedGame.status === 'forfeited' ? 'Ended by Forfeit' : 'Completed'} —{' '}
-                      {latestFinishedGame.winner_name} Won!
-                    </>
-                  ) : (
-                    'Ready to Start a New Game of Splendor'
+                  {latestFinishedGame && (
+                    <p className="text-muted" style={{ fontSize: '0.84rem' }}>
+                      {latestFinishedGame.player1_name}: {latestFinishedGame.player1_points} pts (
+                      {latestFinishedGame.player1_cards_played} cards) ·{' '}
+                      {latestFinishedGame.player2_name}: {latestFinishedGame.player2_points} pts (
+                      {latestFinishedGame.player2_cards_played} cards)
+                    </p>
                   )}
-                </h3>
-                <p className="text-muted">
-                  {latestFinishedGame ? (
-                    <>
-                      Final Score: <strong>{latestFinishedGame.player1_name}</strong>{' '}
-                      {latestFinishedGame.player1_points} pts ({latestFinishedGame.player1_cards_played}{' '}
-                      cards played) vs. <strong>{latestFinishedGame.player2_name}</strong>{' '}
-                      {latestFinishedGame.player2_points} pts ({latestFinishedGame.player2_cards_played}{' '}
-                      cards played).
-                      {latestFinishedGame.forfeited_by_name
-                        ? ` (${latestFinishedGame.forfeited_by_name} forfeited).`
-                        : ''}
-                    </>
-                  ) : (
-                    'Play head-to-head with all 90 official development cards (40 Tier I, 30 Tier II, 20 Tier III) and 10 Noble tiles.'
-                  )}
-                </p>
+                </div>
+
+                {renderNewGameForm(false)}
               </div>
+            )}
+          </div>
 
-              <div className="splendor-new-game-controls">
-                <label className="splendor-first-turn-select">
-                  <span>First Turn:</span>
-                  <select
-                    value={firstPlayerChoice}
-                    onChange={(e) => setFirstPlayerChoice(Number(e.target.value))}
-                  >
-                    {partners.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleStartNewGame}
-                  disabled={busy}
-                >
-                  <Play size={16} /> Start New Game
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Render Active or Latest Finished Game Board */}
+          {/* Active or Latest Finished Game Board */}
           {displayGame && gState && (
             <>
-              {/* Two Player Dashboards (Points, Cards Played, Gem Bonuses, Held Tokens & Reserved Cards) */}
-              <div className="splendor-players-grid">
+              {/* Two Player Dashboards */}
+              <div
+                ref={sectionRefs.players}
+                className={`splendor-players-grid ${
+                  isHighlighted('players') ? 'splendor-tutorial-highlight' : ''
+                }`}
+              >
                 {[
                   {
                     id: displayGame.player1_id,
@@ -571,37 +946,39 @@ export default function SplendorModule({
                         <div className="splendor-player-identity">
                           <span
                             className="partner-dot"
-                            style={{ background: plr.color, width: 12, height: 12 }}
+                            style={{ background: plr.color, width: 11, height: 11 }}
                           />
                           <h4>
                             {plr.name} {isCurrentUser && <span className="text-muted">(You)</span>}
                           </h4>
-                          {isTurnPlayer && <span className="splendor-mini-turn-badge">Active Turn</span>}
+                          {isTurnPlayer && <span className="splendor-mini-turn-badge">Turn</span>}
                           {displayGame.winner_partner_id === plr.id && (
                             <span className="splendor-winner-badge">
-                              <Trophy size={13} /> Winner
+                              <Trophy size={12} /> Winner
                             </span>
                           )}
                         </div>
 
                         <div className="splendor-player-score-box">
                           <div className="splendor-prestige-pill" title="Prestige Points (Goal: 15)">
-                            <Crown size={15} />
+                            <Crown size={14} />
                             <strong>{pState.points || 0}</strong>
-                            <span>/ 15 pts</span>
+                            <span>/15</span>
                           </div>
                           <div className="splendor-cards-played-pill" title="Development Cards Played">
-                            <Layers size={14} />
+                            <Layers size={13} />
                             <strong>{(pState.purchased_cards || []).length}</strong>
-                            <span>cards</span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Gem Bonuses (Permanent Discounts from Purchased Cards) & Tokens Held */}
+                      {/* Compact Bonuses & Tokens */}
                       <div className="splendor-player-resources">
                         <div className="splendor-resource-row">
-                          <span className="splendor-resource-label">Card Bonuses (Permanent):</span>
+                          <span className="splendor-resource-label">
+                            Bonuses
+                            <InfoTip text="Permanent gem discounts from purchased cards." />
+                          </span>
                           <div className="splendor-gem-chips-row">
                             {GEM_COLORS.map((color) => {
                               const meta = GEM_META[color];
@@ -614,11 +991,11 @@ export default function SplendorModule({
                                     background: meta.bg,
                                     color: meta.text,
                                     borderColor: meta.border,
-                                    opacity: count > 0 ? 1 : 0.45,
+                                    opacity: count > 0 ? 1 : 0.42,
                                   }}
-                                  title={`${meta.name} Card Bonus: -${count} cost`}
+                                  title={`${meta.name} Bonus: +${count}`}
                                 >
-                                  <span>{meta.short}</span>
+                                  <span>{meta.name}</span>
                                   <strong>+{count}</strong>
                                 </div>
                               );
@@ -628,7 +1005,8 @@ export default function SplendorModule({
 
                         <div className="splendor-resource-row">
                           <span className="splendor-resource-label">
-                            Gem Tokens ({totalTokens} / 10):
+                            Tokens ({totalTokens}/10)
+                            <InfoTip text="Held gem tokens (maximum 10 at end of turn). Gold acts as any gem." />
                           </span>
                           <div className="splendor-gem-chips-row">
                             {ALL_TOKEN_TYPES.map((color) => {
@@ -642,11 +1020,11 @@ export default function SplendorModule({
                                     background: meta.bg,
                                     color: meta.text,
                                     borderColor: meta.border,
-                                    opacity: count > 0 ? 1 : 0.4,
+                                    opacity: count > 0 ? 1 : 0.38,
                                   }}
                                   title={`${meta.name} Tokens: ${count}`}
                                 >
-                                  <span>{meta.short}</span>
+                                  <span>{meta.name}</span>
                                   <strong>{count}</strong>
                                 </div>
                               );
@@ -657,28 +1035,21 @@ export default function SplendorModule({
 
                       {/* Visited Nobles */}
                       {(pState.nobles || []).length > 0 && (
-                        <div className="splendor-player-nobles">
-                          <span className="splendor-resource-label">Visited Nobles:</span>
-                          <div className="splendor-visited-nobles-list">
-                            {pState.nobles.map((n) => (
-                              <span key={n.id} className="splendor-visited-noble-chip">
-                                👑 {n.title} (+{n.points} pts)
-                              </span>
-                            ))}
-                          </div>
+                        <div className="splendor-visited-nobles-list">
+                          {pState.nobles.map((n) => (
+                            <span key={n.id} className="splendor-visited-noble-chip">
+                              👑 {n.title} (+{n.points})
+                            </span>
+                          ))}
                         </div>
                       )}
 
-                      {/* Reserved Cards (Up to 3) */}
-                      <div className="splendor-player-reserved">
-                        <span className="splendor-resource-label">
-                          Reserved Cards ({(pState.reserved_cards || []).length} / 3):
-                        </span>
-                        {(pState.reserved_cards || []).length === 0 ? (
-                          <p className="text-muted" style={{ fontSize: '0.78rem' }}>
-                            No reserved cards. Reserve any card on the board to hold it & gain +1 Gold token.
-                          </p>
-                        ) : (
+                      {/* Reserved Cards (Only shown when non-empty or compact header) */}
+                      {(pState.reserved_cards || []).length > 0 && (
+                        <div className="splendor-player-reserved">
+                          <span className="splendor-resource-label">
+                            Reserved ({(pState.reserved_cards || []).length}/3)
+                          </span>
                           <div className="splendor-reserved-cards-grid">
                             {pState.reserved_cards.map((rc) => {
                               const bMeta = GEM_META[rc.bonus];
@@ -690,7 +1061,7 @@ export default function SplendorModule({
                                   style={{ borderTop: `4px solid ${bMeta.bg}` }}
                                 >
                                   <div className="splendor-mini-reserved-top">
-                                    <strong>{rc.points} pt</strong>
+                                    <strong>{rc.points} PT</strong>
                                     <span
                                       className="splendor-card-bonus-pill"
                                       style={{
@@ -699,7 +1070,7 @@ export default function SplendorModule({
                                         borderColor: bMeta.border,
                                       }}
                                     >
-                                      {bMeta.short}
+                                      {bMeta.name}
                                     </span>
                                   </div>
                                   <div className="splendor-mini-reserved-title">{rc.title}</div>
@@ -716,7 +1087,7 @@ export default function SplendorModule({
                                             borderColor: cMeta.border,
                                           }}
                                         >
-                                          {cMeta.short[0]}:{cVal}
+                                          {cMeta.name}: {cVal}
                                         </span>
                                       );
                                     })}
@@ -725,7 +1096,7 @@ export default function SplendorModule({
                                     <button
                                       type="button"
                                       className="btn btn-primary btn-sm"
-                                      style={{ width: '100%', marginTop: '0.35rem' }}
+                                      style={{ width: '100%', marginTop: '0.25rem' }}
                                       disabled={busy || !affordInfo.affordable}
                                       onClick={() =>
                                         executeTurnAction({
@@ -734,34 +1105,36 @@ export default function SplendorModule({
                                         })
                                       }
                                     >
-                                      <ShoppingBag size={13} />{' '}
+                                      <ShoppingBag size={12} />{' '}
                                       {affordInfo.affordable
                                         ? affordInfo.goldNeeded > 0
-                                          ? `Buy (Uses ${affordInfo.goldNeeded} Gold)`
-                                          : 'Buy Reserved'
-                                        : 'Cannot Afford'}
+                                          ? `Buy (${affordInfo.goldNeeded}★)`
+                                          : 'Buy'
+                                        : 'Locked'}
                                     </button>
                                   )}
                                 </div>
                               );
                             })}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
               {/* Gem Bank & Take Gems Action Panel */}
-              <div className="card splendor-bank-card">
+              <div
+                ref={sectionRefs.bank}
+                className={`card splendor-bank-card ${
+                  isHighlighted('bank') ? 'splendor-tutorial-highlight' : ''
+                }`}
+              >
                 <div className="splendor-bank-header">
-                  <div>
-                    <h3>💎 Gem Bank & Token Actions</h3>
-                    <p className="text-muted" style={{ fontSize: '0.84rem' }}>
-                      On your turn: take <strong>3 different gem colors</strong>, take{' '}
-                      <strong>2 gems of the same color</strong> (requires 4+ in bank), or buy/reserve a card below.
-                    </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <h3>💎 Gem Bank</h3>
+                    <InfoTip text="Tap gems to collect: take 3 different gems, or switch to '2 Same' when a pile has 4+ tokens. Gold is gained when you Reserve a card." />
                   </div>
 
                   {isMyTurn && (
@@ -776,7 +1149,7 @@ export default function SplendorModule({
                           resetTurnSelections();
                         }}
                       >
-                        Take 3 Different
+                        3 Different
                       </button>
                       <button
                         type="button"
@@ -788,7 +1161,7 @@ export default function SplendorModule({
                           resetTurnSelections();
                         }}
                       >
-                        Take 2 Same (4+ in Bank)
+                        2 Same (4+)
                       </button>
                     </div>
                   )}
@@ -841,15 +1214,6 @@ export default function SplendorModule({
                         </div>
                         <div className="splendor-bank-gem-meta">
                           <strong>{meta.name}</strong>
-                          <span>
-                            {isGold
-                              ? `${available} left (Reserve card)`
-                              : turnMode === 'take_same'
-                              ? available >= 4
-                                ? `${available} in bank (Eligible for 2)`
-                                : `${available} in bank (Need 4 for 2x)`
-                              : `${available} in bank`}
-                          </span>
                         </div>
                         {isSelected && (
                           <span className="splendor-selected-gem-tag">
@@ -861,16 +1225,12 @@ export default function SplendorModule({
                   })}
                 </div>
 
-                {/* Token limit (> 10) return helper if taking gems exceeds 10 tokens */}
+                {/* Token limit (> 10) return helper */}
                 {isMyTurn && addedGemsCount > 0 && currentHeldTokens + addedGemsCount > 10 && (
                   <div className="splendor-discard-box">
                     <strong>
-                      Token Limit Reached ({currentHeldTokens} held + {addedGemsCount} new ={' '}
-                      {currentHeldTokens + addedGemsCount} / 10 max)
+                      10-Token Limit: Return {excessTokensToReturn} token(s)
                     </strong>
-                    <p className="text-muted" style={{ fontSize: '0.82rem' }}>
-                      Select {excessTokensToReturn} token(s) to return to the bank so you end your turn with 10:
-                    </p>
                     <div className="splendor-discard-controls">
                       {ALL_TOKEN_TYPES.map((color) => {
                         const held = Number(myPlayerState?.tokens?.[color] || 0);
@@ -888,9 +1248,7 @@ export default function SplendorModule({
                         const meta = GEM_META[color];
                         return (
                           <div key={color} className="splendor-discard-stepper">
-                            <span>
-                              {meta.short} (Have {maxRet}):
-                            </span>
+                            <span>{meta.name}:</span>
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
@@ -913,12 +1271,12 @@ export default function SplendorModule({
                   </div>
                 )}
 
-                {isMyTurn && (
+                {isMyTurn && (selectedDiffGems.length > 0 || selectedSameGem) && (
                   <div className="splendor-bank-submit-bar">
                     {turnMode === 'take_different' ? (
                       <button
                         type="button"
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-sm"
                         disabled={
                           busy ||
                           selectedDiffGems.length === 0 ||
@@ -932,12 +1290,12 @@ export default function SplendorModule({
                           })
                         }
                       >
-                        <CheckCircle2 size={16} /> Confirm Take {selectedDiffGems.length} Different Gem(s)
+                        <CheckCircle2 size={15} /> Take {selectedDiffGems.length} Gem(s)
                       </button>
                     ) : (
                       <button
                         type="button"
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-sm"
                         disabled={
                           busy ||
                           !selectedSameGem ||
@@ -951,67 +1309,66 @@ export default function SplendorModule({
                           })
                         }
                       >
-                        <CheckCircle2 size={16} /> Confirm Take 2{' '}
-                        {selectedSameGem ? GEM_META[selectedSameGem].short : ''} Gems
+                        <CheckCircle2 size={15} /> Take 2 {GEM_META[selectedSameGem]?.name}
                       </button>
                     )}
 
-                    {(selectedDiffGems.length > 0 || selectedSameGem) && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={resetTurnSelections}
-                      >
-                        <RotateCcw size={14} /> Clear Selection
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={resetTurnSelections}
+                    >
+                      <RotateCcw size={14} /> Clear
+                    </button>
                   </div>
                 )}
               </div>
 
-              {/* Noble Tiles Row (3 Active Nobles from the 10-Noble Pool) */}
-              <div className="card splendor-nobles-card">
+              {/* Noble Tiles Row */}
+              <div
+                ref={sectionRefs.nobles}
+                className={`card splendor-nobles-card ${
+                  isHighlighted('nobles') ? 'splendor-tutorial-highlight' : ''
+                }`}
+              >
                 <div className="splendor-section-title-row">
-                  <h3>👑 Noble Tiles (3 Prestige Points Each)</h3>
-                  <span className="text-muted" style={{ fontSize: '0.82rem' }}>
-                    Automatically visits you at the end of your turn when your permanent card bonuses meet requirements.
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <h3>👑 Nobles</h3>
+                    <InfoTip text="Each Noble is worth +3 Prestige Points and visits automatically at the end of your turn when your permanent Card Bonuses reach the numbers shown." />
+                  </div>
                 </div>
 
                 {(gState.nobles || []).length === 0 ? (
-                  <p className="text-muted">All Nobles in this match have visited players!</p>
+                  <p className="text-muted" style={{ fontSize: '0.82rem' }}>
+                    All Nobles visited!
+                  </p>
                 ) : (
                   <div className="splendor-nobles-grid">
                     {gState.nobles.map((noble) => (
                       <div key={noble.id} className="splendor-noble-tile">
                         <div className="splendor-noble-header">
-                          <span className="splendor-noble-pts">+{noble.points} PTS</span>
+                          <span className="splendor-noble-pts">+{noble.points} PT</span>
                           <strong className="splendor-noble-title">{noble.title}</strong>
                         </div>
-                        <div className="splendor-noble-reqs">
-                          <span className="text-muted" style={{ fontSize: '0.75rem' }}>
-                            Requires Card Bonuses:
-                          </span>
-                          <div className="splendor-card-cost-list">
-                            {Object.entries(noble.requirements || {}).map(([cColor, cVal]) => {
-                              const cMeta = GEM_META[cColor];
-                              const myBonus = Number(myPlayerState?.bonuses?.[cColor] || 0);
-                              const met = myBonus >= Number(cVal);
-                              return (
-                                <span
-                                  key={cColor}
-                                  className={`splendor-cost-number ${met ? 'req-met' : ''}`}
-                                  style={{
-                                    background: cMeta.bg,
-                                    color: cMeta.text,
-                                    borderColor: cMeta.border,
-                                  }}
-                                >
-                                  {cMeta.short}: {cVal}
-                                </span>
-                              );
-                            })}
-                          </div>
+                        <div className="splendor-card-cost-list">
+                          {Object.entries(noble.requirements || {}).map(([cColor, cVal]) => {
+                            const cMeta = GEM_META[cColor];
+                            const myBonus = Number(myPlayerState?.bonuses?.[cColor] || 0);
+                            const met = myBonus >= Number(cVal);
+                            return (
+                              <span
+                                key={cColor}
+                                className={`splendor-cost-number ${met ? 'req-met' : ''}`}
+                                style={{
+                                  background: cMeta.bg,
+                                  color: cMeta.text,
+                                  borderColor: cMeta.border,
+                                }}
+                              >
+                                {cMeta.name}: {cVal}
+                              </span>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -1020,23 +1377,22 @@ export default function SplendorModule({
               </div>
 
               {/* 90 Development Cards Board (Tier 3, Tier 2, Tier 1) */}
-              <div className="card splendor-board-card">
+              <div
+                ref={sectionRefs.market}
+                className={`card splendor-board-card ${
+                  isHighlighted('market') ? 'splendor-tutorial-highlight' : ''
+                }`}
+              >
                 <div className="splendor-section-title-row">
-                  <h3>🃏 Development Cards Market (Tier III, Tier II, Tier I)</h3>
-                  <span className="text-muted" style={{ fontSize: '0.82rem' }}>
-                    Each card displays its Prestige Points, Card Title / Type, Gem Bonus color, and Gem Cost numbers.
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <h3>🃏 Development Cards</h3>
+                    <InfoTip text="Top left shows Prestige Points; top right shows the permanent +1 Gem Bonus you earn. Bottom pills show the Gem Cost (reduced by your Card Bonuses)." />
+                  </div>
                 </div>
 
                 {['3', '2', '1'].map((tierKey) => {
                   const cards = gState.board?.[tierKey] || [];
                   const deckRemaining = Number(gState.deck_counts?.[tierKey] || 0);
-                  const tierLabel =
-                    tierKey === '3'
-                      ? 'Tier III — Imperial Estates (3–5 pts)'
-                      : tierKey === '2'
-                      ? 'Tier II — Master Artisans (1–3 pts)'
-                      : 'Tier I — Gem Mines & Quarries (0–1 pt)';
 
                   return (
                     <div key={tierKey} className="splendor-tier-section">
@@ -1045,32 +1401,29 @@ export default function SplendorModule({
                           <span className={`splendor-tier-badge tier-${tierKey}`}>
                             TIER {tierKey}
                           </span>
-                          <strong>{tierLabel}</strong>
+                          <span className="splendor-deck-count-pill">
+                            {deckRemaining} in deck
+                          </span>
                         </div>
 
-                        <div className="splendor-deck-status">
-                          <span className="splendor-deck-count-pill">
-                            Deck: {deckRemaining} card{deckRemaining === 1 ? '' : 's'} left
-                          </span>
-                          {isMyTurn &&
-                            deckRemaining > 0 &&
-                            (myPlayerState?.reserved_cards || []).length < 3 && (
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                disabled={busy}
-                                onClick={() =>
-                                  executeTurnAction({
-                                    action: 'reserve',
-                                    tier: tierKey,
-                                  })
-                                }
-                                title={`Blind-reserve the top card of Tier ${tierKey} deck`}
-                              >
-                                <Bookmark size={13} /> Blind Reserve Deck
-                              </button>
-                            )}
-                        </div>
+                        {isMyTurn &&
+                          deckRemaining > 0 &&
+                          (myPlayerState?.reserved_cards || []).length < 3 && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={busy}
+                              onClick={() =>
+                                executeTurnAction({
+                                  action: 'reserve',
+                                  tier: tierKey,
+                                })
+                              }
+                              title={`Blind-reserve top card of Tier ${tierKey} deck (+1 Gold)`}
+                            >
+                              <Bookmark size={12} /> Reserve Deck
+                            </button>
+                          )}
                       </div>
 
                       <div className="splendor-cards-row">
@@ -1087,13 +1440,12 @@ export default function SplendorModule({
                                 isMyTurn && affordInfo.affordable ? 'card-affordable' : ''
                               }`}
                               style={{
-                                borderTop: `6px solid ${bMeta.bg}`,
+                                borderTop: `5px solid ${bMeta.bg}`,
                               }}
                             >
-                              {/* Top bar: Prestige Points & Bonus Color */}
                               <div className="splendor-dev-card-top">
                                 <div className="splendor-dev-card-points">
-                                  {card.points > 0 ? `${card.points} PT` : '0 PT'}
+                                  {card.points} PT
                                 </div>
                                 <div
                                   className="splendor-card-bonus-pill"
@@ -1103,48 +1455,39 @@ export default function SplendorModule({
                                     borderColor: bMeta.border,
                                   }}
                                 >
-                                  +1 {bMeta.short}
+                                  +1 {bMeta.name}
                                 </div>
                               </div>
 
-                              {/* Title / Type of Card */}
                               <div className="splendor-dev-card-body">
                                 <div className="splendor-dev-card-title">{card.title}</div>
-                                <div className="splendor-dev-card-subtitle">
-                                  Tier {card.tier} · {bMeta.name} Bonus
-                                </div>
                               </div>
 
-                              {/* Numbers / Gem Cost Breakdown */}
-                              <div className="splendor-dev-card-costs">
-                                <span className="splendor-cost-header">Gem Cost:</span>
-                                <div className="splendor-card-cost-list">
-                                  {Object.entries(card.cost || {}).map(([cColor, cVal]) => {
-                                    const cMeta = GEM_META[cColor];
-                                    const myDiscount = Number(
-                                      myPlayerState?.bonuses?.[cColor] || 0
-                                    );
-                                    const netCost = Math.max(0, Number(cVal) - myDiscount);
-                                    return (
-                                      <div
-                                        key={cColor}
-                                        className="splendor-cost-chip"
-                                        style={{
-                                          background: cMeta.bg,
-                                          color: cMeta.text,
-                                          borderColor: cMeta.border,
-                                        }}
-                                        title={`${cMeta.name}: Cost ${cVal} (Net ${netCost} after your +${myDiscount} bonus)`}
-                                      >
-                                        <span className="cost-gem-name">{cMeta.short}</span>
-                                        <strong className="cost-gem-num">{cVal}</strong>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                              <div className="splendor-card-cost-list">
+                                {Object.entries(card.cost || {}).map(([cColor, cVal]) => {
+                                  const cMeta = GEM_META[cColor];
+                                  const myDiscount = Number(
+                                    myPlayerState?.bonuses?.[cColor] || 0
+                                  );
+                                  const netCost = Math.max(0, Number(cVal) - myDiscount);
+                                  return (
+                                    <div
+                                      key={cColor}
+                                      className="splendor-cost-chip"
+                                      style={{
+                                        background: cMeta.bg,
+                                        color: cMeta.text,
+                                        borderColor: cMeta.border,
+                                      }}
+                                      title={`${cMeta.name}: ${cVal} (Net ${netCost} after your +${myDiscount} bonus)`}
+                                    >
+                                      <span>{cMeta.name}</span>
+                                      <strong>{cVal}</strong>
+                                    </div>
+                                  );
+                                })}
                               </div>
 
-                              {/* Card Action Buttons on User's Turn */}
                               {isMyTurn && (
                                 <div className="splendor-dev-card-actions">
                                   <button
@@ -1158,11 +1501,9 @@ export default function SplendorModule({
                                       })
                                     }
                                   >
-                                    <ShoppingBag size={13} />{' '}
-                                    {affordInfo.affordable
-                                      ? affordInfo.goldNeeded > 0
-                                        ? `Buy (${affordInfo.goldNeeded}★)`
-                                        : 'Buy'
+                                    <ShoppingBag size={12} />{' '}
+                                    {affordInfo.affordable && affordInfo.goldNeeded > 0
+                                      ? `Buy (${affordInfo.goldNeeded}★)`
                                       : 'Buy'}
                                   </button>
                                   <button
@@ -1175,9 +1516,9 @@ export default function SplendorModule({
                                         card_id: card.id,
                                       })
                                     }
-                                    title="Reserve card into your hand and take 1 Gold joker token"
+                                    title="Reserve card & gain +1 Gold"
                                   >
-                                    <Bookmark size={13} /> Reserve
+                                    <Bookmark size={12} />
                                   </button>
                                 </div>
                               )}
@@ -1189,24 +1530,6 @@ export default function SplendorModule({
                   );
                 })}
               </div>
-
-              {/* Match Activity Log */}
-              <div className="card splendor-log-card">
-                <h4>📜 Recent Turn Log</h4>
-                <div className="splendor-log-list">
-                  {(gState.move_log || [])
-                    .slice()
-                    .reverse()
-                    .map((entry, idx) => (
-                      <div key={idx} className="splendor-log-item">
-                        <span className="splendor-log-turn">
-                          {entry.turn > 0 ? `Turn ${entry.turn}` : 'Start'}
-                        </span>
-                        <span className="splendor-log-text">{entry.text}</span>
-                      </div>
-                    ))}
-                </div>
-              </div>
             </>
           )}
         </>
@@ -1215,71 +1538,62 @@ export default function SplendorModule({
       {/* Fun Stats & Analytics Tab */}
       {subTab === 'analytics' && analytics && (
         <div className="splendor-analytics-section">
-          {/* Top KPI Summary Cards */}
           <div className="kpi-grid-4">
             <div className="kpi-card">
-              <span className="kpi-label">Total Games Recorded</span>
+              <span className="kpi-label">Total Games</span>
               <strong className="kpi-value">{analytics.total_games}</strong>
               <small className="text-muted">
                 {analytics.completed_games_count} finished · {analytics.active_games_count} active
               </small>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Total Development Cards Played</span>
+              <span className="kpi-label">Total Cards Played</span>
               <strong className="kpi-value">{analytics.total_cards_played_all_time}</strong>
-              <small className="text-muted">Combined cards bought across all games</small>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Average Turns per Match</span>
+              <span className="kpi-label">Avg Turns / Match</span>
               <strong className="kpi-value">{analytics.avg_turns_per_completed_game}</strong>
-              <small className="text-muted">Across completed & forfeited games</small>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Card Pool Size</span>
+              <span className="kpi-label">Deck Pool</span>
               <strong className="kpi-value">90 Cards · 10 Nobles</strong>
-              <small className="text-muted">40 Tier I · 30 Tier II · 20 Tier III</small>
             </div>
           </div>
 
-          {/* Head-to-Head Partner Comparison */}
           <div className="splendor-players-grid">
             {(analytics.partner_stats || []).map((ps) => (
               <div key={ps.partner_id} className="card splendor-partner-stat-card">
                 <div className="splendor-partner-stat-header">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
                     <span
                       className="partner-dot"
-                      style={{ background: ps.avatar_color, width: 14, height: 14 }}
+                      style={{ background: ps.avatar_color, width: 13, height: 13 }}
                     />
                     <h3>{ps.name}</h3>
                   </div>
                   <span className="splendor-winrate-badge">
-                    <Trophy size={14} /> {ps.wins} Wins ({ps.win_rate}%)
+                    <Trophy size={13} /> {ps.wins} Wins ({ps.win_rate}%)
                   </span>
                 </div>
 
                 <div className="splendor-stat-metrics-grid">
                   <div className="splendor-stat-box">
-                    <span>Games Won / Played</span>
+                    <span>Won / Played</span>
                     <strong>
                       {ps.wins} / {ps.games_played}
                     </strong>
                   </div>
                   <div className="splendor-stat-box">
-                    <span>Total Cards Played</span>
-                    <strong>{ps.total_cards_played} cards</strong>
+                    <span>Cards Played</span>
+                    <strong>{ps.total_cards_played}</strong>
                   </div>
                   <div className="splendor-stat-box">
                     <span>Avg Cards / Game</span>
                     <strong>{ps.avg_cards_per_game}</strong>
                   </div>
                   <div className="splendor-stat-box">
-                    <span>Most Cards in 1 Game</span>
+                    <span>Max Cards (1 Game)</span>
                     <strong>{ps.max_cards_in_game}</strong>
-                  </div>
-                  <div className="splendor-stat-box">
-                    <span>Total Prestige Points</span>
-                    <strong>{ps.total_points_scored} pts</strong>
                   </div>
                   <div className="splendor-stat-box">
                     <span>High Score / Nobles</span>
@@ -1287,24 +1601,37 @@ export default function SplendorModule({
                       {ps.high_score} pts · {ps.total_nobles_visited} 👑
                     </strong>
                   </div>
+                  <div className="splendor-stat-box">
+                    <span>Net Wager Won</span>
+                    <strong
+                      style={{
+                        color:
+                          ps.net_wager_won > 0
+                            ? 'var(--green)'
+                            : ps.net_wager_won < 0
+                            ? 'var(--red)'
+                            : 'var(--text-main)',
+                      }}
+                    >
+                      {ps.net_wager_won >= 0
+                        ? `+$${Number(ps.net_wager_won || 0).toFixed(2)}`
+                        : `-$${Math.abs(Number(ps.net_wager_won || 0)).toFixed(2)}`}
+                    </strong>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Historical Games Database Ledger */}
           <div className="card">
-            <div className="splendor-section-title-row" style={{ marginBottom: '0.85rem' }}>
-              <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <History size={19} /> Match History & Per-Game Card Counts
+            <div className="splendor-section-title-row">
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <History size={18} /> Match History
               </h3>
-              <span className="text-muted" style={{ fontSize: '0.82rem' }}>
-                Saved database log of every game, cards played by each partner, and match winners
-              </span>
             </div>
 
             {(analytics.game_history || []).length === 0 ? (
-              <p className="text-muted">No games played yet. Start a match on the Game Board tab!</p>
+              <p className="text-muted">No games played yet.</p>
             ) : (
               <div className="splendor-history-list">
                 {analytics.game_history.map((g) => (
@@ -1313,38 +1640,37 @@ export default function SplendorModule({
                       <strong>Game #{g.id}</strong>
                       <span className={`splendor-status-pill status-${g.status}`}>
                         {g.status === 'active'
-                          ? 'In Progress'
+                          ? 'Active'
                           : g.status === 'forfeited'
                           ? 'Forfeited'
                           : 'Completed'}
                       </span>
-                      <span className="text-muted" style={{ fontSize: '0.78rem' }}>
+                      {g.wager_amount > 0 && (
+                        <span className="splendor-wager-badge">
+                          <Coins size={12} /> ${Number(g.wager_amount).toFixed(2)}
+                        </span>
+                      )}
+                      <span className="text-muted" style={{ fontSize: '0.76rem' }}>
                         {g.turns_count} turns
                       </span>
                     </div>
 
                     <div className="splendor-history-players">
                       <div className="splendor-history-player-col">
-                        <span
-                          className="partner-dot"
-                          style={{ background: g.player1_color }}
-                        />
+                        <span className="partner-dot" style={{ background: g.player1_color }} />
                         <strong>{g.player1_name}:</strong>
                         <span>{g.player1_points} pts</span>
                         <span className="splendor-history-cards-tag">
-                          {g.player1_cards_played} cards played
+                          {g.player1_cards_played} cards
                         </span>
                       </div>
 
                       <div className="splendor-history-player-col">
-                        <span
-                          className="partner-dot"
-                          style={{ background: g.player2_color }}
-                        />
+                        <span className="partner-dot" style={{ background: g.player2_color }} />
                         <strong>{g.player2_name}:</strong>
                         <span>{g.player2_points} pts</span>
                         <span className="splendor-history-cards-tag">
-                          {g.player2_cards_played} cards played
+                          {g.player2_cards_played} cards
                         </span>
                       </div>
                     </div>
@@ -1352,17 +1678,103 @@ export default function SplendorModule({
                     <div className="splendor-history-winner">
                       {g.winner_name ? (
                         <span className="splendor-winner-badge">
-                          <Award size={14} /> Winner: {g.winner_name}
-                          {g.forfeited_by_name ? ` (${g.forfeited_by_name} forfeited)` : ''}
+                          <Award size={13} /> {g.winner_name}
                         </span>
                       ) : (
-                        <span className="text-muted">Active Match</span>
+                        <span className="text-muted">In Progress</span>
                       )}
                     </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* New Game Modal (Triggered from Hamburger Menu) */}
+      {showNewGameModal && (
+        <div
+          className="finance-modal-backdrop"
+          onClick={() => setShowNewGameModal(false)}
+        >
+          <div
+            className="finance-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <h3>Start New Splendor Game</h3>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={() => setShowNewGameModal(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="finance-modal-body">{renderNewGameForm(true)}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Guided Tutorial Bottom Sheet / Coachmark */}
+      {activeTutorialStep && (
+        <div className="splendor-tutorial-coachmark" role="dialog" aria-label="Splendor Tutorial">
+          <div className="splendor-tutorial-card">
+            <div className="splendor-tutorial-top">
+              <span className="splendor-tutorial-step-pill">
+                Tutorial {tutorialStepIndex + 1} / {TUTORIAL_STEPS.length}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={closeTutorial}
+              >
+                Skip <X size={14} />
+              </button>
+            </div>
+
+            <h4>{activeTutorialStep.title}</h4>
+            <p>{activeTutorialStep.description}</p>
+
+            <div className="splendor-tutorial-nav">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={tutorialStepIndex === 0}
+                onClick={() => setTutorialStepIndex((i) => Math.max(0, i - 1))}
+              >
+                <ChevronLeft size={15} /> Back
+              </button>
+
+              <div className="splendor-tutorial-dots">
+                {TUTORIAL_STEPS.map((st, idx) => (
+                  <span
+                    key={st.id}
+                    className={`splendor-tut-dot ${idx === tutorialStepIndex ? 'active' : ''}`}
+                    onClick={() => setTutorialStepIndex(idx)}
+                  />
+                ))}
+              </div>
+
+              {tutorialStepIndex < TUTORIAL_STEPS.length - 1 ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setTutorialStepIndex((i) => i + 1)}
+                >
+                  Next <ChevronRight size={15} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={closeTutorial}
+                >
+                  Let&apos;s Play!
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
