@@ -2,13 +2,21 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, BellRing, CheckCheck, Send, Smartphone, Trash2, X } from 'lucide-react';
 import {
   apiFetch,
+  base64UrlToUint8Array,
   getCookie,
+  isIOSNotStandalone,
   registerServiceWorker,
   setCookie,
   showMobileNativeNotification,
+  syncAppBadge,
 } from '../api';
 
 export async function enableMobilePushSubscription() {
+  if (isIOSNotStandalone()) {
+    throw new Error(
+      'On iPhone/iPad, tap the Share button → "Add to Home Screen", then open Family Hub from your Home Screen to enable push alerts.'
+    );
+  }
   if (typeof window === 'undefined' || !('Notification' in window)) {
     throw new Error(
       'Push notifications are not available in this browser view. On iPhone/iPad, tap Share → "Add to Home Screen" first.'
@@ -21,15 +29,26 @@ export async function enableMobilePushSubscription() {
   }
 
   const reg = await registerServiceWorker();
+  const activeReg =
+    reg || ('serviceWorker' in navigator ? await navigator.serviceWorker.ready : null);
   let subPayload = {};
-  if (reg && reg.pushManager && typeof reg.pushManager.getSubscription === 'function') {
+  if (activeReg && activeReg.pushManager) {
     try {
-      const existingSub = await reg.pushManager.getSubscription();
+      let existingSub = await activeReg.pushManager.getSubscription();
+      if (!existingSub && typeof activeReg.pushManager.subscribe === 'function') {
+        const vapidRes = await apiFetch('/api/notifications/vapid-public-key');
+        if (vapidRes?.public_key) {
+          existingSub = await activeReg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: base64UrlToUint8Array(vapidRes.public_key),
+          });
+        }
+      }
       if (existingSub) {
         subPayload = existingSub.toJSON ? existingSub.toJSON() : {};
       }
     } catch {
-      // Ignore if VAPID push server is not configured; SW showNotification still works
+      // Fallback to SW showNotification while foregrounded if pushManager is unavailable
     }
   }
 
@@ -86,6 +105,7 @@ export function MobilePushPromptBanner({ currentPartner }) {
       .catch(() => {});
   }, [currentPartner?.id]);
 
+  const iosNeedsInstall = isIOSNotStandalone();
   if (dismissed) return null;
   if (perm === 'granted' && subscribed && !feedback) return null;
 
@@ -146,9 +166,9 @@ export function MobilePushPromptBanner({ currentPartner }) {
             Get instant alerts on your phone when your partner submits a purchase request, marks an item{' '}
             <em>Under Review</em>, or updates the monthly budget.
           </p>
-          {perm === 'unsupported' && (
+          {(perm === 'unsupported' || iosNeedsInstall) && (
             <small className="text-muted">
-              On iPhone Safari: tap <strong>Share → Add to Home Screen</strong> to enable native iOS push alerts.
+              On iPhone/iPad Safari: tap <strong>Share → Add to Home Screen</strong>, then open Family Hub from your Home Screen to enable lock-screen push alerts.
             </small>
           )}
           {feedback && <small className="push-prompt-feedback">{feedback}</small>}
@@ -156,7 +176,7 @@ export function MobilePushPromptBanner({ currentPartner }) {
       </div>
 
       <div className="push-prompt-actions">
-        {perm !== 'granted' || !subscribed ? (
+        {iosNeedsInstall ? null : perm !== 'granted' || !subscribed ? (
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -200,16 +220,35 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
   const [pushSubscribed, setPushSubscribed] = useState(
     () => getCookie('gibson_push_enabled', '0') === '1'
   );
+  const [pushDevices, setPushDevices] = useState([]);
   const [pushStatusMsg, setPushStatusMsg] = useState('');
   const lastTopIdRef = useRef(null);
   const wrapperRef = useRef(null);
+
+  const loadPushStatus = async () => {
+    try {
+      const res = await apiFetch('/api/notifications/push-status');
+      setPushDevices(res.subscriptions || []);
+      if (res.subscribed) {
+        setPushSubscribed(true);
+        setCookie('gibson_push_enabled', '1');
+      } else {
+        setPushSubscribed(false);
+        setCookie('gibson_push_enabled', '0');
+      }
+    } catch {
+      // Ignore when locked
+    }
+  };
 
   const loadNotifications = async (triggerToast = false) => {
     try {
       const data = await apiFetch('/api/notifications');
       const list = data.notifications || [];
+      const unread = data.unread_count || 0;
       setNotifications(list);
-      setUnreadCount(data.unread_count || 0);
+      setUnreadCount(unread);
+      syncAppBadge(unread);
 
       if (list.length > 0) {
         const newest = list[0];
@@ -235,14 +274,7 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
   useEffect(() => {
     registerServiceWorker();
     loadNotifications(false);
-    apiFetch('/api/notifications/push-status')
-      .then((res) => {
-        if (res.subscribed) {
-          setPushSubscribed(true);
-          setCookie('gibson_push_enabled', '1');
-        }
-      })
-      .catch(() => {});
+    loadPushStatus();
 
     const timer = setInterval(() => loadNotifications(true), 12000);
     return () => clearInterval(timer);
@@ -331,14 +363,28 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
     await loadNotifications(false);
   };
 
+  const handleRemoveDevice = async (subId) => {
+    try {
+      await apiFetch(`/api/notifications/push-subscriptions/${subId}`, { method: 'DELETE' });
+      await loadPushStatus();
+      setPushStatusMsg('Device removed from push alerts.');
+    } catch (err) {
+      setPushStatusMsg(err.message);
+    }
+  };
+
   return (
     <div className="notif-wrapper" ref={wrapperRef}>
       <button
         type="button"
         className="btn btn-secondary btn-sm notif-bell-btn"
         onClick={() => {
-          setOpen(!open);
-          if (!open) loadNotifications(false);
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          if (nextOpen) {
+            loadNotifications(false);
+            loadPushStatus();
+          }
         }}
         title="Notifications"
       >
@@ -418,6 +464,30 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
               ))
             )}
           </div>
+
+          {pushDevices.length > 0 && (
+            <div className="notif-push-status-bar" style={{ borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <small className="text-muted">
+                <strong>Registered Devices ({pushDevices.length})</strong>
+              </small>
+              {pushDevices.map((dev) => (
+                <div key={dev.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <small className="text-muted">
+                    {dev.device_label || 'Mobile Device'}
+                    {dev.endpoint?.startsWith('https://') ? ' (Web Push)' : ' (Foreground)'}
+                  </small>
+                  <button
+                    type="button"
+                    className="btn-icon-danger"
+                    onClick={() => handleRemoveDevice(dev.id)}
+                    title="Remove device"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

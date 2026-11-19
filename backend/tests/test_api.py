@@ -2714,6 +2714,115 @@ def test_splendor_game_turns_bump_cooldown_forfeit_and_analytics(client):
     assert jordan_next["monthly_limit"] == 200.0
 
 
+def test_vapid_web_push_dispatch_and_cleanup(client, monkeypatch):
+    setup_res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Push Test Family",
+            "partners": [
+                {"name": "Alex", "email": "alex@push.local", "avatar_color": "#6366f1", "password": "Password123!"},
+                {"name": "Jordan", "email": "jordan@push.local", "avatar_color": "#ec4899", "password": "Password456!"},
+            ],
+        },
+    )
+    assert setup_res.status_code == 201
+    p_data = setup_res.get_json()
+    p1_id = p_data["partners"][0]["id"]
+    p2_id = p_data["partners"][1]["id"]
+
+    auth_p1 = {"Authorization": f"Bearer {p_data['token']}"}
+    auth_p2 = {
+        "Authorization": f"Bearer {client.post('/api/auth/login', json={'email': 'jordan@push.local', 'password': 'Password456!'}).get_json()['token']}"
+    }
+
+    # 1. VAPID public key is generated and returned
+    vapid_res = client.get("/api/notifications/vapid-public-key", headers=auth_p1)
+    assert vapid_res.status_code == 200
+    vapid_data = vapid_res.get_json()
+    assert vapid_data["configured"] is True
+    assert len(vapid_data["public_key"]) > 40
+
+    # Calling again returns the same persisted public key
+    vapid_res2 = client.get("/api/notifications/vapid-public-key", headers=auth_p2)
+    assert vapid_res2.get_json()["public_key"] == vapid_data["public_key"]
+
+    # 2. Subscribe an HTTPS push endpoint for Alex
+    sub_res = client.post(
+        "/api/notifications/push-subscribe",
+        headers=auth_p1,
+        json={
+            "device_label": "Alex iPhone",
+            "subscription": {
+                "endpoint": "https://web.push.apple.com/sub/alex-iphone-1",
+                "keys": {"p256dh": "test-p256dh-key", "auth": "test-auth-key"},
+            },
+        },
+    )
+    assert sub_res.status_code == 201
+    sub_id = sub_res.get_json()["subscriptions"][0]["id"]
+
+    # 3. Mock pywebpush.webpush to verify payload & tag on notification creation
+    sent_calls = []
+
+    def fake_webpush(subscription_info, data, vapid_private_key, vapid_claims, ttl):
+        sent_calls.append({
+            "endpoint": subscription_info["endpoint"],
+            "data": json.loads(data),
+            "sub": vapid_claims["sub"],
+            "ttl": ttl,
+        })
+
+    import backend.modules.push_service as push_service
+
+    monkeypatch.setattr(push_service, "webpush", fake_webpush)
+
+    req_res = client.post(
+        "/api/requests",
+        headers=auth_p2,
+        json={"title": "Espresso Grinder", "amount": 250.0, "category": "Household"},
+    )
+    assert req_res.status_code == 201
+    assert len(sent_calls) == 1
+    assert sent_calls[0]["endpoint"] == "https://web.push.apple.com/sub/alex-iphone-1"
+    assert "Espresso Grinder" in sent_calls[0]["data"]["title"]
+    assert sent_calls[0]["data"]["link_tab"] == "requests"
+    assert sent_calls[0]["data"]["unread_count"] >= 1
+    assert sent_calls[0]["data"]["tag"].startswith("request_created-")
+
+    # 4. Expired endpoint (410 Gone) is automatically deactivated
+    class FakeResp:
+        status_code = 410
+
+    def fake_webpush_gone(*args, **kwargs):
+        raise push_service.WebPushException("Gone", response=FakeResp())
+
+    monkeypatch.setattr(push_service, "webpush", fake_webpush_gone)
+    test_res = client.post("/api/notifications/push-test", headers=auth_p1)
+    assert test_res.status_code == 201
+
+    status_after = client.get("/api/notifications/push-status", headers=auth_p1).get_json()
+    assert status_after["subscribed"] is False
+
+    # 5. Re-subscribe and test explicit device delete
+    sub_res2 = client.post(
+        "/api/notifications/push-subscribe",
+        headers=auth_p1,
+        json={
+            "device_label": "Alex Android",
+            "subscription": {
+                "endpoint": "https://fcm.googleapis.com/fcm/send/alex-android-1",
+                "keys": {"p256dh": "test-p256dh-key-2", "auth": "test-auth-key-2"},
+            },
+        },
+    )
+    assert sub_res2.status_code == 201
+    del_id = sub_res2.get_json()["subscriptions"][0]["id"]
+    del_res = client.delete(f"/api/notifications/push-subscriptions/{del_id}", headers=auth_p1)
+    assert del_res.status_code == 200
+    assert client.get("/api/notifications/push-status", headers=auth_p1).get_json()["subscribed"] is False
+
+
+
 
 
 

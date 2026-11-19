@@ -104,6 +104,18 @@ def delete_notification(notif_id: int):
 
 # --- Mobile Push Notifications Registration & Test Endpoints ---
 
+@hub_bp.route("/notifications/vapid-public-key", methods=["GET"])
+def get_vapid_public_key():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    from backend.modules.push_service import get_or_create_vapid_keys
+
+    public_key, _, _ = get_or_create_vapid_keys(db)
+    return jsonify({"public_key": public_key, "configured": bool(public_key)})
+
+
 @hub_bp.route("/notifications/push-status", methods=["GET"])
 def get_push_status():
     actor = getattr(g, "current_partner", None)
@@ -174,6 +186,42 @@ def subscribe_push_notifications():
     }), 201
 
 
+@hub_bp.route("/notifications/push-subscriptions/<int:sub_id>", methods=["DELETE"])
+def delete_push_subscription(sub_id: int):
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    db = get_db()
+    db.execute(
+        "DELETE FROM push_subscriptions WHERE id = ? AND partner_id = ?",
+        (sub_id, actor["id"]),
+    )
+    db.commit()
+    return jsonify({"deleted": True, "id": sub_id})
+
+
+@hub_bp.route("/notifications/push-unsubscribe", methods=["POST"])
+def unsubscribe_push_notification():
+    actor = getattr(g, "current_partner", None)
+    if not actor:
+        return jsonify({"error": "Authentication required"}), 401
+    data = request.get_json(silent=True) or {}
+    endpoint = (data.get("endpoint") or "").strip()
+    db = get_db()
+    if endpoint:
+        db.execute(
+            "UPDATE push_subscriptions SET enabled = 0, updated_at = datetime('now') WHERE partner_id = ? AND endpoint = ?",
+            (actor["id"], endpoint),
+        )
+    else:
+        db.execute(
+            "UPDATE push_subscriptions SET enabled = 0, updated_at = datetime('now') WHERE partner_id = ?",
+            (actor["id"],),
+        )
+    db.commit()
+    return jsonify({"unsubscribed": True})
+
+
 @hub_bp.route("/notifications/push-test", methods=["POST"])
 def send_test_push_notification():
     actor = getattr(g, "current_partner", None)
@@ -192,6 +240,20 @@ def send_test_push_notification():
     )
     db.commit()
     notif = dict(db.execute("SELECT * FROM notifications WHERE id = ?", (cur.lastrowid,)).fetchone())
+    try:
+        from backend.modules.push_service import dispatch_web_push
+
+        dispatch_web_push(
+            db,
+            recipient_partner_id=actor["id"],
+            title=title,
+            message=message,
+            link_tab="overview",
+            notif_type="push_test",
+            reference_id=notif["id"],
+        )
+    except Exception:
+        pass
     return jsonify({"sent": True, "notification": notif}), 201
 
 

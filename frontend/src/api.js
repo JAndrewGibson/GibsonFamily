@@ -238,10 +238,12 @@ export async function showMobileNativeNotification(title, body, linkTab = 'overv
       if (activeReg && typeof activeReg.showNotification === 'function') {
         await activeReg.showNotification(title, {
           body: body || '',
+          icon: '/icon-192.png',
+          badge: '/badge-96.png',
           tag: `gibson-alert-${Date.now()}`,
           renotify: true,
           vibrate: [180, 90, 180],
-          data: { link_tab: linkTab, url: '/' },
+          data: { link_tab: linkTab, url: `/?tab=${encodeURIComponent(linkTab)}` },
         });
         return true;
       }
@@ -251,9 +253,40 @@ export async function showMobileNativeNotification(title, body, linkTab = 'overv
   }
 
   try {
-    new window.Notification(title, { body: body || '' });
+    new window.Notification(title, { body: body || '', icon: '/icon-192.png' });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Updates or clears the Home Screen PWA app icon badge when supported (iOS 16.4+ & Android).
+ */
+export function syncAppBadge(unreadCount) {
+  if (typeof navigator === 'undefined') return;
+  try {
+    if (unreadCount > 0 && typeof navigator.setAppBadge === 'function') {
+      navigator.setAppBadge(unreadCount).catch(() => { });
+    } else if (unreadCount === 0 && typeof navigator.clearAppBadge === 'function') {
+      navigator.clearAppBadge().catch(() => { });
+    }
+  } catch {
+    // Ignore unsupported platforms
+  }
+}
+
+/**
+ * Returns true on iPhone/iPad Safari when not yet added to the Home Screen (where Web Push is unavailable).
+ */
+export function isIOSNotStandalone() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const isIOS =
+    /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!isIOS) return false;
+  const standalone =
+    window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  return !standalone;
 }

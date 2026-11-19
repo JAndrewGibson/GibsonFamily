@@ -65,3 +65,9 @@ class Config:
     WEBAUTHN_ORIGIN = _get_env_case_insensitive(
         "WEBAUTHN_ORIGIN", "https://gibsonfamily.onrender.com"
     )
+
+    VAPID_PUBLIC_KEY = _get_env_case_insensitive("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY = _get_env_case_insensitive("VAPID_PRIVATE_KEY", "")
+    VAPID_CLAIMS_SUB = _get_env_case_insensitive(
+        "VAPID_CLAIMS_SUB", "mailto:notifications@gibsonfamily.app"
+    )

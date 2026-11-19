@@ -849,3 +849,17 @@ def create_notification(
     )
     bump_state_version(db)
     db.commit()
+    try:
+        from backend.modules.push_service import dispatch_web_push
+
+        dispatch_web_push(
+            db,
+            recipient_partner_id=recipient_partner_id,
+            title=title,
+            message=message,
+            link_tab=link_tab,
+            notif_type=notif_type,
+            reference_id=reference_id,
+        )
+    except Exception:
+        pass

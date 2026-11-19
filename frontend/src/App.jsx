@@ -82,8 +82,20 @@ export default function App() {
   });
 
   const [activeTab, setActiveTabState] = useState(() => {
-    if (typeof window !== 'undefined' && window.location.search.includes('oauth_state_id=')) {
-      return 'finance';
+    if (typeof window !== 'undefined') {
+      if (window.location.search.includes('oauth_state_id=')) {
+        return 'finance';
+      }
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab');
+      if (tabParam) {
+        const normalized = tabParam === 'splendor' ? 'games' : tabParam;
+        urlParams.delete('tab');
+        const nextSearch = urlParams.toString();
+        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, '', nextUrl);
+        return normalized;
+      }
     }
     const fromCookie = getCookie('gibson_active_tab', '');
     if (fromCookie) return fromCookie === 'splendor' ? 'games' : fromCookie;
@@ -768,9 +780,8 @@ export default function App() {
             })}
             <button
               type="button"
-              className={`mobile-bottom-nav-btn ${
-                !bottomNavModules.some((m) => m.id === activeTab) ? 'active' : ''
-              }`}
+              className={`mobile-bottom-nav-btn ${!bottomNavModules.some((m) => m.id === activeTab) ? 'active' : ''
+                }`}
               onClick={() => setMobileDrawerOpen(true)}
             >
               <div className="mobile-nav-icon-wrap">
