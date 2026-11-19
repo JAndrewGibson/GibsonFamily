@@ -156,6 +156,11 @@ def subscribe_push_notifications():
     enabled = 0 if data.get("enabled") is False else 1
 
     db = get_db()
+    if endpoint.startswith("https://"):
+        db.execute(
+            "DELETE FROM push_subscriptions WHERE partner_id = ? AND endpoint LIKE 'mobile-sw://%'",
+            (actor["id"],),
+        )
     db.execute(
         """
         INSERT INTO push_subscriptions (partner_id, endpoint, p256dh, auth, device_label, user_agent, enabled, updated_at)
@@ -240,10 +245,11 @@ def send_test_push_notification():
     )
     db.commit()
     notif = dict(db.execute("SELECT * FROM notifications WHERE id = ?", (cur.lastrowid,)).fetchone())
+    dispatched = 0
     try:
         from backend.modules.push_service import dispatch_web_push
 
-        dispatch_web_push(
+        dispatched = dispatch_web_push(
             db,
             recipient_partner_id=actor["id"],
             title=title,
@@ -254,7 +260,11 @@ def send_test_push_notification():
         )
     except Exception:
         pass
-    return jsonify({"sent": True, "notification": notif}), 201
+    return jsonify({
+        "sent": True,
+        "web_push_dispatched": dispatched > 0,
+        "notification": notif,
+    }), 201
 
 
 # --- Couples Admin & Medical Paperwork ---

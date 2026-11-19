@@ -138,8 +138,13 @@ export function MobilePushPromptBanner({ currentPartner }) {
     try {
       const res = await apiFetch('/api/notifications/push-test', { method: 'POST' });
       const notif = res.notification;
-      if (notif) {
-        await showMobileNativeNotification(notif.title, notif.message, notif.link_tab || 'overview');
+      if (notif && !res.web_push_dispatched) {
+        await showMobileNativeNotification(
+          notif.title,
+          notif.message,
+          notif.link_tab || 'overview',
+          `push_test-${notif.id}`
+        );
       }
       setFeedback('Test push notification sent to your device!');
     } catch (err) {
@@ -223,12 +228,15 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
   const [pushDevices, setPushDevices] = useState([]);
   const [pushStatusMsg, setPushStatusMsg] = useState('');
   const lastTopIdRef = useRef(null);
+  const hasWebPushRef = useRef(false);
   const wrapperRef = useRef(null);
 
   const loadPushStatus = async () => {
     try {
       const res = await apiFetch('/api/notifications/push-status');
-      setPushDevices(res.subscriptions || []);
+      const subs = res.subscriptions || [];
+      setPushDevices(subs);
+      hasWebPushRef.current = subs.some((s) => (s.endpoint || '').startsWith('https://'));
       if (res.subscribed) {
         setPushSubscribed(true);
         setCookie('gibson_push_enabled', '1');
@@ -254,17 +262,20 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
         const newest = list[0];
         if (
           triggerToast &&
+          !hasWebPushRef.current &&
           lastTopIdRef.current !== null &&
           newest.id > lastTopIdRef.current &&
           !newest.is_read
         ) {
+          const tag = `${newest.notif_type || 'notif'}-${newest.reference_id ?? newest.id}`;
           await showMobileNativeNotification(
             newest.title,
             newest.message,
-            newest.link_tab || 'overview'
+            newest.link_tab || 'overview',
+            tag
           );
         }
-        lastTopIdRef.current = Math.max(...list.map((n) => n.id));
+        lastTopIdRef.current = Math.max(lastTopIdRef.current || 0, ...list.map((n) => n.id));
       }
     } catch {
       // Ignore polling errors when locked
@@ -327,12 +338,17 @@ export default function NotificationCenter({ onNavigateTab, syncVersion }) {
     setPushStatusMsg('');
     try {
       const res = await apiFetch('/api/notifications/push-test', { method: 'POST' });
-      if (res.notification) {
-        await showMobileNativeNotification(
-          res.notification.title,
-          res.notification.message,
-          res.notification.link_tab || 'overview'
-        );
+      const notif = res.notification;
+      if (notif) {
+        lastTopIdRef.current = Math.max(lastTopIdRef.current || 0, notif.id);
+        if (!res.web_push_dispatched) {
+          await showMobileNativeNotification(
+            notif.title,
+            notif.message,
+            notif.link_tab || 'overview',
+            `push_test-${notif.id}`
+          );
+        }
       }
       await loadNotifications(false);
       setPushStatusMsg('Test alert sent!');

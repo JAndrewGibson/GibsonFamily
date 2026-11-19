@@ -223,7 +223,7 @@ export async function registerServiceWorker() {
  * Triggers a native notification on mobile (via ServiceWorkerRegistration.showNotification)
  * with graceful fallback to the desktop Notification constructor.
  */
-export async function showMobileNativeNotification(title, body, linkTab = 'overview') {
+export async function showMobileNativeNotification(title, body, linkTab = 'overview', tag = null) {
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return false;
   }
@@ -240,7 +240,7 @@ export async function showMobileNativeNotification(title, body, linkTab = 'overv
           body: body || '',
           icon: '/icon-192.png',
           badge: '/badge-96.png',
-          tag: `gibson-alert-${Date.now()}`,
+          tag: tag || `gibson-alert-${Date.now()}`,
           renotify: true,
           vibrate: [180, 90, 180],
           data: { link_tab: linkTab, url: `/?tab=${encodeURIComponent(linkTab)}` },
@@ -253,7 +253,7 @@ export async function showMobileNativeNotification(title, body, linkTab = 'overv
   }
 
   try {
-    new window.Notification(title, { body: body || '', icon: '/icon-192.png' });
+    new window.Notification(title, { body: body || '', icon: '/icon-192.png', tag: tag || undefined });
     return true;
   } catch {
     return false;
