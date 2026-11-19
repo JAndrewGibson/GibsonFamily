@@ -1,6 +1,10 @@
 import base64
+import hashlib
 import json
+import struct
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from backend.app import create_app
 from backend.database import get_db
 from backend.security import SESSION_COOKIE_NAME, decrypt_plaid_token, encrypt_plaid_token
@@ -8,6 +12,52 @@ from backend.security import SESSION_COOKIE_NAME, decrypt_plaid_token, encrypt_p
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _build_test_webauthn_attestation_and_signer(cred_id_bytes: bytes, rp_id: str = "localhost", sign_count: int = 1):
+    """Generates a real ECDSA P-256 keypair and builds a standards-compliant CBOR attestationObject."""
+    priv_key = ec.generate_private_key(ec.SECP256R1())
+    pub_numbers = priv_key.public_key().public_numbers()
+    x_bytes = pub_numbers.x.to_bytes(32, "big")
+    y_bytes = pub_numbers.y.to_bytes(32, "big")
+
+    # Minimal CBOR map for COSE EC2 P-256 public key:
+    # {1: 2, 3: -7, -1: 1, -2: x_bytes (32B), -3: y_bytes (32B)}
+    cose_key_cbor = (
+        b"\xa5"
+        b"\x01\x02"
+        b"\x03\x26"
+        b"\x20\x01"
+        b"\x21\x58\x20" + x_bytes +
+        b"\x22\x58\x20" + y_bytes
+    )
+
+    rp_id_hash = hashlib.sha256(rp_id.encode("utf-8")).digest()
+    flags = b"\x45"  # UP (0x01) | UV (0x04) | AT (0x40)
+    sc_bytes = struct.pack(">I", sign_count)
+    aaguid = b"\x00" * 16
+    cred_len = struct.pack(">H", len(cred_id_bytes))
+    auth_data = rp_id_hash + flags + sc_bytes + aaguid + cred_len + cred_id_bytes + cose_key_cbor
+
+    # CBOR map: {"fmt": "none", "authData": <bytes>}
+    if len(auth_data) < 256:
+        auth_data_hdr = b"\x58" + bytes([len(auth_data)])
+    else:
+        auth_data_hdr = b"\x59" + struct.pack(">H", len(auth_data))
+    att_obj_cbor = (
+        b"\xa2"
+        b"\x63fmt\x64none"
+        b"\x68authData" + auth_data_hdr + auth_data
+    )
+
+    def sign_assertion(client_data_raw: bytes, assertion_rp_id: str = rp_id, next_sign_count: int = 2):
+        a_rp_hash = hashlib.sha256(assertion_rp_id.encode("utf-8")).digest()
+        a_data = a_rp_hash + b"\x05" + struct.pack(">I", next_sign_count)
+        signed_payload = a_data + hashlib.sha256(client_data_raw).digest()
+        sig = priv_key.sign(signed_payload, ec.ECDSA(hashes.SHA256()))
+        return a_data, sig
+
+    return att_obj_cbor, sign_assertion
 
 
 @pytest.fixture()
@@ -118,7 +168,7 @@ def test_full_auth_login_lock_notifications_and_request_deletion(client):
     )
     assert unauth_create.status_code in (401, 403)
 
-    # 3. Register WebAuthn Passkey for Partner 1
+    # 3. Register WebAuthn Passkey for Partner 1 using real ECDSA P-256 COSE key & CBOR attestation
     opt_res = client.post("/api/auth/webauthn/register/options", headers=auth_p1, json={"partner_id": p1_id})
     assert opt_res.status_code == 200
     challenge = opt_res.get_json()["challenge"]
@@ -130,7 +180,9 @@ def test_full_auth_login_lock_notifications_and_request_deletion(client):
             "origin": "http://localhost:5173",
         }).encode("utf-8")
     )
-    cred_id = _b64url(b"gibson-passkey-cred-001")
+    cred_id_raw = b"gibson-passkey-cred-001"
+    cred_id = _b64url(cred_id_raw)
+    att_obj_cbor, sign_assertion = _build_test_webauthn_attestation_and_signer(cred_id_raw, rp_id="localhost", sign_count=1)
     ver_res = client.post(
         "/api/auth/webauthn/register/verify",
         headers=auth_p1,
@@ -142,7 +194,7 @@ def test_full_auth_login_lock_notifications_and_request_deletion(client):
                 "rawId": cred_id,
                 "response": {
                     "clientDataJSON": client_data_json,
-                    "attestationObject": _b64url(b"attestation-bytes"),
+                    "attestationObject": _b64url(att_obj_cbor),
                 },
                 "transports": ["internal"],
             },
@@ -155,17 +207,17 @@ def test_full_auth_login_lock_notifications_and_request_deletion(client):
     assert lock_res.status_code == 200
     assert client.get("/api/finance/summary", headers=auth_p1).status_code == 423
 
-    # Unlock with WebAuthn Passkey
+    # Unlock with WebAuthn Passkey (cryptographically signed assertion)
     auth_opt_res = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id})
     auth_challenge = auth_opt_res.get_json()["challenge"]
-    auth_client_data = _b64url(
-        json.dumps({
-            "type": "webauthn.get",
-            "challenge": auth_challenge,
-            "origin": "http://localhost:5173",
-        }).encode("utf-8")
-    )
-    authenticator_data = _b64url((b"\x00" * 32) + b"\x05" + b"\x00\x00\x00\x02")
+    auth_client_data_raw = json.dumps({
+        "type": "webauthn.get",
+        "challenge": auth_challenge,
+        "origin": "http://localhost:5173",
+    }).encode("utf-8")
+    auth_client_data = _b64url(auth_client_data_raw)
+    auth_data_bytes, sig_bytes = sign_assertion(auth_client_data_raw, assertion_rp_id="localhost", next_sign_count=2)
+
     unlock_res = client.post(
         "/api/auth/webauthn/authenticate/verify",
         headers=auth_p1,
@@ -175,8 +227,8 @@ def test_full_auth_login_lock_notifications_and_request_deletion(client):
                 "rawId": cred_id,
                 "response": {
                     "clientDataJSON": auth_client_data,
-                    "authenticatorData": authenticator_data,
-                    "signature": _b64url(b"sig"),
+                    "authenticatorData": _b64url(auth_data_bytes),
+                    "signature": _b64url(sig_bytes),
                 },
             }
         },
@@ -2820,6 +2872,244 @@ def test_vapid_web_push_dispatch_and_cleanup(client, monkeypatch):
     del_res = client.delete(f"/api/notifications/push-subscriptions/{del_id}", headers=auth_p1)
     assert del_res.status_code == 200
     assert client.get("/api/notifications/push-status", headers=auth_p1).get_json()["subscribed"] is False
+
+
+def test_security_audit_webauthn_cryptography_rate_limits_pii_and_plaid_revocation(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_hardening.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE_PATH": str(db_file),
+        "SECRET_KEY": "old-session-secret-key-for-rotation-test",
+        "PLAID_ENCRYPTION_KEY": "dedicated-plaid-aes-gcm-master-key-999",
+        "PLAID_CLIENT_ID": "test-plaid-client-id",
+        "PLAID_SECRET": "test-plaid-secret",
+        "PLAID_ENV": "production",
+        "APPLE_APP_ID": "ABC12345.com.gibsonfamily.hub",
+        "ANDROID_PACKAGE_NAME": "com.gibsonfamily.hub",
+        "ANDROID_SHA256_CERT_FINGERPRINT": "AA:BB:CC:DD",
+    })
+
+    # 1. Verify PLAID_ENCRYPTION_KEY separation & key-rotation fallback to SECRET_KEY
+    with app.app_context():
+        from backend.security import _derive_aes_key
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        import secrets as sec
+
+        # Encrypt with dedicated PLAID_ENCRYPTION_KEY
+        enc_new = encrypt_plaid_token("access-production-tok-new")
+        assert decrypt_plaid_token(enc_new) == "access-production-tok-new"
+
+        # Simulate token previously encrypted with SECRET_KEY before PLAID_ENCRYPTION_KEY was added
+        salt = sec.token_bytes(16)
+        nonce = sec.token_bytes(12)
+        legacy_key = _derive_aes_key("old-session-secret-key-for-rotation-test", salt)
+        ct = AESGCM(legacy_key).encrypt(nonce, b"access-production-tok-rotated", None)
+        enc_old_key = "enc:v2:" + base64.urlsafe_b64encode(salt + nonce + ct).decode("ascii")
+        assert decrypt_plaid_token(enc_old_key) == "access-production-tok-rotated"
+
+    with app.test_client() as client:
+        # 2. Verify CSP, COOP, Cross-Domain, and unauthenticated /api/health & /.well-known endpoints
+        health_res = client.get("/api/health")
+        assert health_res.status_code == 200
+        assert "Content-Security-Policy" in health_res.headers
+        assert "https://cdn.plaid.com" in health_res.headers["Content-Security-Policy"]
+        assert health_res.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+        assert health_res.headers["X-Permitted-Cross-Domain-Policies"] == "none"
+        health_json = health_res.get_json()
+        assert "plaid_env" not in health_json
+        assert "plaid_configured" not in health_json
+
+        aasa_res = client.get("/.well-known/apple-app-site-association")
+        assert aasa_res.status_code == 200
+        assert "ABC12345.com.gibsonfamily.hub" in aasa_res.get_json()["webcredentials"]["apps"]
+
+        assetlinks_res = client.get("/.well-known/assetlinks.json")
+        assert assetlinks_res.status_code == 200
+        assert assetlinks_res.get_json()[0]["target"]["package_name"] == "com.gibsonfamily.hub"
+
+        # 3. Onboard two partners
+        p_res = client.post(
+            "/api/auth/partners",
+            json={
+                "household_name": "Hardened Household",
+                "starting_budget_month": "2026-11",
+                "partners": [
+                    {"name": "Alex Gibson", "email": "alex.secret@gibson.local", "password": "StrongPassword1!"},
+                    {"name": "Jordan Gibson", "email": "jordan.secret@gibson.local", "password": "StrongPassword2!"},
+                ],
+            },
+        )
+        assert p_res.status_code == 201
+        p1_token = p_res.get_json()["token"]
+        p1_id = p_res.get_json()["partners"][0]["id"]
+        auth_p1 = {"Authorization": f"Bearer {p1_token}"}
+        client.post("/api/auth/onboarding/complete", headers=auth_p1, json={"household_name": "Hardened Household"})
+
+        # 4. Verify unauthenticated /api/auth/setup-status masks emails and hides starting_budget_month
+        client.delete_cookie(SESSION_COOKIE_NAME)
+        unauth_status = client.get("/api/auth/setup-status").get_json()
+        assert unauth_status["authenticated"] is False
+        assert unauth_status["starting_budget_month"] is None
+        for pub_p in unauth_status["partners"]:
+            assert "email" not in pub_p
+            assert pub_p["masked_email"].endswith("@gibson.local")
+            assert "***" in pub_p["masked_email"]
+
+        # 5. Verify sandbox_quick_connect is blocked (403) when PLAID_ENV == 'production'
+        sb_res = client.post("/api/finance/plaid/sandbox_quick_connect", headers=auth_p1)
+        assert sb_res.status_code == 403
+        assert "disabled in the Plaid Production environment" in sb_res.get_json()["error"]
+
+        # 6. Verify WebAuthn rejects forged signatures, invalid origins, and cloned sign_count regressions
+        opt_res = client.post("/api/auth/webauthn/register/options", headers=auth_p1, json={"partner_id": p1_id})
+        reg_challenge = opt_res.get_json()["challenge"]
+        cred_id_raw = b"hardened-cred-001"
+        cred_id = _b64url(cred_id_raw)
+        att_cbor, sign_fn = _build_test_webauthn_attestation_and_signer(cred_id_raw, rp_id="localhost", sign_count=5)
+
+        # Registration from untrusted origin must be rejected
+        bad_origin_cd = _b64url(
+            json.dumps({"type": "webauthn.create", "challenge": reg_challenge, "origin": "https://evil-phishing.com"}).encode("utf-8")
+        )
+        bad_reg = client.post(
+            "/api/auth/webauthn/register/verify",
+            headers=auth_p1,
+            json={
+                "partner_id": p1_id,
+                "credential": {"id": cred_id, "response": {"clientDataJSON": bad_origin_cd, "attestationObject": _b64url(att_cbor)}},
+            },
+        )
+        assert bad_reg.status_code == 400
+        assert "origin mismatch" in bad_reg.get_json()["error"]
+
+        # Valid registration succeeds
+        good_reg_cd = _b64url(
+            json.dumps({"type": "webauthn.create", "challenge": reg_challenge, "origin": "http://localhost:5173"}).encode("utf-8")
+        )
+        good_reg = client.post(
+            "/api/auth/webauthn/register/verify",
+            headers=auth_p1,
+            json={
+                "partner_id": p1_id,
+                "credential": {"id": cred_id, "response": {"clientDataJSON": good_reg_cd, "attestationObject": _b64url(att_cbor)}},
+            },
+        )
+        assert good_reg.status_code == 201
+
+        # Forged signature during authentication must be rejected with 401
+        a_opt = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id}).get_json()
+        a_cd_raw = json.dumps({"type": "webauthn.get", "challenge": a_opt["challenge"], "origin": "http://localhost:5173"}).encode("utf-8")
+        a_data_bytes, _ = sign_fn(a_cd_raw, assertion_rp_id="localhost", next_sign_count=6)
+        forged_res = client.post(
+            "/api/auth/webauthn/authenticate/verify",
+            json={
+                "credential": {
+                    "id": cred_id,
+                    "response": {
+                        "clientDataJSON": _b64url(a_cd_raw),
+                        "authenticatorData": _b64url(a_data_bytes),
+                        "signature": _b64url(b"forged-invalid-signature-bytes"),
+                    },
+                }
+            },
+        )
+        assert forged_res.status_code == 401
+
+        # Sign-count regression (sign_count=4 <= stored 5) must be rejected as a cloned authenticator
+        a_opt2 = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id}).get_json()
+        a_cd_raw2 = json.dumps({"type": "webauthn.get", "challenge": a_opt2["challenge"], "origin": "http://localhost:5173"}).encode("utf-8")
+        regressed_auth_data, regressed_sig = sign_fn(a_cd_raw2, assertion_rp_id="localhost", next_sign_count=4)
+        cloned_res = client.post(
+            "/api/auth/webauthn/authenticate/verify",
+            json={
+                "credential": {
+                    "id": cred_id,
+                    "response": {
+                        "clientDataJSON": _b64url(a_cd_raw2),
+                        "authenticatorData": _b64url(regressed_auth_data),
+                        "signature": _b64url(regressed_sig),
+                    },
+                }
+            },
+        )
+        assert cloned_res.status_code == 401
+        assert "counter regression" in cloned_res.get_json()["error"]
+
+        # 7. Verify password change requires current_password and invalidates other active sessions
+        second_login = client.post(
+            "/api/auth/login",
+            json={"email": "alex.secret@gibson.local", "password": "StrongPassword1!"},
+        ).get_json()
+        second_session_headers = {"Authorization": f"Bearer {second_login['token']}"}
+
+        # Changing password without current_password fails with 401
+        no_curr_pw = client.put(
+            f"/api/auth/partners/{p1_id}",
+            headers=auth_p1,
+            json={"name": "Alex Gibson", "password": "NewStrongPassword99!"},
+        )
+        assert no_curr_pw.status_code == 401
+
+        # Changing password with valid current_password succeeds and revokes second_session_headers
+        ok_pw = client.put(
+            f"/api/auth/partners/{p1_id}",
+            headers=auth_p1,
+            json={"name": "Alex Gibson", "current_password": "StrongPassword1!", "password": "NewStrongPassword99!"},
+        )
+        assert ok_pw.status_code == 200
+        assert client.get("/api/finance/summary", headers=second_session_headers).status_code == 401
+        assert client.get("/api/finance/summary", headers=auth_p1).status_code == 200
+
+        # 8. Verify /api/auth/unlock-password rate limiting & session revocation after 5 failed attempts
+        lock_login = client.post(
+            "/api/auth/login",
+            json={"email": "alex.secret@gibson.local", "password": "NewStrongPassword99!"},
+        ).get_json()
+        locked_headers = {"Authorization": f"Bearer {lock_login['token']}"}
+        client.post("/api/auth/lock", headers=locked_headers)
+
+        for _ in range(5):
+            bad_un = client.post("/api/auth/unlock-password", headers=locked_headers, json={"password": "WrongPassword"})
+            assert bad_un.status_code == 401
+
+        # After 5 failed attempts, session was revoked (401) or rate-limited (429)
+        sixth_un = client.post("/api/auth/unlock-password", headers=locked_headers, json={"password": "NewStrongPassword99!"})
+        assert sixth_un.status_code in (401, 429)
+
+        # 9. Verify reset-all requires password confirmation and revokes Plaid tokens via /item/remove
+        with app.app_context():
+            db = get_db()
+            db.execute(
+                "INSERT INTO plaid_items (item_id, access_token, institution_name, linked_by_partner_id) VALUES (?, ?, ?, ?)",
+                ("item-sec-1", encrypt_plaid_token("access-production-token-to-revoke"), "Chase", p1_id),
+            )
+            db.commit()
+
+        removed_plaid_tokens = []
+
+        class FakePlaidRemoveResp:
+            status_code = 200
+            def json(self):
+                return {"removed": True}
+
+        def fake_requests_post(url, json=None, timeout=10):
+            if url.endswith("/item/remove"):
+                removed_plaid_tokens.append(json.get("access_token"))
+            return FakePlaidRemoveResp()
+
+        import backend.modules.auth_webauthn as auth_mod
+        monkeypatch.setattr(auth_mod.requests, "post", fake_requests_post)
+
+        # Calling reset-all without password fails with 401
+        bad_reset = client.post("/api/auth/reset-all", headers=auth_p1, json={})
+        assert bad_reset.status_code == 401
+        assert len(removed_plaid_tokens) == 0
+
+        # Calling reset-all with valid password revokes Plaid access_token and resets workspace
+        good_reset = client.post("/api/auth/reset-all", headers=auth_p1, json={"password": "NewStrongPassword99!"})
+        assert good_reset.status_code == 200
+        assert removed_plaid_tokens == ["access-production-token-to-revoke"]
+
 
 
 

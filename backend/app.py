@@ -125,9 +125,23 @@ def create_app(test_config: dict | None = None) -> Flask:
 
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = (
             "publickey-credentials-get=(self), publickey-credentials-create=(self), camera=(), microphone=(), geolocation=()"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' https://cdn.plaid.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://*.plaid.com; "
+            "frame-src 'self' https://cdn.plaid.com https://*.plaid.com; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'"
         )
         if request.is_secure or request.headers.get("X-Forwarded-Proto", "") == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -147,9 +161,44 @@ def create_app(test_config: dict | None = None) -> Flask:
         return jsonify({
             "status": "ok",
             "app": "Family Modular Hub",
-            "plaid_env": app.config.get("PLAID_ENV", "production"),
-            "plaid_configured": bool(app.config.get("PLAID_CLIENT_ID") and app.config.get("PLAID_SECRET")),
         })
+
+    @app.route("/.well-known/apple-app-site-association", methods=["GET"])
+    def apple_app_site_association():
+        app_id = (app.config.get("APPLE_APP_ID") or "TEAMID.com.gibsonfamily.hub").strip()
+        return jsonify({
+            "applinks": {
+                "apps": [],
+                "details": [
+                    {
+                        "appID": app_id,
+                        "paths": ["/*"],
+                    }
+                ],
+            },
+            "webcredentials": {
+                "apps": [app_id],
+            },
+        })
+
+    @app.route("/.well-known/assetlinks.json", methods=["GET"])
+    def android_asset_links():
+        pkg = (app.config.get("ANDROID_PACKAGE_NAME") or "com.gibsonfamily.hub").strip()
+        fp = (app.config.get("ANDROID_SHA256_CERT_FINGERPRINT") or "").strip()
+        fingerprints = [fp] if fp else []
+        return jsonify([
+            {
+                "relation": [
+                    "delegate_permission/common.handle_all_urls",
+                    "delegate_permission/common.get_login_creds",
+                ],
+                "target": {
+                    "namespace": "android_app",
+                    "package_name": pkg,
+                    "sha256_cert_fingerprints": fingerprints,
+                },
+            }
+        ])
 
     @app.route("/api/account", methods=["DELETE"])
     def account_deletion_root_alias():
@@ -224,4 +273,5 @@ app = create_app()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    debug_mode = os.environ.get("FLASK_DEBUG", "0").strip().lower() in ("1", "true", "yes")
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)

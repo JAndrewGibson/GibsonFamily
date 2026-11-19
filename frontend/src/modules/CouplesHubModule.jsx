@@ -790,8 +790,19 @@ export function ModuleManagerSubModule({
     ) {
       return;
     }
-    await apiFetch('/api/auth/reset-all', { method: 'POST' });
-    await onRefreshState?.();
+    const password = window.prompt(
+      'Enter your account password to confirm resetting all household data:'
+    );
+    if (!password) return;
+    try {
+      await apiFetch('/api/auth/reset-all', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      });
+      await onRefreshState?.();
+    } catch (err) {
+      window.alert(err.message || 'Workspace reset failed.');
+    }
   };
 
   return (

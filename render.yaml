@@ -19,6 +19,8 @@ services:
         sync: false
       - key: FLASK_SECRET_KEY
         generateValue: true
+      - key: PLAID_ENCRYPTION_KEY
+        generateValue: true
       - key: WEBAUTHN_RP_NAME
         value: GibsonFamily Hub
 

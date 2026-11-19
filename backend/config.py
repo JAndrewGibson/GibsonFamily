@@ -17,8 +17,12 @@ def _get_env_case_insensitive(key: str, default: str = "") -> str:
 
 class Config:
     SECRET_KEY = _get_env_case_insensitive("FLASK_SECRET_KEY", "")
+    PLAID_ENCRYPTION_KEY = _get_env_case_insensitive("PLAID_ENCRYPTION_KEY", "")
     SETUP_INVITE_TOKEN = _get_env_case_insensitive("SETUP_INVITE_TOKEN", "")
     PLAID_VERIFY_WEBHOOKS = _get_env_case_insensitive("PLAID_VERIFY_WEBHOOKS", "true").lower() in ("true", "1", "yes")
+    APPLE_APP_ID = _get_env_case_insensitive("APPLE_APP_ID", "")
+    ANDROID_PACKAGE_NAME = _get_env_case_insensitive("ANDROID_PACKAGE_NAME", "com.gibsonfamily.hub")
+    ANDROID_SHA256_CERT_FINGERPRINT = _get_env_case_insensitive("ANDROID_SHA256_CERT_FINGERPRINT", "")
     PLAID_CLIENT_ID = _get_env_case_insensitive("plaid_client_id", "")
     PLAID_PRODUCTION_SECRET = _get_env_case_insensitive("plaid_production_secret", "")
     PLAID_SANDBOX_SECRET = _get_env_case_insensitive("plaid_sandbox_secret", "")

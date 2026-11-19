@@ -255,6 +255,23 @@ GibsonFamily/
 - **Database Match History & Analytics (`GET /api/splendor/state`)**:
   - Stores every match in `splendor_games`, tracking total games played, status (`active`, `completed`, `forfeited`), `player1_cards_played`, `player2_cards_played`, `player1_points`, `player2_points`, `winner_partner_id`, `wager_amount`, `net_wager_won`, and `turns_count` for head-to-head win rate and card-count analytics.
 
+### 3.8 Security, Encryption & App Store Compliance Architecture
+- **Plaid Token Encryption at Rest & Key Rotation (`backend/security.py`)**:
+  - Plaid `access_token` values are encrypted at rest using **AES-256-GCM** (`enc:v2:`) with a 16-byte random salt, 96-bit nonce, and 100,000-iteration PBKDF2-HMAC-SHA256 key derivation.
+  - Supports a dedicated `PLAID_ENCRYPTION_KEY` independent of `FLASK_SECRET_KEY` (with seamless fallback to `FLASK_SECRET_KEY` during decryption so session key rotation never invalidates stored Plaid tokens).
+- **Cryptographic WebAuthn / Passkey Verification (`backend/security.py`, `backend/modules/auth_webauthn.py`)**:
+  - Registration parses the RFC 8949 CBOR `attestationObject`, validates `rpIdHash` (`SHA-256(rpId)`), `origin`, user-presence (`UP`), and `attestedCredentialData` (`AT`) flags, and extracts the COSE public key (`EC2` ES256 P-256, `RSA` RS256, or `OKP` Ed25519).
+  - Authentication cryptographically verifies the authenticator's signature over `authenticatorData || SHA-256(clientDataJSON)`, enforces `origin` and `rpIdHash`, checks challenge expiration, enforces `sign_count` progression to detect cloned authenticators, and applies IP rate-limiting.
+- **Step-Up Authentication, Rate Limiting & Plaid Token Revocation**:
+  - `POST /api/auth/login`, `POST /api/auth/unlock-password`, `POST /api/auth/webauthn/authenticate/verify`, and `POST /api/auth/reset-all` are rate-limited (`5 attempts / 15 min` via `ProxyFix`-resolved client IP). Repeated failures on a locked screen automatically revoke the session.
+  - Changing a partner's password (`PUT /api/auth/partners/<id>`) requires `current_password` verification and revokes all other active sessions for that partner.
+  - `POST /api/auth/reset-all` requires account password confirmation and revokes all linked Plaid tokens via Plaid's `/item/remove` endpoint before wiping local tables.
+  - `DELETE /api/account` (and `/api/auth/account`) fulfills Apple App Store Guideline 5.1.1(v), Google Play Data Deletion policy, and Plaid offboarding rules by revoking the user's linked Plaid tokens at Plaid (`/item/remove`) and erasing their personal/financial data.
+- **Transport, CSP & Unauthenticated Privacy Hardening (`backend/app.py`)**:
+  - Responses include `Content-Security-Policy` (restricting scripts/frames to `'self'` and `https://*.plaid.com`), `Strict-Transport-Security`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Opener-Policy: same-origin`, and `X-Permitted-Cross-Domain-Policies: none`.
+  - Unauthenticated `GET /api/auth/setup-status` masks partner email addresses (`a***@domain`) and omits budget metadata; unauthenticated `GET /api/health` omits internal Plaid configuration details; `POST /api/finance/plaid/sandbox_quick_connect` is disabled (`403`) when `PLAID_ENV == "production"`.
+  - Serves `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` for iOS/Android Passkey associated domains and Plaid Link OAuth universal links, and automatically locks the screen when the app is backgrounded for `>= 10` minutes.
+
 ---
 
 ## 4. Development, Build & Verification Commands

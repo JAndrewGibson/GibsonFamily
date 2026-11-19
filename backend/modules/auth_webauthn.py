@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
+import requests
 from flask import Blueprint, current_app, g, jsonify, make_response, request
 from werkzeug.security import check_password_hash, generate_password_hash
 from backend.database import get_db
@@ -12,10 +13,14 @@ from backend.security import (
     check_rate_limit,
     clear_failed_logins,
     create_session_for_partner,
+    decrypt_plaid_token,
     extract_request_token,
     hash_session_token,
+    mask_email,
+    parse_webauthn_registration_attestation,
     record_failed_login,
     sanitize_partner,
+    verify_webauthn_assertion_signature,
 )
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -100,12 +105,12 @@ def setup_status():
             "total_passkeys": total_passkeys,
         })
 
-    # Unauthenticated view: only expose minimal login-selector metadata
+    # Unauthenticated view: mask email addresses and omit sensitive budget metadata
     public_partners = [
         {
             "id": p["id"],
             "name": p["name"],
-            "email": p["email"],
+            "masked_email": mask_email(p["email"]),
             "avatar_color": p["avatar_color"],
             "has_passkey": len(p.get("passkeys", [])) > 0,
         }
@@ -117,7 +122,7 @@ def setup_status():
         "is_screen_locked": False,
         "current_partner": None,
         "household_name": household_name,
-        "starting_budget_month": starting_budget_month,
+        "starting_budget_month": None,
         "partners": public_partners,
         "total_passkeys": total_passkeys,
     })
@@ -203,14 +208,25 @@ def unlock_with_password():
     data = request.get_json(silent=True) or {}
     password = data.get("password") or ""
     db = get_db()
+    client_ip = (request.remote_addr or "local").strip()
+    rate_key = f"unlock:{client_ip}:{g.current_partner['id']}"
+
+    if not check_rate_limit(db, rate_key):
+        return jsonify({"error": "Too many failed unlock attempts. Please wait 15 minutes or sign in again."}), 429
+
     partner_row = db.execute(
         "SELECT * FROM partners WHERE id = ?",
         (g.current_partner["id"],),
     ).fetchone()
 
-    if not partner_row or not check_password_hash(partner_row["password_hash"], password):
+    if not partner_row or not partner_row["password_hash"] or not check_password_hash(partner_row["password_hash"], password):
+        record_failed_login(db, rate_key)
+        if not check_rate_limit(db, rate_key):
+            db.execute("DELETE FROM auth_sessions WHERE id = ?", (g.current_session["id"],))
+            db.commit()
         return jsonify({"error": "Incorrect password"}), 401
 
+    clear_failed_logins(db, rate_key)
     db.execute(
         "UPDATE auth_sessions SET is_screen_locked = 0 WHERE id = ?",
         (g.current_session["id"],),
@@ -332,6 +348,69 @@ def create_partners():
     return jsonify({"error": "Invalid partner payload"}), 400
 
 
+def _resolve_rp_id() -> str:
+    rp_id = request.host.split(":")[0] if request.host else current_app.config["WEBAUTHN_RP_ID"]
+    if rp_id in ("127.0.0.1", "0.0.0.0", "localhost"):
+        return "localhost"
+    return rp_id
+
+
+def _is_valid_webauthn_origin(origin: str, rp_id: str) -> bool:
+    if not origin:
+        return False
+    configured_origin = (current_app.config.get("WEBAUTHN_ORIGIN") or "").rstrip("/")
+    allowed = {
+        configured_origin,
+        f"https://{rp_id}",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://localhost",
+    }
+    return origin.rstrip("/") in allowed
+
+
+def _is_challenge_expired(expires_at_str: str) -> bool:
+    if not expires_at_str:
+        return True
+    try:
+        exp_dt = datetime.fromisoformat(expires_at_str)
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        return exp_dt < datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def _revoke_plaid_items_at_provider(item_rows) -> int:
+    """
+    Revokes Plaid access_tokens at Plaid's servers (/item/remove) prior to local deletion
+    to satisfy Plaid Production security & GDPR/App Store data erasure compliance.
+    """
+    client_id = current_app.config.get("PLAID_CLIENT_ID", "")
+    secret = current_app.config.get("PLAID_SECRET", "")
+    base_url = current_app.config.get("PLAID_BASE_URL", "https://production.plaid.com")
+    revoked_count = 0
+    if not client_id or not secret:
+        return 0
+    for item in item_rows:
+        enc_tok = item["access_token"]
+        if not enc_tok:
+            continue
+        try:
+            raw_access_token = decrypt_plaid_token(enc_tok)
+            requests.post(
+                f"{base_url}/item/remove",
+                json={"client_id": client_id, "secret": secret, "access_token": raw_access_token},
+                timeout=10,
+            )
+            revoked_count += 1
+        except Exception:
+            pass
+    return revoked_count
+
+
 @auth_bp.route("/partners/<int:partner_id>", methods=["PUT"])
 def update_partner(partner_id: int):
     if not getattr(g, "current_partner", None):
@@ -351,12 +430,22 @@ def update_partner(partner_id: int):
     new_password = data.get("password") or ""
 
     if new_password:
+        if partner["password_hash"]:
+            current_password = data.get("current_password") or ""
+            if not current_password or not check_password_hash(partner["password_hash"], current_password):
+                return jsonify({"error": "Current password verification is required to set a new password."}), 401
         if len(new_password) < 8:
             return jsonify({"error": "New password must be at least 8 characters"}), 400
         pw_hash = generate_password_hash(new_password)
         db.execute(
             "UPDATE partners SET name = ?, email = ?, password_hash = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
             (name, email, pw_hash, role, avatar_color, monthly_fun_allowance, partner_id),
+        )
+        # Invalidate all other active sessions for this partner on password change
+        current_sess_id = g.current_session["id"] if getattr(g, "current_session", None) else -1
+        db.execute(
+            "DELETE FROM auth_sessions WHERE partner_id = ? AND id != ?",
+            (partner_id, current_sess_id),
         )
     else:
         db.execute(
@@ -433,11 +522,6 @@ def complete_onboarding():
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
             (str(data["starting_budget_month"]).strip(),),
         )
-    if "starting_budget_month" in data and _is_valid_ym(str(data["starting_budget_month"])):
-        db.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('starting_budget_month', ?)",
-            (str(data["starting_budget_month"]).strip(),),
-        )
 
     budgets = data.get("budgets")
     if isinstance(budgets, list):
@@ -481,19 +565,44 @@ def complete_onboarding():
 @auth_bp.route("/reset-all", methods=["POST"])
 def reset_all_data():
     """Requires an authenticated session and password confirmation to reset workspace."""
-    if not getattr(g, "current_partner", None):
+    actor = getattr(g, "current_partner", None)
+    if not actor:
         return jsonify({"error": "Authentication required to reset workspace"}), 401
 
     db = get_db()
+    client_ip = (request.remote_addr or "local").strip()
+    rate_key = f"reset:{client_ip}:{actor['id']}"
+    if not check_rate_limit(db, rate_key):
+        return jsonify({"error": "Too many failed verification attempts. Please wait 15 minutes."}), 429
+
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+    partner_row = db.execute("SELECT * FROM partners WHERE id = ?", (actor["id"],)).fetchone()
+    if partner_row and partner_row["password_hash"]:
+        if not password or not check_password_hash(partner_row["password_hash"], password):
+            record_failed_login(db, rate_key)
+            return jsonify({"error": "Valid account password confirmation is required to reset the workspace."}), 401
+
+    clear_failed_logins(db, rate_key)
+
+    # Revoke any active Plaid access tokens at Plaid prior to wiping local records
+    plaid_items = db.execute("SELECT * FROM plaid_items").fetchall()
+    _revoke_plaid_items_at_provider(plaid_items)
+
     for table in [
+        "splendor_games",
         "closed_months",
+        "monthly_income_projections",
         "push_subscriptions",
         "notifications",
         "request_comments",
         "future_purchases",
         "purchase_requests",
         "income_entries",
+        "transaction_splits",
         "transactions",
+        "account_balance_snapshots",
+        "deleted_accounts_blocklist",
         "accounts",
         "plaid_items",
         "category_catalog",
@@ -542,9 +651,7 @@ def webauthn_register_options():
         (partner_id,),
     ).fetchall()
 
-    rp_id = request.host.split(":")[0] if request.host else current_app.config["WEBAUTHN_RP_ID"]
-    if rp_id in ("127.0.0.1", "0.0.0.0"):
-        rp_id = "localhost"
+    rp_id = _resolve_rp_id()
 
     user_id_b64 = _b64url_encode(f"gibson-partner-{partner['id']}".encode("utf-8"))
     user_handle = partner["email"] if partner["email"] else f"{partner['name'].lower().replace(' ', '.')}@familyhub.local"
@@ -605,11 +712,16 @@ def webauthn_register_verify():
     try:
         client_data_raw = _b64url_decode(client_data_b64)
         client_data = json.loads(client_data_raw.decode("utf-8"))
+        attestation_bytes = _b64url_decode(attestation_b64)
     except Exception as exc:
-        return jsonify({"error": f"Invalid clientDataJSON: {exc}"}), 400
+        return jsonify({"error": f"Invalid clientDataJSON or attestationObject: {exc}"}), 400
 
     if client_data.get("type") != "webauthn.create":
         return jsonify({"error": "Invalid WebAuthn ceremony type; expected webauthn.create"}), 400
+
+    rp_id = _resolve_rp_id()
+    if not _is_valid_webauthn_origin(client_data.get("origin", ""), rp_id):
+        return jsonify({"error": "WebAuthn registration origin mismatch"}), 400
 
     challenge_received = client_data.get("challenge", "")
     db = get_db()
@@ -626,8 +738,16 @@ def webauthn_register_verify():
         return jsonify({"error": "Challenge mismatch or expired"}), 400
 
     db.execute("DELETE FROM webauthn_challenges WHERE id = ?", (challenge_row["id"],))
+    if _is_challenge_expired(challenge_row["expires_at"]):
+        db.commit()
+        return jsonify({"error": "WebAuthn registration challenge has expired"}), 400
 
-    public_key_fingerprint = hashlib.sha256(_b64url_decode(attestation_b64)).hexdigest()
+    try:
+        parsed_att = parse_webauthn_registration_attestation(attestation_bytes, rp_id)
+    except Exception as exc:
+        db.commit()
+        return jsonify({"error": f"WebAuthn attestation verification failed: {exc}"}), 400
+
     transports_list = credential.get("transports") or ["internal", "hybrid"]
     transports_str = ",".join(transports_list) if isinstance(transports_list, list) else str(transports_list)
 
@@ -635,9 +755,16 @@ def webauthn_register_verify():
         """
         INSERT OR REPLACE INTO webauthn_credentials
         (partner_id, credential_id, public_key, sign_count, device_name, transports, last_used_at)
-        VALUES (?, ?, ?, 1, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
         """,
-        (partner_id, credential_id, public_key_fingerprint, device_name, transports_str),
+        (
+            partner_id,
+            credential_id,
+            parsed_att["public_key_json"],
+            parsed_att["sign_count"],
+            device_name,
+            transports_str,
+        ),
     )
     db.commit()
 
@@ -673,9 +800,7 @@ def webauthn_authenticate_options():
     )
     db.commit()
 
-    rp_id = request.host.split(":")[0] if request.host else current_app.config["WEBAUTHN_RP_ID"]
-    if rp_id in ("127.0.0.1", "0.0.0.0"):
-        rp_id = "localhost"
+    rp_id = _resolve_rp_id()
 
     options = {
         "challenge": challenge_b64,
@@ -696,34 +821,39 @@ def webauthn_authenticate_options():
 
 @auth_bp.route("/webauthn/authenticate/verify", methods=["POST"])
 def webauthn_authenticate_verify():
+    db = get_db()
+    client_ip = (request.remote_addr or "local").strip()
+    rate_key = f"webauthn:{client_ip}"
+    if not check_rate_limit(db, rate_key):
+        return jsonify({"error": "Too many failed passkey verification attempts. Please wait 15 minutes."}), 429
+
     data = request.get_json(silent=True) or {}
     credential = data.get("credential") or {}
     credential_id = credential.get("id") or credential.get("rawId")
     response_obj = credential.get("response") or {}
     client_data_b64 = response_obj.get("clientDataJSON")
     auth_data_b64 = response_obj.get("authenticatorData")
+    signature_b64 = response_obj.get("signature")
 
-    if not credential_id or not client_data_b64 or not auth_data_b64:
+    if not credential_id or not client_data_b64 or not auth_data_b64 or not signature_b64:
         return jsonify({"error": "Missing WebAuthn assertion fields"}), 400
 
     try:
-        client_data = json.loads(_b64url_decode(client_data_b64).decode("utf-8"))
+        client_data_raw = _b64url_decode(client_data_b64)
+        client_data = json.loads(client_data_raw.decode("utf-8"))
         auth_data_bytes = _b64url_decode(auth_data_b64)
+        signature_bytes = _b64url_decode(signature_b64)
     except Exception as exc:
         return jsonify({"error": f"Invalid WebAuthn assertion payload: {exc}"}), 400
 
     if client_data.get("type") != "webauthn.get":
         return jsonify({"error": "Invalid WebAuthn ceremony type; expected webauthn.get"}), 400
 
-    if len(auth_data_bytes) < 37:
-        return jsonify({"error": "Invalid authenticatorData length"}), 400
+    rp_id = _resolve_rp_id()
+    if not _is_valid_webauthn_origin(client_data.get("origin", ""), rp_id):
+        record_failed_login(db, rate_key)
+        return jsonify({"error": "WebAuthn assertion origin mismatch"}), 401
 
-    flags = auth_data_bytes[32]
-    user_present = bool(flags & 0x01)
-    if not user_present:
-        return jsonify({"error": "User presence flag not set in authenticatorData"}), 400
-
-    db = get_db()
     challenge_received = client_data.get("challenge", "")
     challenge_row = db.execute(
         """
@@ -735,7 +865,14 @@ def webauthn_authenticate_verify():
     ).fetchone()
 
     if not challenge_row:
+        record_failed_login(db, rate_key)
         return jsonify({"error": "Authentication challenge mismatch or expired"}), 400
+
+    db.execute("DELETE FROM webauthn_challenges WHERE id = ?", (challenge_row["id"],))
+    if _is_challenge_expired(challenge_row["expires_at"]):
+        db.commit()
+        record_failed_login(db, rate_key)
+        return jsonify({"error": "Authentication challenge has expired"}), 400
 
     cred_row = db.execute(
         "SELECT * FROM webauthn_credentials WHERE credential_id = ?",
@@ -743,12 +880,33 @@ def webauthn_authenticate_verify():
     ).fetchone()
 
     if not cred_row:
+        db.commit()
+        record_failed_login(db, rate_key)
         return jsonify({"error": "Passkey credential not recognized"}), 404
 
-    db.execute("DELETE FROM webauthn_challenges WHERE id = ?", (challenge_row["id"],))
+    if challenge_row["partner_id"] is not None and int(challenge_row["partner_id"]) != int(cred_row["partner_id"]):
+        db.commit()
+        record_failed_login(db, rate_key)
+        return jsonify({"error": "Passkey credential does not match requested partner"}), 401
+
+    try:
+        new_sign_count = verify_webauthn_assertion_signature(
+            stored_public_key=cred_row["public_key"],
+            auth_data_bytes=auth_data_bytes,
+            client_data_raw=client_data_raw,
+            signature_bytes=signature_bytes,
+            expected_rp_id=rp_id,
+            stored_sign_count=int(cred_row["sign_count"] or 0),
+        )
+    except Exception as exc:
+        db.commit()
+        record_failed_login(db, rate_key)
+        return jsonify({"error": f"Cryptographic Passkey verification failed: {exc}"}), 401
+
+    clear_failed_logins(db, rate_key)
     db.execute(
-        "UPDATE webauthn_credentials SET sign_count = sign_count + 1, last_used_at = datetime('now') WHERE id = ?",
-        (cred_row["id"],),
+        "UPDATE webauthn_credentials SET sign_count = ?, last_used_at = datetime('now') WHERE id = ?",
+        (new_sign_count, cred_row["id"]),
     )
 
     partner_id = cred_row["partner_id"]
@@ -795,8 +953,9 @@ def delete_credential(cred_id: int):
 @auth_bp.route("/account", methods=["DELETE"])
 def delete_account():
     """
-    Permanently deletes the authenticated partner account and personal data,
-    fulfilling Apple App Store Review Guideline 5.1.1(v) & GDPR erasure requirements.
+    Permanently deletes the authenticated partner account, revokes linked Plaid tokens at Plaid,
+    and erases personal data, fulfilling Apple App Store Review Guideline 5.1.1(v), Google Play
+    Data Deletion Policy, Plaid offboarding rules, and GDPR/CCPA erasure requirements.
     """
     actor = getattr(g, "current_partner", None)
     if not actor:
@@ -804,6 +963,24 @@ def delete_account():
 
     actor_id = actor["id"]
     db = get_db()
+
+    # Check how many partners will remain after deleting this account
+    remaining_after = db.execute(
+        "SELECT COUNT(*) AS cnt FROM partners WHERE id != ?", (actor_id,)
+    ).fetchone()["cnt"]
+
+    # Revoke Plaid access tokens at Plaid (/item/remove) for items owned by this partner (or all items if last partner)
+    if remaining_after == 0:
+        plaid_items = db.execute("SELECT * FROM plaid_items").fetchall()
+    else:
+        plaid_items = db.execute(
+            "SELECT * FROM plaid_items WHERE linked_by_partner_id = ?", (actor_id,)
+        ).fetchall()
+    revoked_plaid_items = _revoke_plaid_items_at_provider(plaid_items)
+
+    for item in plaid_items:
+        db.execute("DELETE FROM accounts WHERE item_id = ?", (item["item_id"],))
+        db.execute("DELETE FROM plaid_items WHERE id = ?", (item["id"],))
 
     # 1. Clear session tokens, passkeys, and push subscriptions
     db.execute("DELETE FROM auth_sessions WHERE partner_id = ?", (actor_id,))
@@ -823,21 +1000,47 @@ def delete_account():
         (actor_id, actor_id),
     )
 
-    # 4. Clear partner-owned income entries
+    # 4. Clear partner-owned income entries, accounts, and transactions
     db.execute("DELETE FROM income_entries WHERE partner_id = ?", (actor_id,))
+    db.execute("DELETE FROM transactions WHERE partner_id = ?", (actor_id,))
+    db.execute("DELETE FROM accounts WHERE owner_partner_id = ?", (actor_id,))
 
     # 5. Delete partner record
     db.execute("DELETE FROM partners WHERE id = ?", (actor_id,))
 
-    # Check remaining partners
-    remaining = db.execute("SELECT COUNT(*) AS cnt FROM partners").fetchone()["cnt"]
-    if remaining == 0:
+    # If no partners remain in the household, purge remaining shared financial data and reset onboarding
+    if remaining_after == 0:
+        for table in [
+            "splendor_games",
+            "closed_months",
+            "monthly_income_projections",
+            "future_purchases",
+            "income_entries",
+            "transaction_splits",
+            "transactions",
+            "account_balance_snapshots",
+            "deleted_accounts_blocklist",
+            "accounts",
+            "plaid_items",
+            "category_catalog",
+            "monthly_budgets",
+            "budgets",
+            "todos",
+            "grocery_items",
+            "admin_records",
+            "webauthn_challenges",
+        ]:
+            db.execute(f"DELETE FROM {table}")
         db.execute("UPDATE app_settings SET value = '0' WHERE key = 'onboarding_completed'")
 
     db.commit()
 
     resp = make_response(
-        jsonify({"deleted": True, "message": "Account and associated personal data deleted successfully."})
+        jsonify({
+            "deleted": True,
+            "revoked_plaid_items": revoked_plaid_items,
+            "message": "Account and associated personal data deleted successfully.",
+        })
     )
     resp.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return resp

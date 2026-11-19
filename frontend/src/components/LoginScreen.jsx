@@ -4,14 +4,14 @@ import { apiFetch, authenticateWithPasskey, setAuthToken } from '../api';
 
 export default function LoginScreen({ householdName, partners, onLoginSuccess }) {
   const [selectedPartner, setSelectedPartner] = useState(partners[0] || null);
-  const [emailInput, setEmailInput] = useState(partners[0]?.email || '');
+  const [emailInput, setEmailInput] = useState(partners[0]?.email || partners[0]?.name || '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   const handleSelectPartner = (p) => {
     setSelectedPartner(p);
-    setEmailInput(p.email || p.name);
+    setEmailInput(p.email || p.name || '');
     setError(null);
   };
 
@@ -24,6 +24,7 @@ export default function LoginScreen({ householdName, partners, onLoginSuccess })
         method: 'POST',
         body: JSON.stringify({
           email: emailInput.trim(),
+          partner_id: selectedPartner?.id,
           password,
         }),
       });
@@ -82,7 +83,7 @@ export default function LoginScreen({ householdName, partners, onLoginSuccess })
                   </div>
                   <div className="partner-lock-info">
                     <strong>{p.name}</strong>
-                    <span>{p.email}</span>
+                    <span>{p.masked_email || p.email}</span>
                   </div>
                   {p.has_passkey && (
                     <button

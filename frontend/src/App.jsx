@@ -303,6 +303,27 @@ export default function App() {
     setIsLocked(true);
   };
 
+  // Auto-lock session when app has been backgrounded/hidden for >= 10 minutes
+  useEffect(() => {
+    if (!authenticated || isLocked || typeof document === 'undefined') return undefined;
+    let hiddenAt = null;
+    const AUTO_LOCK_MS = 10 * 60 * 1000;
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (document.visibilityState === 'visible' && hiddenAt) {
+        if (Date.now() - hiddenAt >= AUTO_LOCK_MS) {
+          handleLockScreen();
+        }
+        hiddenAt = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [authenticated, isLocked]);
+
   const handleSignOut = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });

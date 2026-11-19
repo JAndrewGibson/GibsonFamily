@@ -2149,6 +2149,9 @@ def exchange_public_token():
 
 @finance_bp.route("/plaid/sandbox_quick_connect", methods=["POST"])
 def sandbox_quick_connect():
+    if current_app.config.get("PLAID_ENV", "production") == "production":
+        return jsonify({"error": "Sandbox Quick Connect is disabled in the Plaid Production environment."}), 403
+
     base_url, client_id, secret = _plaid_headers_and_auth()
     if not client_id or not secret:
         return jsonify({"error": "Plaid credentials missing in .env"}), 400
