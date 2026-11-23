@@ -1410,28 +1410,118 @@ def _evaluate_badges_for_months(
 ) -> list[dict]:
     chron_months = sorted(target_months)
 
-    # Compute per-month metrics for streaks and repeatable record-breakers
+    # Compute per-month metrics for streaks, repeatable record-breakers, and Wall of Shame
+    cat_type_map_badges = _get_category_type_map(db)
     month_stats = []
     for m_str in chron_months:
         m_lo = this_leftover if m_str == ym else _compute_month_leftover_data(db, m_str)
         m_b_rows = _ensure_monthly_budgets_for_month(db, m_str)
         m_tot_budget = round(sum(float(b["monthly_limit"]) for b in m_b_rows), 2)
+        m_exp_budget = round(
+            sum(
+                float(b["monthly_limit"])
+                for b in m_b_rows
+                if _resolve_category_type(b["category"], cat_type_map_badges) != "savings"
+            ),
+            2,
+        )
         m_inc = float(m_lo["total_income"])
         m_sp = float(m_lo["total_spend"])
         m_net = float(m_lo["net_cashflow"])
         m_rate = round((m_net / m_inc) * 100, 1) if m_inc > 0 else 0.0
+
+        # Wall of Shame monthly triggers
+        over_cat_items = [
+            c
+            for c in m_lo["leftover_categories"]
+            if float(c.get("monthly_limit") or 0.0) > 0
+            and float(c.get("spent") or 0.0) > float(c.get("monthly_limit") or 0.0)
+        ]
+        over_ro_items = [
+            r
+            for r in m_lo["rollover_categories"]
+            if float(r.get("monthly_limit") or 0.0) > 0 and float(r.get("rollover_out") or 0.0) < 0
+        ]
+        has_cat_blowout = bool(over_cat_items or over_ro_items)
+        is_over_total_budget = bool(m_exp_budget > 0 and m_sp > m_exp_budget)
+        is_neg_cashflow = bool(m_net < 0 and (m_sp > 0 or m_inc > 0))
+        has_rollover_burnout = any(
+            float(r.get("monthly_limit") or 0.0) > 0 and float(r.get("rollover_out") or 0.0) <= 0
+            for r in m_lo["rollover_categories"]
+        )
+
+        # Check single-day shopping impulse spike (> 25% of monthly expense budget)
+        has_impulse_spike = False
+        if m_exp_budget > 0:
+            m_tx_rows = db.execute(
+                """
+                SELECT date, amount, category, is_savings_spend, is_cc_payment
+                FROM transactions
+                WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) = ?
+                """,
+                (m_str,),
+            ).fetchall()
+            day_shop_totals = {}
+            for tr in m_tx_rows:
+                tr_d = dict(tr)
+                if is_tx_savings_spend(tr_d) or is_tx_cc_payment(tr_d):
+                    continue
+                if _is_non_shopping_recap_category(tr_d.get("category") or "", cat_type_map_badges):
+                    continue
+                d_key = (tr_d.get("date") or "")[:10]
+                day_shop_totals[d_key] = day_shop_totals.get(d_key, 0.0) + float(tr_d.get("amount") or 0.0)
+            if day_shop_totals and max(day_shop_totals.values()) > (m_exp_budget * 0.25):
+                has_impulse_spike = True
+
+        has_any_shame = bool(
+            has_cat_blowout or is_over_total_budget or is_neg_cashflow or has_rollover_burnout or has_impulse_spike
+        )
         month_stats.append({
             "month": m_str,
             "income": m_inc,
             "spent": m_sp,
             "budget": m_tot_budget,
+            "exp_budget": m_exp_budget,
             "net_cashflow": m_net,
             "leftover": float(m_lo["total_leftover"]),
             "savings_rate_pct": m_rate,
             "on_budget": bool(m_tot_budget > 0 and m_sp <= m_tot_budget and (m_sp > 0 or m_inc > 0)),
             "green_cashflow": bool(m_net > 0 and m_inc > 0),
             "rollover_categories": m_lo["rollover_categories"],
+            "has_cat_blowout": has_cat_blowout,
+            "is_over_total_budget": is_over_total_budget,
+            "is_neg_cashflow": is_neg_cashflow,
+            "has_rollover_burnout": has_rollover_burnout,
+            "has_impulse_spike": has_impulse_spike,
+            "shame_free": not has_any_shame and (m_sp > 0 or m_inc > 0 or m_tot_budget > 0),
         })
+
+    # Shame & Clean-Sheet streaks
+    over_budget_streak = 0
+    for ms in reversed(month_stats):
+        if ms["is_over_total_budget"]:
+            over_budget_streak += 1
+        else:
+            break
+
+    rollover_drought_streak = 0
+    for ms in reversed(month_stats):
+        if ms["has_rollover_burnout"]:
+            rollover_drought_streak += 1
+        else:
+            break
+
+    clean_sheet_streak = 0
+    for ms in reversed(month_stats):
+        if ms["shame_free"]:
+            clean_sheet_streak += 1
+        else:
+            break
+
+    cat_blowout_count = sum(1 for ms in month_stats if ms["has_cat_blowout"])
+    neg_cashflow_count = sum(1 for ms in month_stats if ms["is_neg_cashflow"])
+    rollover_burnout_count = sum(1 for ms in month_stats if ms["has_rollover_burnout"])
+    impulse_spike_count = sum(1 for ms in month_stats if ms["has_impulse_spike"])
 
     # Consecutive month streaks up to `ym`
     on_budget_streak = 0
@@ -1556,12 +1646,36 @@ def _evaluate_badges_for_months(
             "criteria": criteria,
             "unlocked": bool(unlocked),
             "pending_unlock": False,
+            "is_shame": False,
             "progress_current": current_val,
             "progress_target": target_val,
             "progress_text": prog_str,
             "times_earned": 1 if unlocked else 0,
             "is_repeatable": False,
             "subtitle": f"Unlocked! ({prog_str})" if unlocked else f"Progress: {prog_str} — {criteria}",
+        }
+
+    def _shame_tier_badge(b_id, tier_num, tier_name, emoji, title, criteria, current_val, target_val):
+        unlocked = bool(target_months) and current_val >= target_val
+        prog_str = f"{int(current_val)} / {int(target_val)}"
+        return {
+            "id": b_id,
+            "family": "Wall of Shame",
+            "tier": tier_num,
+            "tier_label": f"Shame Tier {tier_num} · {tier_name}",
+            "emoji": emoji,
+            "icon": "alert-triangle",
+            "title": title,
+            "criteria": criteria,
+            "unlocked": bool(unlocked),
+            "pending_unlock": False,
+            "is_shame": True,
+            "progress_current": current_val,
+            "progress_target": target_val,
+            "progress_text": prog_str,
+            "times_earned": 1 if unlocked else 0,
+            "is_repeatable": False,
+            "subtitle": f"Triggered! ({prog_str})" if unlocked else f"Avoided ({prog_str}) — {criteria}",
         }
 
     return [
@@ -1708,6 +1822,98 @@ def _evaluate_badges_for_months(
         _tier_badge("closed_3", "Month Closer", 2, "Silver", "📅", "Quarter Closer II (3 Months Closed)", "Officially review and close 3 monthly budget periods.", closed_months_count, 3),
         _tier_badge("closed_6", "Month Closer", 3, "Gold", "📚", "Half-Year Historian III (6 Months)", "Officially review and close 6 monthly budget periods.", closed_months_count, 6),
         _tier_badge("closed_12", "Month Closer", 4, "Diamond", "🏛️", "Annual Archivist IV (12 Months)", "Officially review and close 12 monthly budget periods.", closed_months_count, 12),
+
+        # 14. Clean Sheet Streak (Positive Streak for NOT getting any Wall of Shame badges)
+        _tier_badge("clean_sheet_1", "Clean Sheet Streak", 1, "Bronze", "😇", "Clean Sheet I (1 Mo)", "Finish 1 closed month with zero Wall of Shame triggers.", clean_sheet_streak, 1),
+        _tier_badge("clean_sheet_3", "Clean Sheet Streak", 2, "Silver", "🕊️", "Clean Sheet II (3 Mo Streak)", "Finish 3 consecutive closed months with zero Wall of Shame triggers.", clean_sheet_streak, 3),
+        _tier_badge("clean_sheet_6", "Clean Sheet Streak", 3, "Gold", "👼", "Untouchable III (6 Mo Streak)", "Finish 6 consecutive closed months with zero Wall of Shame triggers.", clean_sheet_streak, 6),
+        _tier_badge("clean_sheet_12", "Clean Sheet Streak", 4, "Diamond", "🌟", "Flawless Year IV (12 Mo Streak)", "Finish 12 consecutive closed months with zero Wall of Shame triggers.", clean_sheet_streak, 12),
+
+        # 15. Wall of Shame — Recurring Negative Badges
+        {
+            "id": "shame_category_blowout",
+            "family": "Wall of Shame",
+            "tier": 0,
+            "tier_label": "Recurring Shame",
+            "emoji": "🚨",
+            "icon": "alert-triangle",
+            "title": "Category Blowout!",
+            "criteria": "Triggered each closed month where at least one expense category exceeded its monthly limit.",
+            "unlocked": cat_blowout_count > 0,
+            "pending_unlock": False,
+            "is_shame": True,
+            "progress_current": cat_blowout_count,
+            "progress_target": max(1, cat_blowout_count),
+            "progress_text": f"Triggered ×{cat_blowout_count}",
+            "times_earned": cat_blowout_count,
+            "is_repeatable": True,
+            "subtitle": f"Triggered ×{cat_blowout_count} · Exceeded a category limit" if cat_blowout_count > 0 else "Stay within every category limit to avoid this!",
+        },
+        {
+            "id": "shame_negative_cashflow",
+            "family": "Wall of Shame",
+            "tier": 0,
+            "tier_label": "Recurring Shame",
+            "emoji": "💸",
+            "icon": "alert-triangle",
+            "title": "In the Red!",
+            "criteria": "Triggered each closed month where total spending exceeded earned income.",
+            "unlocked": neg_cashflow_count > 0,
+            "pending_unlock": False,
+            "is_shame": True,
+            "progress_current": neg_cashflow_count,
+            "progress_target": max(1, neg_cashflow_count),
+            "progress_text": f"Triggered ×{neg_cashflow_count}",
+            "times_earned": neg_cashflow_count,
+            "is_repeatable": True,
+            "subtitle": f"Triggered ×{neg_cashflow_count} · Net cash flow was negative" if neg_cashflow_count > 0 else "Keep net cash flow positive to avoid this!",
+        },
+        {
+            "id": "shame_rollover_burnout",
+            "family": "Wall of Shame",
+            "tier": 0,
+            "tier_label": "Recurring Shame",
+            "emoji": "🔥",
+            "icon": "alert-triangle",
+            "title": "Rollover Burnout!",
+            "criteria": "Triggered each closed month where a rollover category finished at $0 or negative debt.",
+            "unlocked": rollover_burnout_count > 0,
+            "pending_unlock": False,
+            "is_shame": True,
+            "progress_current": rollover_burnout_count,
+            "progress_target": max(1, rollover_burnout_count),
+            "progress_text": f"Triggered ×{rollover_burnout_count}",
+            "times_earned": rollover_burnout_count,
+            "is_repeatable": True,
+            "subtitle": f"Triggered ×{rollover_burnout_count} · Zero positive rollover left" if rollover_burnout_count > 0 else "Keep positive rollover remaining to avoid this!",
+        },
+        {
+            "id": "shame_impulse_spike",
+            "family": "Wall of Shame",
+            "tier": 0,
+            "tier_label": "Recurring Shame",
+            "emoji": "⚡",
+            "icon": "alert-triangle",
+            "title": "Impulse Spike!",
+            "criteria": "Triggered each closed month with a single shopping day exceeding 25% of your expense budget.",
+            "unlocked": impulse_spike_count > 0,
+            "pending_unlock": False,
+            "is_shame": True,
+            "progress_current": impulse_spike_count,
+            "progress_target": max(1, impulse_spike_count),
+            "progress_text": f"Triggered ×{impulse_spike_count}",
+            "times_earned": impulse_spike_count,
+            "is_repeatable": True,
+            "subtitle": f"Triggered ×{impulse_spike_count} · Single-day shopping spike >25%" if impulse_spike_count > 0 else "Keep daily shopping spikes under 25% of budget!",
+        },
+
+        # 16. Wall of Shame — Progressive Negative Streaks
+        _shame_tier_badge("shame_over_budget_1", 1, "Slip", "😬", "Budget Slip I (1 Mo)", "Go over your total monthly expense budget in 1 closed month.", over_budget_streak, 1),
+        _shame_tier_badge("shame_over_budget_2", 2, "Meltdown", "🚨", "Budget Meltdown II (2 Mo)", "Go over your total monthly expense budget for 2 consecutive closed months.", over_budget_streak, 2),
+        _shame_tier_badge("shame_over_budget_3", 3, "Apocalypse", "💀", "Budget Apocalypse III (3 Mo)", "Go over your total monthly expense budget for 3 consecutive closed months.", over_budget_streak, 3),
+        _shame_tier_badge("shame_rollover_drought_1", 1, "Dry", "🏜️", "Dry Wallet I (1 Mo)", "Finish with zero positive rollover in a rollover category for 1 closed month.", rollover_drought_streak, 1),
+        _shame_tier_badge("shame_rollover_drought_2", 2, "Drought", "🔥", "Rollover Drought II (2 Mo)", "Finish with zero positive rollover for 2 consecutive closed months.", rollover_drought_streak, 2),
+        _shame_tier_badge("shame_rollover_drought_3", 3, "Empty Vault", "🌋", "Empty Vault III (3 Mo)", "Finish with zero positive rollover for 3 consecutive closed months.", rollover_drought_streak, 3),
     ]
 
 
@@ -1763,9 +1969,11 @@ def _build_household_badge_showroom(
                     else f"Progress: {pb['progress_text']} — {b['criteria']}"
                 )
 
-    milestones = [b for b in badges if b["unlocked"]]
+    milestones = [b for b in badges if b["unlocked"] and not b.get("is_shame")]
+    shame_badges = [b for b in badges if b["unlocked"] and b.get("is_shame")]
     return {
         "milestones": milestones,
+        "shame_badges": shame_badges,
         "badge_showroom": badges,
     }
 
@@ -2312,6 +2520,7 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         partner_rollovers=partner_rollovers,
     )
     milestones = badge_data["milestones"]
+    shame_badges = badge_data.get("shame_badges", [])
     badge_showroom = badge_data["badge_showroom"]
 
     # 10. Slide Deck Array (Spotify Wrapped stories format)
@@ -2443,6 +2652,7 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         "badges_unlocked_count": len(milestones),
         "badges_total_count": len(badge_showroom),
         "milestones": milestones,
+        "shame_badges": shame_badges,
         "slides": slides,
     }
 

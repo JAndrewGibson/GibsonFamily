@@ -247,7 +247,7 @@ def test_month_close_excess_income_above_projected(client):
     assert recap["peak_spending_day"]["date"] == "2026-11-05"
     assert "fun_facts" in recap
     assert "badge_showroom" in recap
-    assert len(recap["badge_showroom"]) == 50
+    assert len(recap["badge_showroom"]) == 64
     # Before closing the month, ZERO badges are unlocked, but earned ones are flagged pending_unlock!
     assert all(not b["unlocked"] for b in recap["badge_showroom"])
     assert any(b["id"] == "saver_rate_50" and b["pending_unlock"] is True for b in recap["badge_showroom"])
@@ -261,7 +261,43 @@ def test_month_close_excess_income_above_projected(client):
     assert close_res.status_code == 201
     closed_recap = close_res.get_json()["recap"]
     assert any(b["id"] == "saver_rate_50" and b["unlocked"] for b in closed_recap["badge_showroom"])
+    assert any(b["id"] == "clean_sheet_1" and b["unlocked"] and not b.get("is_shame") for b in closed_recap["badge_showroom"])
     assert any(b["id"] == "record_highest_savings" and b["is_repeatable"] and b["unlocked"] and b["times_earned"] == 1 for b in closed_recap["badge_showroom"])
+    assert closed_recap["shame_badges"] == []
     assert any(b["unlocked"] for b in closed_recap["badge_showroom"])
     assert any(not b["unlocked"] for b in closed_recap["badge_showroom"])
+
+
+def test_wall_of_shame_badges_and_streak_reset(client):
+    _alex_id, alex_hdr, _sam_id, _sam_hdr = _setup_two_partners(client)
+    client.post(
+        "/api/finance/income",
+        headers=alex_hdr,
+        json={"source_name": "Salary", "amount": 2000.0, "income_type": "payroll", "budget_month": "2026-11", "date": "2026-11-01"},
+    )
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_hdr,
+        json={"category": "Groceries & Dining", "monthly_limit": 200.0, "budget_month": "2026-11", "allow_rollover": 0},
+    )
+    # Blow past the $200 category limit, total monthly budget, and $2000 income
+    client.post(
+        "/api/finance/transactions",
+        headers=alex_hdr,
+        json={"name": "Big Feast", "amount": 5000.0, "date": "2026-11-05", "budget_month": "2026-11", "category": "Groceries & Dining"},
+    )
+    close_res = client.post(
+        "/api/finance/close-month",
+        headers=alex_hdr,
+        json={"month": "2026-11", "transferred_to_savings": False},
+    )
+    assert close_res.status_code == 201
+    recap = close_res.get_json()["recap"]
+    shame_ids = {b["id"] for b in recap["shame_badges"]}
+    assert "shame_category_blowout" in shame_ids
+    assert "shame_over_budget_1" in shame_ids
+    # Milestones list excludes shame badges, and Clean Sheet does NOT unlock when shame triggers
+    assert all(not b.get("is_shame") for b in recap["milestones"])
+    assert not any(b["id"] == "clean_sheet_1" and b["unlocked"] for b in recap["badge_showroom"])
+
 

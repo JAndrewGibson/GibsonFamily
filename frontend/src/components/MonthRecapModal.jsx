@@ -185,60 +185,135 @@ function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBu
 }
 
 const FX_COLORS = ['#fbbf24', '#10b981', '#06b6d4', '#ec4899', '#818cf8', '#f43f5e', '#a855f7', '#ffffff'];
+const SHAME_FX_COLORS = ['#ef4444', '#dc2626', '#f97316', '#991b1b', '#fca5a5', '#3b82f6'];
+const BALLOON_COLORS = ['#fbbf24', '#10b981', '#06b6d4', '#ec4899', '#818cf8', '#f43f5e', '#a855f7'];
+const STREAMER_COLORS = ['#fbbf24', '#10b981', '#ec4899', '#06b6d4', '#a855f7', '#f43f5e'];
 
-function RecapCelebrationFX({ burstKey }) {
-  const canvasRef = useRef(null);
+function RecapCelebrationFX({ burstKey, mode = 'positive', level = 1 }) {
+  const fgCanvasRef = useRef(null);
+  const bgCanvasRef = useRef(null);
   const particlesRef = useRef([]);
+  const bgParticlesRef = useRef([]);
   const rafRef = useRef(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !canvas.parentElement) return;
-    const ctx = canvas.getContext('2d');
+    if (!burstKey) return;
+    const fgCanvas = fgCanvasRef.current;
+    const bgCanvas = bgCanvasRef.current;
+    if (!fgCanvas || !fgCanvas.parentElement || !bgCanvas) return;
+    const fgCtx = fgCanvas.getContext('2d');
+    const bgCtx = bgCanvas.getContext('2d');
 
     const resize = () => {
-      if (!canvas.parentElement) return;
-      const rect = canvas.parentElement.getBoundingClientRect();
+      if (!fgCanvas.parentElement) return;
+      const rect = fgCanvas.parentElement.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      [fgCanvas, bgCanvas].forEach((c) => {
+        c.width = rect.width * dpr;
+        c.height = rect.height * dpr;
+      });
+      fgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener('resize', resize);
 
-    const spawnFireworkBurst = (x, y, color) => {
-      const count = 34;
+    const isShame = mode === 'shame';
+    const palette = isShame ? SHAME_FX_COLORS : FX_COLORS;
+    const lvl = Math.max(1, Math.min(5, level));
+
+    const spawnFireworkBurst = (x, y, color, countOverride) => {
+      const count = countOverride || (isShame ? 22 + lvl * 4 : 26 + lvl * 8);
       for (let i = 0; i < count; i++) {
-        const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.18;
-        const speed = 2.2 + Math.random() * 4.2;
+        const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.22;
+        const speed = 2.1 + Math.random() * (3.2 + lvl * 0.45);
         particlesRef.current.push({
           kind: 'spark',
           x,
           y,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
-          gravity: 0.065,
+          gravity: isShame ? 0.085 : 0.06,
           drag: 0.965,
           alpha: 1,
-          decay: 0.014 + Math.random() * 0.01,
-          size: 2.2 + Math.random() * 2,
-          color: Math.random() > 0.25 ? color : '#ffffff',
+          decay: 0.012 + Math.random() * 0.008,
+          size: 2.0 + Math.random() * 2.2,
+          color: Math.random() > 0.25 ? color : (isShame ? '#fca5a5' : '#ffffff'),
           trail: [],
         });
       }
     };
 
+    const spawnSparklerFountain = (x, y, count = 24) => {
+      for (let i = 0; i < count; i++) {
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.95;
+        const speed = 3.2 + Math.random() * 4.5;
+        particlesRef.current.push({
+          kind: 'spark',
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          gravity: 0.14,
+          drag: 0.97,
+          alpha: 1,
+          decay: 0.016 + Math.random() * 0.01,
+          size: 1.8 + Math.random() * 1.8,
+          color: Math.random() > 0.35 ? '#fde68a' : '#fbbf24',
+          trail: [],
+        });
+      }
+    };
+
+    const spawnStreamer = (w) => {
+      const count = 4 + lvl * 2;
+      for (let i = 0; i < count; i++) {
+        particlesRef.current.push({
+          kind: 'streamer',
+          x: Math.random() * w,
+          y: -15 - Math.random() * 40,
+          vx: (Math.random() - 0.5) * 1.8,
+          vy: 1.8 + Math.random() * 2.2,
+          amp: 8 + Math.random() * 10,
+          freq: 0.08 + Math.random() * 0.06,
+          phase: Math.random() * Math.PI * 2,
+          len: 26 + Math.random() * 20,
+          color: STREAMER_COLORS[Math.floor(Math.random() * STREAMER_COLORS.length)],
+          alpha: 0.95,
+          decay: 0.004,
+        });
+      }
+    };
+
+    const spawnBalloon = (w, h) => {
+      const count = 2 + lvl;
+      for (let i = 0; i < count; i++) {
+        const r = 13 + Math.random() * 7;
+        bgParticlesRef.current.push({
+          kind: 'balloon',
+          x: 24 + Math.random() * (w - 48),
+          y: h + 30 + Math.random() * 50,
+          vx: (Math.random() - 0.5) * 0.7,
+          vy: -(1.3 + Math.random() * 1.1),
+          sway: Math.random() * Math.PI * 2,
+          swaySpeed: 0.04 + Math.random() * 0.03,
+          r,
+          color: BALLOON_COLORS[Math.floor(Math.random() * BALLOON_COLORS.length)],
+        });
+      }
+    };
+
     const spawnConfettiShower = (w, h) => {
-      for (let i = 0; i < 48; i++) {
-        const fromCenter = i < 24;
+      const total = isShame ? 20 + lvl * 4 : 30 + lvl * 12;
+      for (let i = 0; i < total; i++) {
+        const fromCenter = i < total / 2;
         particlesRef.current.push({
           kind: 'confetti',
           x: fromCenter ? w * 0.5 + (Math.random() - 0.5) * 40 : Math.random() * w,
           y: fromCenter ? h * 0.3 : -10 - Math.random() * 40,
-          vx: fromCenter ? (Math.random() - 0.5) * 7 : (Math.random() - 0.5) * 1.4,
-          vy: fromCenter ? -2.5 - Math.random() * 4.2 : 1.2 + Math.random() * 2.1,
-          gravity: 0.075,
+          vx: fromCenter ? (Math.random() - 0.5) * (5.5 + lvl * 0.6) : (Math.random() - 0.5) * 1.4,
+          vy: fromCenter ? -2.2 - Math.random() * 4.0 : 1.3 + Math.random() * 2.2,
+          gravity: isShame ? 0.095 : 0.072,
           drag: 0.985,
           w: 6 + Math.random() * 5,
           h: 4 + Math.random() * 4,
@@ -247,27 +322,81 @@ function RecapCelebrationFX({ burstKey }) {
           wobble: Math.random() * Math.PI * 2,
           wobbleSpeed: 0.08 + Math.random() * 0.07,
           alpha: 1,
-          decay: 0.0055,
-          color: FX_COLORS[i % FX_COLORS.length],
+          decay: 0.005,
+          color: palette[i % palette.length],
         });
       }
     };
 
     const loop = () => {
-      if (!canvas.parentElement) return;
-      const rect = canvas.parentElement.getBoundingClientRect();
-      ctx.clearRect(0, 0, rect.width, rect.height);
-      const list = particlesRef.current;
+      if (!fgCanvas.parentElement) return;
+      const rect = fgCanvas.parentElement.getBoundingClientRect();
+      fgCtx.clearRect(0, 0, rect.width, rect.height);
+      bgCtx.clearRect(0, 0, rect.width, rect.height);
 
+      const bgList = bgParticlesRef.current;
+      for (let i = bgList.length - 1; i >= 0; i--) {
+        const b = bgList[i];
+        b.sway += b.swaySpeed;
+        b.x += b.vx + Math.sin(b.sway) * 0.55;
+        b.y += b.vy;
+        if (b.y < -60) {
+          bgList.splice(i, 1);
+          continue;
+        }
+        bgCtx.save();
+        bgCtx.globalAlpha = 1;
+        bgCtx.beginPath();
+        bgCtx.ellipse(b.x, b.y, b.r * 0.85, b.r, 0, 0, Math.PI * 2);
+        bgCtx.fillStyle = b.color;
+        bgCtx.fill();
+        bgCtx.beginPath();
+        bgCtx.ellipse(b.x - b.r * 0.28, b.y - b.r * 0.35, b.r * 0.18, b.r * 0.28, -0.3, 0, Math.PI * 2);
+        bgCtx.fillStyle = 'rgba(255,255,255,0.45)';
+        bgCtx.fill();
+        bgCtx.beginPath();
+        bgCtx.moveTo(b.x, b.y + b.r);
+        bgCtx.quadraticCurveTo(b.x + Math.sin(b.sway) * 6, b.y + b.r + 14, b.x, b.y + b.r + 28);
+        bgCtx.strokeStyle = 'rgba(255,255,255,0.75)';
+        bgCtx.lineWidth = 1.3;
+        bgCtx.stroke();
+        bgCtx.restore();
+      }
+
+      const list = particlesRef.current;
       for (let i = list.length - 1; i >= 0; i--) {
         const p = list[i];
+        if (p.kind === 'streamer') {
+          p.phase += p.freq;
+          p.x += p.vx + Math.sin(p.phase) * 0.8;
+          p.y += p.vy;
+          p.alpha -= p.decay;
+          if (p.alpha <= 0 || p.y > rect.height + 40) {
+            list.splice(i, 1);
+            continue;
+          }
+          fgCtx.save();
+          fgCtx.globalAlpha = Math.max(0, p.alpha);
+          fgCtx.strokeStyle = p.color;
+          fgCtx.lineWidth = 3.2;
+          fgCtx.lineCap = 'round';
+          fgCtx.beginPath();
+          fgCtx.moveTo(p.x, p.y);
+          for (let s = 4; s <= p.len; s += 4) {
+            fgCtx.lineTo(p.x + Math.sin(p.phase + s * 0.18) * p.amp * 0.5, p.y - s);
+          }
+          fgCtx.stroke();
+          fgCtx.restore();
+          continue;
+        }
+
         p.vx *= p.drag;
         p.vy = p.vy * p.drag + p.gravity;
         p.x += p.vx;
         p.y += p.vy;
         p.alpha -= p.decay;
 
-        if (p.alpha <= 0 || p.y > rect.height + 30) {
+        if (p.alpha <= 0 || p.y > rect.height + 35) {
           list.splice(i, 1);
           continue;
         }
@@ -276,41 +405,41 @@ function RecapCelebrationFX({ burstKey }) {
           p.trail.push({ x: p.x, y: p.y });
           if (p.trail.length > 5) p.trail.shift();
 
-          ctx.save();
-          ctx.globalAlpha = Math.max(0, p.alpha);
+          fgCtx.save();
+          fgCtx.globalAlpha = Math.max(0, p.alpha);
           if (p.trail.length > 1) {
-            ctx.beginPath();
-            ctx.moveTo(p.trail[0].x, p.trail[0].y);
-            for (let t = 1; t < p.trail.length; t++) ctx.lineTo(p.trail[t].x, p.trail[t].y);
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = p.size * 0.85;
-            ctx.lineCap = 'round';
-            ctx.stroke();
+            fgCtx.beginPath();
+            fgCtx.moveTo(p.trail[0].x, p.trail[0].y);
+            for (let t = 1; t < p.trail.length; t++) fgCtx.lineTo(p.trail[t].x, p.trail[t].y);
+            fgCtx.strokeStyle = p.color;
+            fgCtx.lineWidth = p.size * 0.85;
+            fgCtx.lineCap = 'round';
+            fgCtx.stroke();
           }
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-          ctx.fillStyle = p.color;
-          ctx.shadowColor = p.color;
-          ctx.shadowBlur = 10;
-          ctx.fill();
-          ctx.restore();
+          fgCtx.beginPath();
+          fgCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          fgCtx.fillStyle = p.color;
+          fgCtx.shadowColor = p.color;
+          fgCtx.shadowBlur = 10;
+          fgCtx.fill();
+          fgCtx.restore();
         } else {
           p.rot += p.vRot;
           p.wobble += p.wobbleSpeed;
           const scaleX = Math.cos(p.wobble);
 
-          ctx.save();
-          ctx.translate(p.x, p.y);
-          ctx.rotate(p.rot);
-          ctx.scale(scaleX, 1);
-          ctx.globalAlpha = Math.max(0, p.alpha);
-          ctx.fillStyle = p.color;
-          ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
-          ctx.restore();
+          fgCtx.save();
+          fgCtx.translate(p.x, p.y);
+          fgCtx.rotate(p.rot);
+          fgCtx.scale(scaleX, 1);
+          fgCtx.globalAlpha = Math.max(0, p.alpha);
+          fgCtx.fillStyle = p.color;
+          fgCtx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+          fgCtx.restore();
         }
       }
 
-      if (list.length > 0) {
+      if (list.length > 0 || bgList.length > 0) {
         rafRef.current = requestAnimationFrame(loop);
       } else {
         rafRef.current = null;
@@ -321,53 +450,188 @@ function RecapCelebrationFX({ burstKey }) {
       if (!rafRef.current) rafRef.current = requestAnimationFrame(loop);
     };
 
-    const rect = canvas.parentElement.getBoundingClientRect();
+    const rect = fgCanvas.parentElement.getBoundingClientRect();
     const w = rect.width;
     const h = rect.height;
 
-    const t1 = setTimeout(() => {
-      spawnConfettiShower(w, h);
-      spawnFireworkBurst(w * 0.22, h * 0.24, '#fbbf24');
-      spawnFireworkBurst(w * 0.78, h * 0.26, '#ec4899');
-      ensureLoop();
-    }, 360);
+    const timers = [];
+    timers.push(
+      setTimeout(() => {
+        spawnConfettiShower(w, h);
+        spawnFireworkBurst(w * 0.22, h * 0.24, isShame ? '#ef4444' : '#fbbf24');
+        spawnFireworkBurst(w * 0.78, h * 0.26, isShame ? '#f97316' : '#ec4899');
+        if (!isShame && lvl >= 2) spawnStreamer(w);
+        if (!isShame && lvl >= 3) spawnBalloon(w, h);
+        if (!isShame && lvl >= 4) {
+          spawnSparklerFountain(w * 0.14, h * 0.55, 18 + lvl * 3);
+          spawnSparklerFountain(w * 0.86, h * 0.55, 18 + lvl * 3);
+        }
+        ensureLoop();
+      }, 360)
+    );
 
-    const t2 = setTimeout(() => {
-      spawnFireworkBurst(w * 0.5, h * 0.18, '#06b6d4');
-      ensureLoop();
-    }, 720);
+    timers.push(
+      setTimeout(() => {
+        spawnFireworkBurst(w * 0.5, h * 0.18, isShame ? '#dc2626' : '#06b6d4');
+        ensureLoop();
+      }, 720)
+    );
 
-    const t3 = setTimeout(() => {
-      spawnFireworkBurst(w * 0.28, h * 0.36, '#10b981');
-      spawnFireworkBurst(w * 0.72, h * 0.36, '#a855f7');
-      ensureLoop();
-    }, 1050);
+    timers.push(
+      setTimeout(() => {
+        spawnFireworkBurst(w * 0.28, h * 0.36, isShame ? '#ef4444' : '#10b981');
+        spawnFireworkBurst(w * 0.72, h * 0.36, isShame ? '#3b82f6' : '#a855f7');
+        if (!isShame && lvl >= 5) {
+          spawnFireworkBurst(w * 0.5, h * 0.28, '#fbbf24', 44);
+          spawnBalloon(w, h);
+        }
+        ensureLoop();
+      }, 1050)
+    );
 
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+      timers.forEach((t) => clearTimeout(t));
       window.removeEventListener('resize', resize);
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, [burstKey]);
+  }, [burstKey, mode, level]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden="true"
-      style={{
-        position: 'absolute',
-        inset: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
-        zIndex: 40,
-      }}
-    />
+    <>
+      <canvas
+        ref={bgCanvasRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      />
+      <canvas
+        ref={fgCanvasRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 42,
+        }}
+      />
+    </>
+  );
+}
+
+function ShameBackdropOverlay({ level, isFadingOut }) {
+  if (level <= 0) return null;
+  const clamped = Math.min(5, level);
+  const oozeScale = clamped === 3 ? 0.45 : clamped === 4 ? 0.9 : clamped >= 5 ? 1.45 : 0;
+
+  return (
+    <div className={`month-recap-overlay-layer ${isFadingOut ? 'is-fading-out' : ''}`} aria-hidden="true">
+      <div className="shame-siren-overlay" />
+
+      {clamped >= 3 && (
+        <svg className="shame-blood-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="bloodGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#991b1b" />
+              <stop offset="70%" stopColor="#7f1d1d" />
+              <stop offset="100%" stopColor="#450a0a" />
+            </linearGradient>
+          </defs>
+          <g className="shame-blood-ooze-group" style={{ transform: `scaleY(${oozeScale})` }}>
+            <path
+              fill="url(#bloodGrad)"
+              d="M0 0 H100 V14 C94 14 92 48 88 48 C84 48 82 18 76 18 C70 18 68 62 63 62 C58 62 56 20 50 20 C44 20 42 54 36 54 C31 54 29 17 22 17 C16 17 14 44 9 44 C5 44 3 16 0 16 Z"
+            />
+          </g>
+        </svg>
+      )}
+
+      <svg className="shame-crack-overlay" viewBox="0 0 540 660" preserveAspectRatio="none">
+        {clamped >= 1 && (
+          <g stroke="rgba(254, 202, 202, 0.72)" strokeWidth="2.1" fill="none" strokeLinecap="round">
+            <path d="M270 0 L254 62 L280 120 L246 185" />
+            <path d="M254 62 L205 92 L175 130" />
+          </g>
+        )}
+        {clamped >= 2 && (
+          <g stroke="rgba(254, 202, 202, 0.78)" strokeWidth="2" fill="none" strokeLinecap="round">
+            <path d="M0 180 L65 210 L118 258 L185 245 L220 295" />
+            <path d="M540 160 L470 198 L420 245 L350 232" />
+            <path d="M280 120 L335 152 L390 142" />
+          </g>
+        )}
+        {clamped >= 3 && (
+          <g stroke="rgba(254, 202, 202, 0.85)" strokeWidth="2.2" fill="none" strokeLinecap="round">
+            <path d="M246 185 L270 265 L235 340 L278 415 L252 485" />
+            <path d="M270 265 L345 292 L410 355" />
+            <path d="M235 340 L165 375 L105 430" />
+          </g>
+        )}
+        {clamped >= 4 && (
+          <g stroke="rgba(255, 255, 255, 0.85)" strokeWidth="1.9" fill="none" strokeLinecap="round">
+            <path d="M0 440 L85 415 L155 470 L215 445" />
+            <path d="M540 420 L455 450 L385 495 L320 470" />
+            <path d="M278 415 L335 510 L310 595 L345 660" />
+          </g>
+        )}
+        {clamped >= 5 && (
+          <g stroke="rgba(255, 255, 255, 0.92)" strokeWidth="2.3" fill="none" strokeLinecap="round">
+            <path d="M120 0 L145 95 L98 165 L140 235" />
+            <path d="M420 0 L395 85 L445 155 L402 225" />
+            <path d="M252 485 L195 570 L225 660" />
+            <path d="M90 660 L145 560 L210 545" />
+            <path d="M460 660 L400 575 L345 555" />
+          </g>
+        )}
+      </svg>
+    </div>
+  );
+}
+
+const POSITIVE_SPARKLE_POINTS = [
+  { top: '12%', left: '10%', delay: '0s' },
+  { top: '18%', right: '12%', delay: '0.4s' },
+  { top: '42%', left: '7%', delay: '0.8s' },
+  { top: '48%', right: '8%', delay: '0.2s' },
+  { top: '72%', left: '12%', delay: '0.6s' },
+  { top: '78%', right: '14%', delay: '1.0s' },
+  { top: '28%', left: '22%', delay: '0.3s' },
+  { top: '64%', right: '22%', delay: '0.9s' },
+];
+
+function PositiveBackdropOverlay({ level, isFadingOut }) {
+  if (level < 2) return null;
+  const clamped = Math.min(5, level);
+  const starCount = clamped >= 5 ? 8 : clamped >= 4 ? 5 : clamped >= 3 ? 3 : 0;
+
+  return (
+    <div className={`month-recap-overlay-layer ${isFadingOut ? 'is-fading-out' : ''}`} aria-hidden="true">
+      <div className={`positive-aura-overlay level-${clamped}`} />
+      {POSITIVE_SPARKLE_POINTS.slice(0, starCount).map((pt, idx) => (
+        <span
+          key={idx}
+          className="positive-star-sparkle"
+          style={{
+            top: pt.top,
+            left: pt.left,
+            right: pt.right,
+            animationDelay: pt.delay,
+          }}
+        >
+          ✦
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -383,6 +647,8 @@ export default function MonthRecapModal({
   const [isPlaying, setIsPlaying] = useState(true);
   const [badgeFilter, setBadgeFilter] = useState('all');
   const [ceremonyPhase, setCeremonyPhase] = useState('done'); // 'intro' | 'slam' | 'collapsing' | 'done'
+  const [ceremonyMode, setCeremonyMode] = useState('positive'); // 'positive' | 'shame'
+  const [chainShameAfter, setChainShameAfter] = useState(false);
   const [slamIndex, setSlamIndex] = useState(0);
   const [fxBurstKey, setFxBurstKey] = useState(0);
   const timerRef = useRef(null);
@@ -421,28 +687,49 @@ export default function MonthRecapModal({
     return () => clearTimeout(timerRef.current);
   }, [isOpen, isPlaying, slideIndex, loading, totalSlides, ceremonyActive]);
 
-  const unlockedBadgesList = (recap?.badge_showroom || []).filter((b) => b.unlocked);
+  const badgeShowroom = recap?.badge_showroom || [];
+  const unlockedBadgesList = badgeShowroom.filter((b) => b.unlocked);
+  const unlockedPositiveList = unlockedBadgesList.filter((b) => !b.is_shame);
+  const unlockedShameList = unlockedBadgesList.filter((b) => b.is_shame);
+  const ceremonyList = ceremonyMode === 'shame' ? unlockedShameList : unlockedPositiveList;
+  const activeLevel = ceremonyPhase === 'done' || ceremonyPhase === 'intro' ? 0 : Math.min(5, slamIndex + 1);
+  const isFadingOut = ceremonyPhase === 'collapsing';
+
+  const startCeremony = (mode, chainShame = false) => {
+    const targetList = mode === 'shame' ? unlockedShameList : unlockedPositiveList;
+    if (targetList.length === 0) return;
+    setCeremonyMode(mode);
+    setChainShameAfter(chainShame);
+    setSlamIndex(0);
+    if (targetList.length > 1) {
+      setCeremonyPhase('intro');
+    } else {
+      setCeremonyPhase('slam');
+      setFxBurstKey((k) => k + 1);
+    }
+  };
 
   // Trigger Gamified Badge Slam Ceremony & Fireworks when entering Slide 7 (or Slide 5)
   useEffect(() => {
     if (!isOpen || loading) return;
     if (slideIndex === 7 && unlockedBadgesList.length > 0) {
-      setSlamIndex(0);
-      if (unlockedBadgesList.length > 1) {
-        setCeremonyPhase('intro');
-      } else {
-        setCeremonyPhase('slam');
-        setFxBurstKey((k) => k + 1);
+      if (unlockedPositiveList.length > 0) {
+        startCeremony('positive', unlockedShameList.length > 0);
+      } else if (unlockedShameList.length > 0) {
+        startCeremony('shame', false);
       }
-    } else if (slideIndex === 5 && unlockedBadgesList.length > 0) {
+    } else if (slideIndex === 5 && unlockedPositiveList.length > 0) {
+      setCeremonyMode('positive');
+      setChainShameAfter(false);
       setFxBurstKey((k) => k + 1);
       setCeremonyPhase('done');
     } else {
       setCeremonyPhase('done');
+      setChainShameAfter(false);
     }
-  }, [isOpen, loading, slideIndex, unlockedBadgesList.length]);
+  }, [isOpen, loading, slideIndex, unlockedPositiveList.length, unlockedShameList.length]);
 
-  // Step through intro -> unlocked badges crashing down -> smooth collapse
+  // Step through intro -> unlocked badges crashing down -> smooth 1.5s collapse & fade-out
   useEffect(() => {
     if (ceremonyPhase === 'intro') {
       const introTimer = setTimeout(() => {
@@ -452,9 +739,9 @@ export default function MonthRecapModal({
       }, 2200);
       return () => clearTimeout(introTimer);
     }
-    if (ceremonyPhase === 'slam' && unlockedBadgesList.length > 0) {
+    if (ceremonyPhase === 'slam' && ceremonyList.length > 0) {
       const stepTimer = setTimeout(() => {
-        if (slamIndex < unlockedBadgesList.length - 1) {
+        if (slamIndex < ceremonyList.length - 1) {
           setSlamIndex((prev) => prev + 1);
           setFxBurstKey((k) => k + 1);
         } else {
@@ -465,11 +752,16 @@ export default function MonthRecapModal({
     }
     if (ceremonyPhase === 'collapsing') {
       const collapseTimer = setTimeout(() => {
-        setCeremonyPhase('done');
-      }, 560);
+        if (ceremonyMode === 'positive' && chainShameAfter && unlockedShameList.length > 0) {
+          startCeremony('shame', false);
+        } else {
+          setCeremonyPhase('done');
+          setChainShameAfter(false);
+        }
+      }, 1500);
       return () => clearTimeout(collapseTimer);
     }
-  }, [ceremonyPhase, slamIndex, unlockedBadgesList.length]);
+  }, [ceremonyPhase, slamIndex, ceremonyList.length, ceremonyMode, chainShameAfter, unlockedShameList.length]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -512,14 +804,25 @@ export default function MonthRecapModal({
   const overview = recap?.overview || {};
   const trends = recap?.trends || {};
   const funFacts = recap?.fun_facts || {};
-  const badgeShowroom = recap?.badge_showroom || [];
   const pendingBadgesList = badgeShowroom.filter((b) => !b.unlocked && b.pending_unlock);
+  const shameBadgesCount = badgeShowroom.filter((b) => b.is_shame).length;
   const filteredBadges = badgeShowroom.filter((b) => {
     if (badgeFilter === 'unlocked') return Boolean(b.unlocked);
     if (badgeFilter === 'pending') return Boolean(!b.unlocked && b.pending_unlock);
+    if (badgeFilter === 'shame') return Boolean(b.is_shame);
     if (badgeFilter === 'locked') return !b.unlocked;
     return true;
   });
+
+  const isShameCeremonyActive =
+    slideIndex === 7 &&
+    ceremonyMode === 'shame' &&
+    (ceremonyPhase === 'intro' || ceremonyPhase === 'slam');
+  const isPositiveChampionActive =
+    slideIndex === 7 &&
+    ceremonyMode === 'positive' &&
+    ceremonyPhase === 'slam' &&
+    activeLevel >= 3;
 
   return (
     <div
@@ -532,8 +835,15 @@ export default function MonthRecapModal({
       }}
     >
       <div
-        className={`month-recap-container ${ceremonyPhase === 'slam' ? 'recap-slam-shake' : ''}`}
-        key={ceremonyPhase === 'slam' ? `shake-${slamIndex}` : 'steady'}
+        className={`month-recap-container ${
+          ceremonyPhase === 'slam'
+            ? ceremonyMode === 'shame'
+              ? 'recap-slam-shake shame-shake'
+              : 'recap-slam-shake'
+            : ''
+        } ${isShameCeremonyActive ? 'shame-mode-active' : ''} ${
+          isPositiveChampionActive ? 'positive-champion-active' : ''
+        }`}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(94vw, 540px)',
@@ -550,7 +860,17 @@ export default function MonthRecapModal({
         }}
       >
         {(slideIndex === 5 || slideIndex === 7) && unlockedBadgesList.length > 0 && (
-          <RecapCelebrationFX burstKey={fxBurstKey} />
+          <RecapCelebrationFX
+            burstKey={fxBurstKey}
+            mode={slideIndex === 7 ? ceremonyMode : 'positive'}
+            level={slideIndex === 7 ? Math.max(1, activeLevel) : 2}
+          />
+        )}
+        {slideIndex === 7 && ceremonyMode === 'shame' && activeLevel > 0 && (
+          <ShameBackdropOverlay level={activeLevel} isFadingOut={isFadingOut} />
+        )}
+        {slideIndex === 7 && ceremonyMode === 'positive' && activeLevel >= 2 && (
+          <PositiveBackdropOverlay level={activeLevel} isFadingOut={isFadingOut} />
         )}
         {/* Top Header Overlay with Solid-to-Gradient Mask so Scrolled Content Never Collides with Bars/Title */}
         <div
@@ -1417,12 +1737,10 @@ export default function MonthRecapModal({
                           aria-label="Replay Unlock Ceremony"
                           onClick={() => {
                             setBadgeFilter('all');
-                            setSlamIndex(0);
-                            if (unlockedBadgesList.length > 1) {
-                              setCeremonyPhase('intro');
-                            } else {
-                              setCeremonyPhase('slam');
-                              setFxBurstKey((k) => k + 1);
+                            if (unlockedPositiveList.length > 0) {
+                              startCeremony('positive', unlockedShameList.length > 0);
+                            } else if (unlockedShameList.length > 0) {
+                              startCeremony('shame', false);
                             }
                           }}
                         >
@@ -1432,32 +1750,41 @@ export default function MonthRecapModal({
                     </div>
                   </div>
 
-                  {/* Pre-Badge Searchlight Intro (only if > 1 badge unlocked) */}
+                  {/* Pre-Badge Searchlight Intro (only if > 1 badge unlocked in active ceremony) */}
                   {ceremonyPhase === 'intro' && (
-                    <div className="badge-slam-stage badge-ceremony-intro">
-                      <div className="searchlight-beam searchlight-left" />
-                      <div className="searchlight-beam searchlight-right" />
-                      <div className="ceremony-intro-text">
-                        {unlockedBadgesList.length} badges earned this month!
+                    <div className={`badge-slam-stage badge-ceremony-intro ${ceremonyMode === 'shame' ? 'is-shame' : ''}`}>
+                      <div className={`searchlight-beam searchlight-left ${ceremonyMode === 'shame' ? 'is-shame' : ''}`} />
+                      <div className={`searchlight-beam searchlight-right ${ceremonyMode === 'shame' ? 'is-shame' : ''}`} />
+                      <div className={`ceremony-intro-text ${ceremonyMode === 'shame' ? 'is-shame' : ''}`}>
+                        {ceremonyMode === 'shame'
+                          ? `🚨 ${unlockedShameList.length} Wall of Shame badges triggered!`
+                          : `${unlockedPositiveList.length} badges earned this month!`}
                       </div>
                     </div>
                   )}
 
                   {/* Gamified Badge Crashing Down & Locking-In Stage */}
-                  {(ceremonyPhase === 'slam' || ceremonyPhase === 'collapsing') && unlockedBadgesList[slamIndex] && (
+                  {(ceremonyPhase === 'slam' || ceremonyPhase === 'collapsing') && ceremonyList[slamIndex] && (
                     <div
-                      key={`slam-stage-${unlockedBadgesList[slamIndex].id}-${slamIndex}`}
-                      className={`badge-slam-stage ${ceremonyPhase === 'collapsing' ? 'is-collapsing' : ''}`}
+                      key={`slam-stage-${ceremonyMode}-${ceremonyList[slamIndex].id}-${slamIndex}`}
+                      className={`badge-slam-stage ${ceremonyMode === 'shame' ? 'is-shame' : ''} ${ceremonyPhase === 'collapsing' ? 'is-collapsing' : ''}`}
                     >
-                      <div className="badge-shockwave-ring" />
-                      <div className="badge-crash-icon">
-                        {unlockedBadgesList[slamIndex].emoji || '🏆'}
+                      <div className={`badge-shockwave-ring ${ceremonyMode === 'shame' ? 'is-shame' : ''}`} />
+                      <div className={`badge-crash-icon ${ceremonyMode === 'shame' ? 'is-shame' : ''}`}>
+                        {ceremonyList[slamIndex].emoji || (ceremonyMode === 'shame' ? '🚨' : '🏆')}
                       </div>
                       <div className="badge-slam-copy">
-                        <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#fff', marginTop: '0.55rem' }}>
-                          {unlockedBadgesList[slamIndex].title}
-                          {unlockedBadgesList[slamIndex].is_repeatable && unlockedBadgesList[slamIndex].times_earned > 0
-                            ? ` ×${unlockedBadgesList[slamIndex].times_earned}`
+                        <div
+                          style={{
+                            fontSize: '1.35rem',
+                            fontWeight: 900,
+                            color: ceremonyMode === 'shame' ? '#fecaca' : '#fff',
+                            marginTop: '0.55rem',
+                          }}
+                        >
+                          {ceremonyList[slamIndex].title}
+                          {ceremonyList[slamIndex].is_repeatable && ceremonyList[slamIndex].times_earned > 0
+                            ? ` ×${ceremonyList[slamIndex].times_earned}`
                             : ''}
                         </div>
                       </div>
@@ -1472,6 +1799,9 @@ export default function MonthRecapModal({
                       ...(pendingBadgesList.length > 0
                         ? [{ id: 'pending', label: `Ready on Close (${pendingBadgesList.length})` }]
                         : []),
+                      ...(shameBadgesCount > 0
+                        ? [{ id: 'shame', label: `🚨 Wall of Shame (${shameBadgesCount})` }]
+                        : []),
                       { id: 'locked', label: `Locked (${badgeShowroom.filter((b) => !b.unlocked).length})` },
                     ].map((tab) => (
                       <button
@@ -1484,9 +1814,19 @@ export default function MonthRecapModal({
                           fontSize: '0.74rem',
                           fontWeight: 700,
                           cursor: 'pointer',
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          background: badgeFilter === tab.id ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255,255,255,0.06)',
-                          color: '#fff',
+                          border:
+                            tab.id === 'shame'
+                              ? '1px solid rgba(239, 68, 68, 0.5)'
+                              : '1px solid rgba(255,255,255,0.2)',
+                          background:
+                            badgeFilter === tab.id
+                              ? tab.id === 'shame'
+                                ? 'rgba(239, 68, 68, 0.38)'
+                                : 'rgba(99, 102, 241, 0.35)'
+                              : tab.id === 'shame'
+                              ? 'rgba(239, 68, 68, 0.12)'
+                              : 'rgba(255,255,255,0.06)',
+                          color: tab.id === 'shame' ? '#fecaca' : '#fff',
                         }}
                       >
                         {tab.label}
@@ -1496,14 +1836,18 @@ export default function MonthRecapModal({
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.55rem' }}>
                     {filteredBadges.map((b) => {
-                      const unlockedIdx = unlockedBadgesList.findIndex((u) => u.id === b.id);
+                      const isShame = Boolean(b.is_shame);
+                      const inCurrentCeremony = ceremonyMode === 'shame' ? isShame : !isShame;
+                      const ceremonyIdx = inCurrentCeremony ? ceremonyList.findIndex((u) => u.id === b.id) : -1;
                       const isWaitingToSlam =
-                        ceremonyPhase === 'intro'
-                          ? Boolean(b.unlocked)
-                          : (ceremonyPhase === 'slam' || ceremonyPhase === 'collapsing') && b.unlocked && unlockedIdx > slamIndex;
-                      const isJustSlammed = ceremonyPhase === 'slam' && b.unlocked && unlockedIdx === slamIndex;
-                      const isLockedIntoPlace =
-                        b.unlocked && (ceremonyPhase === 'done' || ((ceremonyPhase === 'slam' || ceremonyPhase === 'collapsing') && unlockedIdx <= slamIndex));
+                        b.unlocked &&
+                        (inCurrentCeremony
+                          ? ceremonyPhase === 'intro' ||
+                            ((ceremonyPhase === 'slam' || ceremonyPhase === 'collapsing') && ceremonyIdx > slamIndex)
+                          : ceremonyMode === 'positive' && chainShameAfter && isShame);
+                      const isJustSlammed =
+                        ceremonyPhase === 'slam' && b.unlocked && inCurrentCeremony && ceremonyIdx === slamIndex;
+                      const isLockedIntoPlace = b.unlocked && !isWaitingToSlam;
                       const pct =
                         !b.is_repeatable && Number(b.progress_target) > 0
                           ? Math.min(100, Math.round((Number(b.progress_current || 0) / Number(b.progress_target)) * 100))
@@ -1513,21 +1857,41 @@ export default function MonthRecapModal({
                       return (
                         <div
                           key={b.id}
-                          className={isJustSlammed ? 'badge-slot-just-slammed' : isLockedIntoPlace ? 'badge-slot-locked-in' : ''}
+                          className={
+                            isJustSlammed
+                              ? isShame
+                                ? 'badge-slot-just-slammed-shame'
+                                : 'badge-slot-just-slammed'
+                              : isLockedIntoPlace
+                              ? 'badge-slot-locked-in'
+                              : ''
+                          }
                           style={{
                             background: isLockedIntoPlace
-                              ? b.is_repeatable
+                              ? isShame
+                                ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(127, 29, 29, 0.28) 100%)'
+                                : b.is_repeatable
                                 ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.18) 0%, rgba(236, 72, 153, 0.14) 100%)'
                                 : 'linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(16, 185, 129, 0.14) 100%)'
                               : b.pending_unlock
-                              ? 'rgba(245, 158, 11, 0.08)'
+                              ? isShame
+                                ? 'rgba(239, 68, 68, 0.1)'
+                                : 'rgba(245, 158, 11, 0.08)'
+                              : isShame
+                              ? 'rgba(239, 68, 68, 0.04)'
                               : 'rgba(255, 255, 255, 0.03)',
                             border: isLockedIntoPlace
-                              ? b.is_repeatable
+                              ? isShame
+                                ? '1px solid rgba(239, 68, 68, 0.65)'
+                                : b.is_repeatable
                                 ? '1px solid rgba(245, 158, 11, 0.5)'
                                 : '1px solid rgba(16, 185, 129, 0.45)'
                               : b.pending_unlock
-                              ? '1px dashed rgba(245, 158, 11, 0.5)'
+                              ? isShame
+                                ? '1px dashed rgba(239, 68, 68, 0.5)'
+                                : '1px dashed rgba(245, 158, 11, 0.5)'
+                              : isShame
+                              ? '1px dashed rgba(239, 68, 68, 0.28)'
                               : '1px dashed rgba(255, 255, 255, 0.15)',
                             borderRadius: '12px',
                             padding: '0.7rem 0.65rem',
@@ -1551,9 +1915,9 @@ export default function MonthRecapModal({
                                     fontWeight: 900,
                                     padding: '0.1rem 0.42rem',
                                     borderRadius: '999px',
-                                    background: 'rgba(245, 158, 11, 0.25)',
-                                    color: '#fbbf24',
-                                    border: '1px solid rgba(245, 158, 11, 0.45)',
+                                    background: isShame ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.25)',
+                                    color: isShame ? '#fca5a5' : '#fbbf24',
+                                    border: isShame ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid rgba(245, 158, 11, 0.45)',
                                   }}
                                 >
                                   ×{b.times_earned}
@@ -1567,24 +1931,40 @@ export default function MonthRecapModal({
                                   padding: '0.1rem 0.4rem',
                                   borderRadius: '999px',
                                   background: b.unlocked
-                                    ? 'rgba(16, 185, 129, 0.2)'
+                                    ? isShame
+                                      ? 'rgba(239, 68, 68, 0.25)'
+                                      : 'rgba(16, 185, 129, 0.2)'
                                     : b.pending_unlock
                                     ? 'rgba(245, 158, 11, 0.2)'
                                     : 'rgba(255, 255, 255, 0.08)',
-                                  color: b.unlocked ? '#6ee7b7' : b.pending_unlock ? '#fbbf24' : 'var(--text-muted)',
+                                  color: b.unlocked
+                                    ? isShame
+                                      ? '#fca5a5'
+                                      : '#6ee7b7'
+                                    : b.pending_unlock
+                                    ? '#fbbf24'
+                                    : 'var(--text-muted)',
                                 }}
                               >
-                                {b.unlocked ? 'Unlocked' : b.pending_unlock ? 'Pending Close ⏳' : 'Locked 🔒'}
+                                {b.unlocked ? (isShame ? 'Shame 🚨' : 'Unlocked') : b.pending_unlock ? 'Pending Close ⏳' : 'Locked 🔒'}
                               </span>
                             </div>
                           </div>
                           {b.tier_label && (
-                            <div style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', color: b.is_repeatable ? '#fbbf24' : '#818cf8', letterSpacing: '0.04em' }}>
+                            <div
+                              style={{
+                                fontSize: '0.62rem',
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                color: isShame ? '#f87171' : b.is_repeatable ? '#fbbf24' : '#818cf8',
+                                letterSpacing: '0.04em',
+                              }}
+                            >
                               {b.tier_label}
                             </div>
                           )}
-                          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fff' }}>{b.title}</div>
-                          <div style={{ fontSize: '0.69rem', color: b.unlocked ? '#c7d2fe' : 'var(--text-muted)', lineHeight: 1.3 }}>
+                          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: isShame && b.unlocked ? '#fecaca' : '#fff' }}>{b.title}</div>
+                          <div style={{ fontSize: '0.69rem', color: b.unlocked ? (isShame ? '#fca5a5' : '#c7d2fe') : 'var(--text-muted)', lineHeight: 1.3 }}>
                             {b.unlocked ? b.subtitle : b.criteria}
                           </div>
                           {!b.is_repeatable && b.progress_text && (
@@ -1797,15 +2177,17 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
 
   const badges = recap?.badge_showroom || [];
   const families = ['all', ...Array.from(new Set(badges.map((b) => b.family).filter(Boolean)))];
+  const shameCount = badges.filter((b) => b.is_shame).length;
   const visible = badges.filter((b) => {
     if (filter === 'unlocked' && !b.unlocked) return false;
     if (filter === 'locked' && b.unlocked) return false;
-    if (filter === 'records' && !b.is_repeatable) return false;
+    if (filter === 'records' && (!b.is_repeatable || b.is_shame)) return false;
+    if (filter === 'shame' && !b.is_shame) return false;
     if (familyFilter !== 'all' && b.family !== familyFilter) return false;
     return true;
   });
 
-  const unlockedCount = badges.filter((b) => b.unlocked).length;
+  const unlockedCount = badges.filter((b) => b.unlocked && !b.is_shame).length;
 
   return (
     <div className="finance-modal-backdrop" onClick={onClose} style={{ zIndex: 1080 }}>
@@ -1835,13 +2217,23 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
               {[
                 { id: 'all', label: `All (${badges.length})` },
                 { id: 'unlocked', label: `Unlocked (${unlockedCount})` },
-                { id: 'locked', label: `Locked (${badges.length - unlockedCount})` },
-                { id: 'records', label: `Record Breakers (${badges.filter((b) => b.is_repeatable).length})` },
+                { id: 'locked', label: `Locked (${badges.length - badges.filter((b) => b.unlocked).length})` },
+                { id: 'records', label: `Record Breakers (${badges.filter((b) => b.is_repeatable && !b.is_shame).length})` },
+                ...(shameCount > 0 ? [{ id: 'shame', label: `🚨 Wall of Shame (${shameCount})` }] : []),
               ].map((t) => (
                 <button
                   key={t.id}
                   type="button"
                   className={`btn btn-sm ${filter === t.id ? 'btn-primary' : 'btn-secondary'}`}
+                  style={
+                    t.id === 'shame'
+                      ? {
+                          borderColor: 'rgba(239, 68, 68, 0.55)',
+                          background: filter === 'shame' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(239, 68, 68, 0.1)',
+                          color: '#fca5a5',
+                        }
+                      : undefined
+                  }
                   onClick={() => setFilter(t.id)}
                 >
                   {t.label}
@@ -1870,6 +2262,7 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.65rem' }}>
               {visible.map((b) => {
+                const isShame = Boolean(b.is_shame);
                 const pct =
                   !b.is_repeatable && Number(b.progress_target) > 0
                     ? Math.min(100, Math.round((Number(b.progress_current || 0) / Number(b.progress_target)) * 100))
@@ -1881,14 +2274,22 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
                     key={b.id}
                     style={{
                       background: b.unlocked
-                        ? b.is_repeatable
+                        ? isShame
+                          ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(127, 29, 29, 0.22) 100%)'
+                          : b.is_repeatable
                           ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(236, 72, 153, 0.12) 100%)'
                           : 'linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(16, 185, 129, 0.12) 100%)'
+                        : isShame
+                        ? 'rgba(239, 68, 68, 0.04)'
                         : 'var(--bg-panel)',
                       border: b.unlocked
-                        ? b.is_repeatable
+                        ? isShame
+                          ? '1px solid rgba(239, 68, 68, 0.6)'
+                          : b.is_repeatable
                           ? '1px solid rgba(245, 158, 11, 0.5)'
                           : '1px solid rgba(16, 185, 129, 0.45)'
+                        : isShame
+                        ? '1px dashed rgba(239, 68, 68, 0.35)'
                         : '1px dashed var(--border)',
                       borderRadius: '12px',
                       padding: '0.8rem',
@@ -1904,17 +2305,30 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                         {b.is_repeatable && b.times_earned > 0 && (
-                          <span className="pill pill-amber" style={{ fontSize: '0.66rem', fontWeight: 800 }}>
-                            Earned ×{b.times_earned}
+                          <span
+                            className={`pill ${isShame ? 'pill-red' : 'pill-amber'}`}
+                            style={{ fontSize: '0.66rem', fontWeight: 800 }}
+                          >
+                            {isShame ? `Triggered ×${b.times_earned}` : `Earned ×${b.times_earned}`}
                           </span>
                         )}
-                        <span className={`pill ${b.unlocked ? 'pill-green' : 'pill-outline'}`} style={{ fontSize: '0.65rem' }}>
-                          {b.unlocked ? 'Unlocked' : 'Locked 🔒'}
+                        <span
+                          className={`pill ${b.unlocked ? (isShame ? 'pill-red' : 'pill-green') : 'pill-outline'}`}
+                          style={{ fontSize: '0.65rem' }}
+                        >
+                          {b.unlocked ? (isShame ? 'Shame 🚨' : 'Unlocked') : 'Locked 🔒'}
                         </span>
                       </div>
                     </div>
                     {b.tier_label && (
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: b.is_repeatable ? '#f59e0b' : '#818cf8' }}>
+                      <div
+                        style={{
+                          fontSize: '0.65rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          color: isShame ? '#ef4444' : b.is_repeatable ? '#f59e0b' : '#818cf8',
+                        }}
+                      >
                         {b.family} • {b.tier_label}
                       </div>
                     )}
@@ -1923,7 +2337,7 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
                       {b.criteria}
                     </div>
                     {b.unlocked && b.subtitle && (
-                      <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600 }}>
+                      <div style={{ fontSize: '0.72rem', color: isShame ? '#ef4444' : '#10b981', fontWeight: 600 }}>
                         {b.subtitle}
                       </div>
                     )}
