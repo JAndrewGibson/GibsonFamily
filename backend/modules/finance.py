@@ -1353,22 +1353,17 @@ def _build_household_badge_showroom(
     partner_rollovers: list[dict],
 ) -> dict:
     """
-    Builds a 50-badge multi-tier, endurance-streak, and repeatable record-breaker Badge Showroom.
+    Builds a 47-badge multi-tier, endurance-streak, and repeatable record-breaker Badge Showroom.
+    Badges ONLY unlock from officially closed months (`closed_months`).
     """
-    starting_ym = get_starting_budget_month(db)
-    raw_months = set()
-    for q in (
-        "SELECT DISTINCT budget_month AS m FROM monthly_budgets WHERE is_active = 1",
-        "SELECT DISTINCT COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) AS m FROM transactions",
-        "SELECT DISTINCT COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) AS m FROM income_entries",
-        "SELECT DISTINCT budget_month AS m FROM closed_months",
-    ):
-        for r in db.execute(q).fetchall():
-            m_val = (r["m"] or "").strip()[:7]
-            if len(m_val) == 7 and starting_ym <= m_val <= ym:
-                raw_months.add(m_val)
-    raw_months.add(ym)
-    chron_months = sorted(raw_months)
+    closed_yms = {
+        (r["budget_month"] or "").strip()[:7]
+        for r in db.execute("SELECT budget_month FROM closed_months WHERE budget_month <= ?", (ym,)).fetchall()
+        if r["budget_month"]
+    }
+    is_target_month_closed = ym in closed_yms
+    # Only officially closed months count toward unlocking badges, streaks, and records
+    chron_months = sorted(closed_yms)
 
     # Compute per-month metrics for streaks and repeatable record-breakers
     month_stats = []
@@ -1462,40 +1457,52 @@ def _build_household_badge_showroom(
                 lowest_spend_amt = ms["spent"]
                 frugal_records += 1
 
-    # Cumulative all-time counts up to `ym` for multi-tier badges
-    total_splits_all_time = db.execute(
-        "SELECT COUNT(*) AS cnt FROM transactions WHERE is_split = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) <= ?",
-        (ym,),
-    ).fetchone()["cnt"]
-
-    try:
-        total_routines_all_time = db.execute(
-            "SELECT COUNT(*) AS cnt FROM recurring_task_completions WHERE completed = 1 AND substr(occurrence_date, 1, 7) <= ?",
-            (ym,),
+    # Cumulative all-time counts across closed months up to `ym` for multi-tier badges
+    if closed_yms:
+        ph = ",".join("?" for _ in closed_yms)
+        closed_params = tuple(sorted(closed_yms))
+        total_splits_all_time = db.execute(
+            f"SELECT COUNT(*) AS cnt FROM transactions WHERE is_split = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) IN ({ph})",
+            closed_params,
         ).fetchone()["cnt"]
-    except Exception:
+        try:
+            total_routines_all_time = db.execute(
+                f"SELECT COUNT(*) AS cnt FROM recurring_task_completions WHERE completed = 1 AND substr(occurrence_date, 1, 7) IN ({ph})",
+                closed_params,
+            ).fetchone()["cnt"]
+        except Exception:
+            total_routines_all_time = 0
+        total_gifts_all_time = db.execute(
+            f"SELECT COUNT(*) AS cnt FROM transactions WHERE is_gift = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) IN ({ph})",
+            closed_params,
+        ).fetchone()["cnt"]
+    else:
+        total_splits_all_time = 0
         total_routines_all_time = 0
+        total_gifts_all_time = 0
 
-    total_gifts_all_time = db.execute(
-        "SELECT COUNT(*) AS cnt FROM transactions WHERE is_gift = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) <= ?",
-        (ym,),
-    ).fetchone()["cnt"]
+    closed_months_count = len(closed_yms)
 
-    closed_months_count = db.execute(
-        "SELECT COUNT(*) AS cnt FROM closed_months WHERE budget_month <= ?",
-        (ym,),
-    ).fetchone()["cnt"]
+    # Best single-month metrics across closed months (for tiered single-month badges)
+    best_closed_savings_rate = max((ms["savings_rate_pct"] for ms in month_stats), default=0.0) if is_target_month_closed else max((ms["savings_rate_pct"] for ms in month_stats), default=0.0)
+    best_closed_leftover = max((ms["leftover"] for ms in month_stats), default=0.0)
+    best_closed_inc_beat_pct = 0.0
+    for ms in month_stats:
+        m_lo = this_leftover if ms["month"] == ym else _compute_month_leftover_data(db, ms["month"])
+        if m_lo.get("exceeded_income_projection"):
+            best_closed_inc_beat_pct = max(best_closed_inc_beat_pct, float(m_lo.get("income_vs_projected_pct") or 0.0))
 
-    inc_beat_pct = float(this_leftover.get("income_vs_projected_pct") or 0.0) if this_leftover.get("exceeded_income_projection") else 0.0
+    effective_no_spend_streak = longest_no_spend_streak if is_target_month_closed else 0
 
-    def _tier_badge(b_id, family, tier_num, tier_name, emoji, title, criteria, current_val, target_val, unit_fmt="int"):
-        unlocked = current_val >= target_val
+    def _tier_badge(b_id, family, tier_num, tier_name, emoji, title, criteria, current_val, target_val, unit_fmt="int", unlocked_override=None):
+        unlocked = bool(unlocked_override) if unlocked_override is not None else (bool(closed_yms) and current_val >= target_val)
         if unit_fmt == "money":
             prog_str = f"${current_val:,.2f} / ${target_val:,.2f}"
         elif unit_fmt == "pct":
             prog_str = f"{current_val:.1f}% / {target_val:.0f}%"
         else:
             prog_str = f"{int(current_val)} / {int(target_val)}"
+        pending_close_note = " (Close month to unlock!)" if (not unlocked and not is_target_month_closed) else ""
         return {
             "id": b_id,
             "family": family,
@@ -1511,15 +1518,15 @@ def _build_household_badge_showroom(
             "progress_text": prog_str,
             "times_earned": 1 if unlocked else 0,
             "is_repeatable": False,
-            "subtitle": f"Unlocked! ({prog_str})" if unlocked else f"Progress: {prog_str} — {criteria}",
+            "subtitle": f"Unlocked! ({prog_str})" if unlocked else f"Progress: {prog_str}{pending_close_note} — {criteria}",
         }
 
     badges = [
         # 1. Savings Rate Tiers (Top Tier = 50%!)
-        _tier_badge("saver_rate_15", "Savings Rate", 1, "Bronze", "🌱", "15% Steady Saver", "Save 15% or more of your monthly income.", max(0.0, savings_rate_pct), 15.0, "pct"),
-        _tier_badge("saver_rate_25", "Savings Rate", 2, "Silver", "🌿", "25% Power Saver", "Save 25% or more of your monthly income.", max(0.0, savings_rate_pct), 25.0, "pct"),
-        _tier_badge("saver_rate_35", "Savings Rate", 3, "Gold", "🌲", "35% Super Saver", "Save 35% or more of your monthly income.", max(0.0, savings_rate_pct), 35.0, "pct"),
-        _tier_badge("saver_rate_50", "Savings Rate", 4, "Diamond", "💎", "50% Wealth Legend", "Save 50% or more of your monthly income in a single month.", max(0.0, savings_rate_pct), 50.0, "pct"),
+        _tier_badge("saver_rate_15", "Savings Rate", 1, "Bronze", "🌱", "15% Steady Saver", "Save 15% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 15.0, "pct"),
+        _tier_badge("saver_rate_25", "Savings Rate", 2, "Silver", "🌿", "25% Power Saver", "Save 25% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 25.0, "pct"),
+        _tier_badge("saver_rate_35", "Savings Rate", 3, "Gold", "🌲", "35% Super Saver", "Save 35% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 35.0, "pct"),
+        _tier_badge("saver_rate_50", "Savings Rate", 4, "Diamond", "💎", "50% Wealth Legend", "Save 50% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 50.0, "pct"),
 
         # 2. Repeatable Record-Breaker Badges (Awarded each time you break your record, shows times_earned ×N)
         {
@@ -1611,21 +1618,21 @@ def _build_household_badge_showroom(
         _tier_badge("green_cashflow_12", "Cash Flow Endurance", 4, "Diamond", "🚀", "Cash Flow Titan IV (12 Mo)", "Maintain positive net cash flow for 12 consecutive months.", green_cashflow_streak, 12),
 
         # 6. No-Spend Freeze Day Streaks
-        _tier_badge("no_spend_3", "No-Spend Freeze", 1, "Bronze", "❄️", "Freeze Spark (3 Days)", "Record 3 consecutive $0 no-spend days in a single month.", longest_no_spend_streak, 3),
-        _tier_badge("no_spend_5", "No-Spend Freeze", 2, "Silver", "🧊", "Freeze Master (5 Days)", "Record 5 consecutive $0 no-spend days in a single month.", longest_no_spend_streak, 5),
-        _tier_badge("no_spend_10", "No-Spend Freeze", 3, "Gold", "🌨️", "Deep Freeze (10 Days)", "Record 10 consecutive $0 no-spend days in a single month.", longest_no_spend_streak, 10),
-        _tier_badge("no_spend_15", "No-Spend Freeze", 4, "Diamond", "🏔️", "Absolute Zero (15 Days)", "Record 15 consecutive $0 no-spend days in a single month.", longest_no_spend_streak, 15),
+        _tier_badge("no_spend_3", "No-Spend Freeze", 1, "Bronze", "❄️", "Freeze Spark (3 Days)", "Record 3 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 3),
+        _tier_badge("no_spend_5", "No-Spend Freeze", 2, "Silver", "🧊", "Freeze Master (5 Days)", "Record 5 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 5),
+        _tier_badge("no_spend_10", "No-Spend Freeze", 3, "Gold", "🌨️", "Deep Freeze (10 Days)", "Record 10 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 10),
+        _tier_badge("no_spend_15", "No-Spend Freeze", 4, "Diamond", "🏔️", "Absolute Zero (15 Days)", "Record 15 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 15),
 
         # 7. Surplus Stasher Tiers (Non-Rollover Unspent Budget Leftover)
-        _tier_badge("surplus_100", "Surplus Stasher", 1, "Bronze", "🐷", "Surplus Stasher I ($100+)", "Finish a month with at least $100 in unspent non-rollover budget surplus.", total_leftover, 100.0, "money"),
-        _tier_badge("surplus_500", "Surplus Stasher", 2, "Silver", "🐖", "Surplus Stasher II ($500+)", "Finish a month with at least $500 in unspent non-rollover budget surplus.", total_leftover, 500.0, "money"),
-        _tier_badge("surplus_1000", "Surplus Stasher", 3, "Gold", "🔐", "Surplus Stasher III ($1,000+)", "Finish a month with at least $1,000 in unspent non-rollover budget surplus.", total_leftover, 1000.0, "money"),
-        _tier_badge("surplus_2500", "Surplus Stasher", 4, "Diamond", "🏛️", "Vault Filler IV ($2,500+)", "Finish a month with at least $2,500 in unspent non-rollover budget surplus.", total_leftover, 2500.0, "money"),
+        _tier_badge("surplus_100", "Surplus Stasher", 1, "Bronze", "🐷", "Surplus Stasher I ($100+)", "Finish a closed month with at least $100 in unspent non-rollover budget surplus.", best_closed_leftover, 100.0, "money"),
+        _tier_badge("surplus_500", "Surplus Stasher", 2, "Silver", "🐖", "Surplus Stasher II ($500+)", "Finish a closed month with at least $500 in unspent non-rollover budget surplus.", best_closed_leftover, 500.0, "money"),
+        _tier_badge("surplus_1000", "Surplus Stasher", 3, "Gold", "🔐", "Surplus Stasher III ($1,000+)", "Finish a closed month with at least $1,000 in unspent non-rollover budget surplus.", best_closed_leftover, 1000.0, "money"),
+        _tier_badge("surplus_2500", "Surplus Stasher", 4, "Diamond", "🏛️", "Vault Filler IV ($2,500+)", "Finish a closed month with at least $2,500 in unspent non-rollover budget surplus.", best_closed_leftover, 2500.0, "money"),
 
         # 8. Income Outperformer Tiers (Beating Projected Monthly Income)
-        _tier_badge("income_beat_5", "Income Outperformer", 1, "Bronze", "📈", "Income Beat I (+5%)", "Earn at least 5% more actual income than your monthly projected income.", inc_beat_pct, 5.0, "pct"),
-        _tier_badge("income_beat_15", "Income Outperformer", 2, "Silver", "🚀", "Income Surge II (+15%)", "Earn at least 15% more actual income than your monthly projected income.", inc_beat_pct, 15.0, "pct"),
-        _tier_badge("income_beat_30", "Income Outperformer", 3, "Gold", "☄️", "Income Windfall III (+30%)", "Earn at least 30% more actual income than your monthly projected income.", inc_beat_pct, 30.0, "pct"),
+        _tier_badge("income_beat_5", "Income Outperformer", 1, "Bronze", "📈", "Income Beat I (+5%)", "Earn at least 5% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 5.0, "pct"),
+        _tier_badge("income_beat_15", "Income Outperformer", 2, "Silver", "🚀", "Income Surge II (+15%)", "Earn at least 15% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 15.0, "pct"),
+        _tier_badge("income_beat_30", "Income Outperformer", 3, "Gold", "☄️", "Income Windfall III (+30%)", "Earn at least 30% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 30.0, "pct"),
 
         # 9. Spending Slasher Multi-Month Streaks
         _tier_badge("slash_1", "Spending Slasher", 1, "Bronze", "✂️", "Spending Slasher I (1 Mo)", "Reduce total monthly spending compared to the prior month.", spend_down_streak, 1),
@@ -4410,17 +4417,14 @@ def close_month():
                 db, savings_account_id, float(acc["balance_current"] or 0.0) + transfer_amount, raw_month, f"Month-end close transfer for {m_label}"
             )
 
-    # Generate algorithmic recap
-    recap_obj = _build_algorithmic_month_recap(db, raw_month)
-    recap_json = json.dumps(recap_obj)
-
     notes = (data.get("notes") or "").strip()
     tasks_json = json.dumps(data.get("tasks_completed") or {})
 
+    # Record closed month first so _build_algorithmic_month_recap recognizes `raw_month` as officially closed for badge unlocking
     db.execute(
         """
         INSERT INTO closed_months (budget_month, closed_at, closed_by_partner_id, leftover_amount, transferred_to_savings, savings_account_id, tasks_completed, recap_data, notes)
-        VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, datetime('now'), ?, ?, ?, ?, ?, '', ?)
         ON CONFLICT(budget_month) DO UPDATE SET
             closed_at = datetime('now'),
             closed_by_partner_id = excluded.closed_by_partner_id,
@@ -4428,7 +4432,6 @@ def close_month():
             transferred_to_savings = excluded.transferred_to_savings,
             savings_account_id = excluded.savings_account_id,
             tasks_completed = excluded.tasks_completed,
-            recap_data = excluded.recap_data,
             notes = excluded.notes
         """,
         (
@@ -4438,9 +4441,16 @@ def close_month():
             1 if transferred else 0,
             savings_account_id,
             tasks_json,
-            recap_json,
             notes,
         ),
+    )
+
+    # Generate algorithmic recap now that month is closed
+    recap_obj = _build_algorithmic_month_recap(db, raw_month)
+    recap_json = json.dumps(recap_obj)
+    db.execute(
+        "UPDATE closed_months SET recap_data = ? WHERE budget_month = ?",
+        (recap_json, raw_month),
     )
 
     try:

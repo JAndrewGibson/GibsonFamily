@@ -177,7 +177,8 @@ CREATE TABLE IF NOT EXISTS budgets (
     alert_threshold REAL NOT NULL DEFAULT 0.8,
     is_shared INTEGER NOT NULL DEFAULT 1,
     color TEXT NOT NULL DEFAULT '#6366f1',
-    allow_rollover INTEGER NOT NULL DEFAULT 0
+    allow_rollover INTEGER NOT NULL DEFAULT 0,
+    category_type TEXT NOT NULL DEFAULT 'everyday'
 );
 
 CREATE TABLE IF NOT EXISTS monthly_budgets (
@@ -188,6 +189,7 @@ CREATE TABLE IF NOT EXISTS monthly_budgets (
     color TEXT NOT NULL DEFAULT '#6366f1',
     is_active INTEGER NOT NULL DEFAULT 1,
     allow_rollover INTEGER NOT NULL DEFAULT 0,
+    category_type TEXT NOT NULL DEFAULT 'everyday',
     UNIQUE(budget_month, category)
 );
 
@@ -198,6 +200,7 @@ CREATE TABLE IF NOT EXISTS category_catalog (
     is_archived INTEGER NOT NULL DEFAULT 0,
     color TEXT NOT NULL DEFAULT '#6366f1',
     allow_rollover INTEGER NOT NULL DEFAULT 0,
+    category_type TEXT NOT NULL DEFAULT 'everyday',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -673,14 +676,38 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     budget_cols = [r["name"] for r in db.execute("PRAGMA table_info(budgets)").fetchall()]
     if "allow_rollover" not in budget_cols:
         db.execute("ALTER TABLE budgets ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+    if "category_type" not in budget_cols:
+        db.execute("ALTER TABLE budgets ADD COLUMN category_type TEXT NOT NULL DEFAULT 'everyday'")
 
     mb_cols = [r["name"] for r in db.execute("PRAGMA table_info(monthly_budgets)").fetchall()]
     if "allow_rollover" not in mb_cols:
         db.execute("ALTER TABLE monthly_budgets ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+    if "category_type" not in mb_cols:
+        db.execute("ALTER TABLE monthly_budgets ADD COLUMN category_type TEXT NOT NULL DEFAULT 'everyday'")
 
     cat_cols = [r["name"] for r in db.execute("PRAGMA table_info(category_catalog)").fetchall()]
     if "allow_rollover" not in cat_cols:
         db.execute("ALTER TABLE category_catalog ADD COLUMN allow_rollover INTEGER NOT NULL DEFAULT 0")
+    if "category_type" not in cat_cols:
+        db.execute("ALTER TABLE category_catalog ADD COLUMN category_type TEXT NOT NULL DEFAULT 'everyday'")
+
+    cat_type_mig = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'category_type_defaults_v1'"
+    ).fetchone()
+    if not cat_type_mig:
+        for tbl, col in (("category_catalog", "name"), ("budgets", "category"), ("monthly_budgets", "category")):
+            db.execute(
+                f"UPDATE {tbl} SET category_type = 'savings' WHERE LOWER({col}) LIKE '%saving%'"
+            )
+            db.execute(
+                f"UPDATE {tbl} SET category_type = 'fixed_bill' WHERE category_type = 'everyday' AND (LOWER({col}) LIKE '%housing%' OR LOWER({col}) LIKE '%utilit%' OR LOWER({col}) LIKE '%rent%' OR LOWER({col}) LIKE '%mortgage%' OR LOWER({col}) LIKE '%bill%' OR LOWER({col}) LIKE '%insur%')"
+            )
+            db.execute(
+                f"UPDATE {tbl} SET category_type = 'subscription' WHERE category_type = 'everyday' AND (LOWER({col}) LIKE '%subscr%' OR LOWER({col}) LIKE '%stream%')"
+            )
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('category_type_defaults_v1', '1')"
+        )
 
     # One-time migration: ensure any existing "Spending Money" categories have allow_rollover = 1 by default
     rollover_mig = db.execute(

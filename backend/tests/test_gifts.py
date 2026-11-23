@@ -220,8 +220,19 @@ def test_month_close_excess_income_above_projected(client):
     assert "fun_facts" in recap
     assert "badge_showroom" in recap
     assert len(recap["badge_showroom"]) == 50
-    assert any(b["id"] == "saver_rate_50" for b in recap["badge_showroom"])
-    assert any(b["id"] == "record_highest_savings" and b["is_repeatable"] and b["times_earned"] >= 1 for b in recap["badge_showroom"])
-    assert any(b["unlocked"] for b in recap["badge_showroom"])
-    assert any(not b["unlocked"] for b in recap["badge_showroom"])
+    # Before closing the month, ZERO badges are unlocked!
+    assert all(not b["unlocked"] for b in recap["badge_showroom"])
+
+    # Once the month is officially closed, earned badges unlock!
+    close_res = client.post(
+        "/api/finance/close-month",
+        headers=alex_hdr,
+        json={"month": "2026-11", "transferred_to_savings": False},
+    )
+    assert close_res.status_code == 201
+    closed_recap = close_res.get_json()["recap"]
+    assert any(b["id"] == "saver_rate_50" and b["unlocked"] for b in closed_recap["badge_showroom"])
+    assert any(b["id"] == "record_highest_savings" and b["is_repeatable"] and b["unlocked"] and b["times_earned"] == 1 for b in closed_recap["badge_showroom"])
+    assert any(b["unlocked"] for b in closed_recap["badge_showroom"])
+    assert any(not b["unlocked"] for b in closed_recap["badge_showroom"])
 
