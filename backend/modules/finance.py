@@ -1446,7 +1446,7 @@ def _evaluate_badges_for_months(
         is_over_total_budget = bool(m_exp_budget > 0 and m_sp > m_exp_budget)
         is_neg_cashflow = bool(m_net < 0 and (m_sp > 0 or m_inc > 0))
         has_rollover_burnout = any(
-            float(r.get("monthly_limit") or 0.0) > 0 and float(r.get("rollover_out") or 0.0) <= 0
+            float(r.get("monthly_limit") or 0.0) > 0 and round(float(r.get("rollover_out") or 0.0), 2) < 0
             for r in m_lo["rollover_categories"]
         )
 
@@ -1876,7 +1876,7 @@ def _evaluate_badges_for_months(
             "emoji": "🔥",
             "icon": "alert-triangle",
             "title": "Rollover Burnout!",
-            "criteria": "Triggered each closed month where a rollover category finished at $0 or negative debt.",
+            "criteria": "Triggered each closed month where a rollover category goes over and finishes in negative rollover debt.",
             "unlocked": rollover_burnout_count > 0,
             "pending_unlock": False,
             "is_shame": True,
@@ -1885,7 +1885,7 @@ def _evaluate_badges_for_months(
             "progress_text": f"Triggered ×{rollover_burnout_count}",
             "times_earned": rollover_burnout_count,
             "is_repeatable": True,
-            "subtitle": f"Triggered ×{rollover_burnout_count} · Zero positive rollover left" if rollover_burnout_count > 0 else "Keep positive rollover remaining to avoid this!",
+            "subtitle": f"Triggered ×{rollover_burnout_count} · Finished in negative rollover debt" if rollover_burnout_count > 0 else "Stay within your rollover balance to avoid this!",
         },
         {
             "id": "shame_impulse_spike",
@@ -1911,9 +1911,9 @@ def _evaluate_badges_for_months(
         _shame_tier_badge("shame_over_budget_1", 1, "Slip", "😬", "Budget Slip I (1 Mo)", "Go over your total monthly expense budget in 1 closed month.", over_budget_streak, 1),
         _shame_tier_badge("shame_over_budget_2", 2, "Meltdown", "🚨", "Budget Meltdown II (2 Mo)", "Go over your total monthly expense budget for 2 consecutive closed months.", over_budget_streak, 2),
         _shame_tier_badge("shame_over_budget_3", 3, "Apocalypse", "💀", "Budget Apocalypse III (3 Mo)", "Go over your total monthly expense budget for 3 consecutive closed months.", over_budget_streak, 3),
-        _shame_tier_badge("shame_rollover_drought_1", 1, "Dry", "🏜️", "Dry Wallet I (1 Mo)", "Finish with zero positive rollover in a rollover category for 1 closed month.", rollover_drought_streak, 1),
-        _shame_tier_badge("shame_rollover_drought_2", 2, "Drought", "🔥", "Rollover Drought II (2 Mo)", "Finish with zero positive rollover for 2 consecutive closed months.", rollover_drought_streak, 2),
-        _shame_tier_badge("shame_rollover_drought_3", 3, "Empty Vault", "🌋", "Empty Vault III (3 Mo)", "Finish with zero positive rollover for 3 consecutive closed months.", rollover_drought_streak, 3),
+        _shame_tier_badge("shame_rollover_drought_1", 1, "Dry", "🏜️", "Dry Wallet I (1 Mo)", "Go over in a rollover category (negative rollover debt) for 1 closed month.", rollover_drought_streak, 1),
+        _shame_tier_badge("shame_rollover_drought_2", 2, "Drought", "🔥", "Rollover Drought II (2 Mo)", "Go over in a rollover category (negative rollover debt) for 2 consecutive closed months.", rollover_drought_streak, 2),
+        _shame_tier_badge("shame_rollover_drought_3", 3, "Empty Vault", "🌋", "Empty Vault III (3 Mo)", "Go over in a rollover category (negative rollover debt) for 3 consecutive closed months.", rollover_drought_streak, 3),
     ]
 
 

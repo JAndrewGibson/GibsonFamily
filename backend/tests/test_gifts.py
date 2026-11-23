@@ -301,3 +301,35 @@ def test_wall_of_shame_badges_and_streak_reset(client):
     assert not any(b["id"] == "clean_sheet_1" and b["unlocked"] for b in recap["badge_showroom"])
 
 
+def test_exact_rollover_match_does_not_trigger_shame(client):
+    _alex_id, alex_hdr, _sam_id, _sam_hdr = _setup_two_partners(client)
+    client.post(
+        "/api/finance/income",
+        headers=alex_hdr,
+        json={"source_name": "Salary", "amount": 3000.0, "income_type": "payroll", "budget_month": "2026-11", "date": "2026-11-01"},
+    )
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_hdr,
+        json={"category": "Subscriptions", "monthly_limit": 100.0, "budget_month": "2026-11", "allow_rollover": 1},
+    )
+    # Spend to the exact penny ($100.00 of $100.00 -> rollover_out == 0.0)
+    client.post(
+        "/api/finance/transactions",
+        headers=alex_hdr,
+        json={"name": "Monthly Plan", "amount": 100.0, "date": "2026-11-03", "budget_month": "2026-11", "category": "Subscriptions"},
+    )
+    close_res = client.post(
+        "/api/finance/close-month",
+        headers=alex_hdr,
+        json={"month": "2026-11", "transferred_to_savings": False},
+    )
+    assert close_res.status_code == 201
+    recap = close_res.get_json()["recap"]
+    shame_ids = {b["id"] for b in recap["shame_badges"]}
+    assert "shame_rollover_burnout" not in shame_ids
+    assert "shame_rollover_drought_1" not in shame_ids
+    assert any(b["id"] == "clean_sheet_1" and b["unlocked"] for b in recap["badge_showroom"])
+
+
+
