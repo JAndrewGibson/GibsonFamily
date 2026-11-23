@@ -3399,6 +3399,53 @@ def test_recurring_tasks_day_assignments_and_notifications(app_instance, client)
         assert check_and_dispatch_recurring_notifications(get_db(), now_utc=thu_dt) == 0
 
 
+def test_partner_rename_renames_spending_money_category(client):
+    res = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson Household",
+            "starting_budget_month": "2026-11",
+            "partners": [
+                {"name": "Alex", "email": "alex.ren@gibson.local", "password": "ValidPassword123!", "monthly_fun_allowance": 250.0},
+                {"name": "Sam", "email": "sam.ren@gibson.local", "password": "ValidPassword123!", "monthly_fun_allowance": 250.0},
+            ],
+        },
+    )
+    assert res.status_code == 201
+    data = res.get_json()
+    headers = {"Authorization": f"Bearer {data['token']}"}
+    alex_id = data["partners"][0]["id"]
+
+    # Log a transaction under "Alex's Spending Money"
+    tx_res = client.post(
+        "/api/finance/transactions",
+        headers=headers,
+        json={"name": "Steam Game", "amount": 40.0, "date": "2026-11-10", "category": "Alex's Spending Money"},
+    )
+    assert tx_res.status_code == 201
+
+    # Rename Alex -> Jordan
+    ren_res = client.put(
+        f"/api/auth/partners/{alex_id}",
+        headers=headers,
+        json={"name": "Jordan"},
+    )
+    assert ren_res.status_code == 200
+    assert ren_res.get_json()["name"] == "Jordan"
+
+    # Verify category, budget, transaction, and partner_spending_money all moved to "Jordan's Spending Money"
+    summary = client.get("/api/finance/summary?month=2026-11", headers=headers).get_json()
+    budget_cats = [b["category"] for b in summary["budgets"]]
+    assert "Jordan's Spending Money" in budget_cats
+    assert "Alex's Spending Money" not in budget_cats
+    assert summary["transactions"][0]["category"] == "Jordan's Spending Money"
+    assert not any("Alex's Spending Money" in u["name"] for u in summary["untracked_categories"])
+    jordan_sm = next(p for p in summary["partner_spending_money"] if p["partner_id"] == alex_id)
+    assert jordan_sm["category"] == "Jordan's Spending Money"
+    assert jordan_sm["spent"] == 40.0
+
+
+
 
 
 

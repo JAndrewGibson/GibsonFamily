@@ -46,16 +46,16 @@ def test_gift_addon_toggle_notifications_and_category(client):
     alex_id, alex_hdr, sam_id, sam_hdr = _setup_two_partners(client)
     month = date.today().strftime("%Y-%m")
 
-    # 1. Defaults to disabled, and "Gifts" is an available budget category
+    # 1. Defaults to disabled, and "Gifts" is NOT auto-flagged as an untracked category
     summary = client.get(f"/api/finance/summary?month={month}", headers=alex_hdr).get_json()
     assert summary["gift_addon_enabled"] is False
-    assert "Gifts" in summary["all_categories"]
+    assert not any(c["name"] == "Gifts" for c in summary["untracked_categories"])
 
     # 2. Cannot mark a transaction as a gift while add-on is disabled
     tx = client.post(
         "/api/finance/transactions",
         headers=alex_hdr,
-        json={"name": "Secret Necklace", "amount": 120.0, "date": date.today().isoformat(), "category": "Gifts"},
+        json={"name": "Secret Necklace", "amount": 120.0, "date": date.today().isoformat(), "category": "Shopping & Tech"},
     ).get_json()
     reveal_str = (date.today() + timedelta(days=10)).isoformat()
     blocked = client.put(

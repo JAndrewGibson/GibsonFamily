@@ -46,7 +46,6 @@ DEFAULT_CATEGORIES = [
     "Shopping & Tech",
     "Health & Medical",
     "Travel & Experiences",
-    "Gifts",
     "Future Purchase Savings",
 ]
 
@@ -425,6 +424,91 @@ def sync_partner_spending_money_budget(
         )
 
 
+def rename_category_in_db(
+    db,
+    old_name: str,
+    new_name: str,
+    *,
+    is_preloaded_new: int | None = None,
+    allow_rollover_new: int | None = None,
+    color_new: str | None = None,
+    delete_old_catalog: bool = False,
+) -> None:
+    """Renames or merges `old_name` into `new_name` across all finance & planning tables."""
+    if not old_name or not new_name or old_name == new_name:
+        return
+
+    preloaded_flag = (
+        is_preloaded_new
+        if is_preloaded_new is not None
+        else (1 if new_name in DEFAULT_CATEGORIES else 0)
+    )
+    _ensure_category_in_catalog(
+        db,
+        new_name,
+        is_preloaded=preloaded_flag,
+        unarchive=True,
+        allow_rollover=allow_rollover_new,
+        color=color_new,
+    )
+
+    db.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE transaction_splits SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (new_name, old_name))
+    db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (new_name, old_name))
+
+    old_base = db.execute("SELECT * FROM budgets WHERE category = ?", (old_name,)).fetchone()
+    new_base = db.execute("SELECT * FROM budgets WHERE category = ?", (new_name,)).fetchone()
+    if old_base and not new_base:
+        db.execute("UPDATE budgets SET category = ? WHERE id = ?", (new_name, old_base["id"]))
+    elif old_base and new_base:
+        db.execute("DELETE FROM budgets WHERE id = ?", (old_base["id"],))
+
+    old_mbs = db.execute("SELECT * FROM monthly_budgets WHERE category = ?", (old_name,)).fetchall()
+    for omb in old_mbs:
+        existing_target = db.execute(
+            "SELECT * FROM monthly_budgets WHERE budget_month = ? AND category = ?",
+            (omb["budget_month"], new_name),
+        ).fetchone()
+        if not existing_target:
+            db.execute("UPDATE monthly_budgets SET category = ? WHERE id = ?", (new_name, omb["id"]))
+        else:
+            if omb["is_active"] and not existing_target["is_active"]:
+                db.execute(
+                    "UPDATE monthly_budgets SET is_active = 1, monthly_limit = ? WHERE id = ?",
+                    (omb["monthly_limit"], existing_target["id"]),
+                )
+            db.execute("DELETE FROM monthly_budgets WHERE id = ?", (omb["id"],))
+
+    old_cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (old_name,)).fetchone()
+    if old_cat_row and old_cat_row["is_preloaded"] and not delete_old_catalog:
+        db.execute("UPDATE category_catalog SET is_archived = 1 WHERE name = ?", (old_name,))
+    else:
+        db.execute("DELETE FROM category_catalog WHERE name = ?", (old_name,))
+
+
+def rename_partner_spending_money_category(
+    db,
+    old_partner_name: str,
+    new_partner_name: str,
+    avatar_color: str = "#ec4899",
+) -> None:
+    """Renames a partner's '{OldName}'s Spending Money' category when their name changes."""
+    old_cat = resolve_partner_spending_money_category(db, old_partner_name)
+    new_first = (new_partner_name or "").strip().split()[0] if (new_partner_name or "").strip() else "Partner"
+    new_cat = f"{new_first}'s Spending Money"
+    if old_cat != new_cat:
+        rename_category_in_db(
+            db,
+            old_cat,
+            new_cat,
+            is_preloaded_new=1,
+            allow_rollover_new=1,
+            color_new=(avatar_color or "#ec4899").strip(),
+            delete_old_catalog=True,
+        )
+
+
 def _sync_spending_money_to_partner(db, category: str, monthly_limit: float) -> None:
     """When a '{user}'s Spending Money' budget is updated, mirror the limit back onto `partners.monthly_fun_allowance`."""
     if not is_spending_money_category(category):
@@ -552,6 +636,20 @@ def _sync_category_catalog(db) -> list[dict]:
     # Purge any non-budget pseudo-categories that might have previously slipped into category_catalog
     for non_b_cat in NON_BUDGET_CATEGORIES:
         db.execute("DELETE FROM category_catalog WHERE LOWER(TRIM(name)) = ?", (non_b_cat,))
+
+    # Clean up unused auto-seeded 'Gifts' row if no budgets or transactions reference it
+    auto_gift_cat = db.execute(
+        "SELECT id FROM category_catalog WHERE name = 'Gifts' AND is_preloaded = 1"
+    ).fetchone()
+    if auto_gift_cat:
+        has_usage = (
+            db.execute("SELECT 1 FROM budgets WHERE category = 'Gifts' LIMIT 1").fetchone()
+            or db.execute("SELECT 1 FROM monthly_budgets WHERE category = 'Gifts' LIMIT 1").fetchone()
+            or db.execute("SELECT 1 FROM transactions WHERE category = 'Gifts' LIMIT 1").fetchone()
+            or db.execute("SELECT 1 FROM transaction_splits WHERE category = 'Gifts' LIMIT 1").fetchone()
+        )
+        if not has_usage:
+            db.execute("DELETE FROM category_catalog WHERE id = ?", (auto_gift_cat["id"],))
 
     db.commit()
     return [
@@ -5233,52 +5331,7 @@ def rename_or_merge_category():
     if old_name == new_name:
         return jsonify({"updated": True, "old_name": old_name, "new_name": new_name})
 
-    # Ensure new_name exists and is unarchived in category_catalog
-    _ensure_category_in_catalog(
-        db,
-        new_name,
-        is_preloaded=1 if new_name in DEFAULT_CATEGORIES else 0,
-        unarchive=True,
-    )
-
-    # Reassign transactions, purchase_requests, and future_purchases
-    db.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
-    db.execute("UPDATE transaction_splits SET category = ? WHERE category = ?", (new_name, old_name))
-    db.execute("UPDATE purchase_requests SET category = ? WHERE category = ?", (new_name, old_name))
-    db.execute("UPDATE future_purchases SET category = ? WHERE category = ?", (new_name, old_name))
-
-    # Merge or rename in base `budgets`
-    old_base = db.execute("SELECT * FROM budgets WHERE category = ?", (old_name,)).fetchone()
-    new_base = db.execute("SELECT * FROM budgets WHERE category = ?", (new_name,)).fetchone()
-    if old_base and not new_base:
-        db.execute("UPDATE budgets SET category = ? WHERE id = ?", (new_name, old_base["id"]))
-    elif old_base and new_base:
-        db.execute("DELETE FROM budgets WHERE id = ?", (old_base["id"],))
-
-    # Merge or rename in `monthly_budgets`
-    old_mbs = db.execute("SELECT * FROM monthly_budgets WHERE category = ?", (old_name,)).fetchall()
-    for omb in old_mbs:
-        existing_target = db.execute(
-            "SELECT * FROM monthly_budgets WHERE budget_month = ? AND category = ?",
-            (omb["budget_month"], new_name),
-        ).fetchone()
-        if not existing_target:
-            db.execute("UPDATE monthly_budgets SET category = ? WHERE id = ?", (new_name, omb["id"]))
-        else:
-            if omb["is_active"] and not existing_target["is_active"]:
-                db.execute(
-                    "UPDATE monthly_budgets SET is_active = 1, monthly_limit = ? WHERE id = ?",
-                    (omb["monthly_limit"], existing_target["id"]),
-                )
-            db.execute("DELETE FROM monthly_budgets WHERE id = ?", (omb["id"],))
-
-    # Archive old_name if pre-loaded (so it doesn't get re-seeded), or delete if custom
-    old_cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (old_name,)).fetchone()
-    if old_cat_row and old_cat_row["is_preloaded"]:
-        db.execute("UPDATE category_catalog SET is_archived = 1 WHERE name = ?", (old_name,))
-    else:
-        db.execute("DELETE FROM category_catalog WHERE name = ?", (old_name,))
-
+    rename_category_in_db(db, old_name, new_name)
     db.commit()
     return jsonify({"updated": True, "old_name": old_name, "new_name": new_name})
 

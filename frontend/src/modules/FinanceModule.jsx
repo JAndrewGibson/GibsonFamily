@@ -56,7 +56,6 @@ const DEFAULT_CATEGORIES = [
   'Shopping & Tech',
   'Health & Medical',
   'Travel & Experiences',
-  'Gifts',
   'Future Purchase Savings',
 ];
 

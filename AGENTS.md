@@ -180,7 +180,6 @@ GibsonFamily/
   - Displays interactive split pills and chips in the ledger, with full ability to re-edit the split or revert to a single-category transaction at any time.
 - **Gift Surprises Add-on (`transactions.is_gift`, `gift_reveal_date`, `gift_buyer_partner_id`, `app_settings.gift_addon_enabled`, `GET/PUT /api/finance/gift-addon`)**:
   - Optional Budget add-on (toggled in Budget `Options` or Settings -> `Budget` -> `Budget Add-ons`, with `InfoTip` explanations). Turning it on sends a `gift_addon_enabled` notification to all partners for transparency.
-  - `"Gifts"` is included in `DEFAULT_CATEGORIES`.
   - Marking a transaction as a gift opens a modal to pick the budget category it comes out of and a delivery/reveal date (validated both client- and server-side to be between the purchase date and 90 days after the purchase date).
   - Gift transactions remain included in all budget totals, category sums, and cashflow calculations, while being filtered out of the non-buyer partner's ledger (`GET /api/finance/summary` `transactions`, `savings_transactions`, and `partner_spending_money` transaction lists) until `today >= gift_reveal_date`.
 - **Savings & Brokerage Long-Term Analytics & Spending from Savings (`SavingsModule.jsx`, `transactions.is_savings_spend`, `account_balance_snapshots`)**:

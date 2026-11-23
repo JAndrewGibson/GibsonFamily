@@ -422,7 +422,8 @@ def update_partner(partner_id: int):
     if not partner:
         return jsonify({"error": "Partner not found"}), 404
 
-    name = data.get("name", partner["name"]).strip()
+    old_name = partner["name"]
+    name = data.get("name", old_name).strip()
     email = data.get("email", partner["email"] or "").strip().lower()
     role = data.get("role", partner["role"]).strip()
     avatar_color = data.get("avatar_color", partner["avatar_color"]).strip()
@@ -452,6 +453,9 @@ def update_partner(partner_id: int):
             "UPDATE partners SET name = ?, email = ?, role = ?, avatar_color = ?, monthly_fun_allowance = ? WHERE id = ?",
             (name, email, role, avatar_color, monthly_fun_allowance, partner_id),
         )
+    if name != old_name:
+        from .finance import rename_partner_spending_money_category
+        rename_partner_spending_money_category(db, old_name, name, avatar_color)
     if "monthly_fun_allowance" in data or "spending_money_limit" in data:
         from .finance import sync_partner_spending_money_budget
         val = float(data.get("spending_money_limit", data.get("monthly_fun_allowance", monthly_fun_allowance)) or 0.0)
