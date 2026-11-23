@@ -2860,6 +2860,53 @@ def _notify_account_owners_for_new_tx(
         )
 
 
+def _extract_plaid_meta_json(tx: dict) -> str:
+    """Extracts non-empty Plaid transaction metadata into a compact JSON string."""
+    meta = {}
+    if tx.get("payment_channel"):
+        meta["payment_channel"] = tx.get("payment_channel")
+    pfc = tx.get("personal_finance_category") or {}
+    if isinstance(pfc, dict):
+        if pfc.get("primary"):
+            meta["pfc_primary"] = pfc.get("primary")
+        if pfc.get("detailed"):
+            meta["pfc_detailed"] = pfc.get("detailed")
+        if pfc.get("confidence_level"):
+            meta["pfc_confidence"] = pfc.get("confidence_level")
+    if tx.get("authorized_date"):
+        meta["authorized_date"] = tx.get("authorized_date")
+    if tx.get("date"):
+        meta["posted_date"] = tx.get("date")
+    loc = tx.get("location") or {}
+    if isinstance(loc, dict):
+        clean_loc = {
+            k: loc.get(k)
+            for k in ("address", "city", "region", "postal_code", "country", "store_number")
+            if loc.get(k) not in (None, "")
+        }
+        if clean_loc:
+            meta["location"] = clean_loc
+    if tx.get("website"):
+        meta["website"] = tx.get("website")
+    curr = tx.get("iso_currency_code") or tx.get("unofficial_currency_code")
+    if curr:
+        meta["iso_currency_code"] = curr
+    if tx.get("transaction_code"):
+        meta["transaction_code"] = tx.get("transaction_code")
+    if tx.get("check_number"):
+        meta["check_number"] = tx.get("check_number")
+    cps = [
+        c.get("name")
+        for c in (tx.get("counterparties") or [])
+        if isinstance(c, dict) and c.get("name")
+    ]
+    if cps:
+        meta["counterparties"] = cps
+    if tx.get("category") and isinstance(tx.get("category"), list):
+        meta["legacy_category"] = tx.get("category")
+    return json.dumps(meta) if meta else ""
+
+
 def _sync_plaid_accounts_and_transactions(
     access_token: str,
     institution_name: str,
@@ -3164,6 +3211,8 @@ def _sync_plaid_accounts_and_transactions(
             }
             mapped_cat = category_map.get(pfc, "Shopping & Tech")
 
+            plaid_meta_json = _extract_plaid_meta_json(tx)
+
             # If this posted transaction replaces an earlier pending transaction, upgrade it in-place to preserve user's assigned category
             if pending_tx_id:
                 existing_pending_tx = db.execute(
@@ -3179,7 +3228,8 @@ def _sync_plaid_accounts_and_transactions(
                             amount = ?,
                             name = ?,
                             merchant_name = ?,
-                            is_pending = ?
+                            is_pending = ?,
+                            plaid_meta = COALESCE(NULLIF(?, ''), plaid_meta)
                         WHERE id = ?
                         """,
                         (
@@ -3189,6 +3239,7 @@ def _sync_plaid_accounts_and_transactions(
                             tx.get("name", "Plaid Transaction"),
                             tx.get("merchant_name") or tx.get("name"),
                             is_pending,
+                            plaid_meta_json,
                             existing_pending_tx["id"],
                         ),
                     )
@@ -3203,14 +3254,15 @@ def _sync_plaid_accounts_and_transactions(
             cur_tx = db.execute(
                 """
                 INSERT INTO transactions
-                (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?)
+                (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, plaid_meta)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)
                 ON CONFLICT(plaid_transaction_id) DO UPDATE SET
                     is_pending = excluded.is_pending,
                     amount = excluded.amount,
                     date = excluded.date,
                     name = excluded.name,
-                    merchant_name = excluded.merchant_name
+                    merchant_name = excluded.merchant_name,
+                    plaid_meta = COALESCE(NULLIF(excluded.plaid_meta, ''), transactions.plaid_meta)
                 """,
                 (
                     local_acc_id,
@@ -3223,6 +3275,7 @@ def _sync_plaid_accounts_and_transactions(
                     mapped_cat,
                     partner_id,
                     is_pending,
+                    plaid_meta_json,
                 ),
             )
             imported_txs += 1
@@ -3252,6 +3305,7 @@ def _sync_plaid_accounts_and_transactions(
                 or (mtx.get("datetime") or "")[:10]
                 or date.today().isoformat()
             )
+            m_plaid_meta = _extract_plaid_meta_json(mtx)
             db.execute(
                 """
                 UPDATE transactions
@@ -3259,7 +3313,8 @@ def _sync_plaid_accounts_and_transactions(
                     amount = ?,
                     date = ?,
                     name = COALESCE(?, name),
-                    merchant_name = COALESCE(?, merchant_name)
+                    merchant_name = COALESCE(?, merchant_name),
+                    plaid_meta = COALESCE(NULLIF(?, ''), plaid_meta)
                 WHERE plaid_transaction_id = ?
                 """,
                 (
@@ -3268,6 +3323,7 @@ def _sync_plaid_accounts_and_transactions(
                     m_date,
                     mtx.get("name"),
                     mtx.get("merchant_name") or mtx.get("name"),
+                    m_plaid_meta,
                     m_plaid_id,
                 ),
             )
@@ -3960,6 +4016,14 @@ def finance_summary():
         tx["original_date_month"] = (tx["date"] or "")[:7]
         tx["previous_budget_month"] = _shift_year_month(tx["budget_month"], -1)
         tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
+        raw_pmeta = tx.get("plaid_meta")
+        if raw_pmeta:
+            try:
+                tx["plaid_details"] = json.loads(raw_pmeta)
+            except Exception:
+                tx["plaid_details"] = None
+        else:
+            tx["plaid_details"] = None
         tx["is_savings_spend"] = is_tx_savings_spend(tx)
         tx["is_cc_payment"] = is_tx_cc_payment(tx)
         tx["is_gift"] = bool(tx.get("is_gift"))

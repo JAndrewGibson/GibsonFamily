@@ -1683,7 +1683,9 @@ html[data-theme='light'] .progress-track {
   position: absolute;
   right: 0.75rem;
   top: calc(100% - 4px);
-  width: 280px;
+  width: 300px;
+  max-height: 75vh;
+  overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1694,6 +1696,49 @@ html[data-theme='light'] .progress-track {
   flex-direction: column;
   gap: 0.25rem;
   text-align: left;
+}
+
+.tx-popover-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.45rem 0.6rem;
+  margin-bottom: 0.2rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+}
+
+html[data-theme='light'] .tx-popover-details {
+  background: #f8fafc;
+}
+
+.tx-popover-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.tx-popover-detail-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tx-popover-detail-val {
+  color: var(--text-main);
+  text-align: right;
+  word-break: break-word;
+}
+
+.tx-table tr.tx-row.tx-row-pending {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+html[data-theme='light'] .tx-table tr.tx-row.tx-row-pending {
+  background: #e2e8f0;
 }
 
 .tx-popover-header {
@@ -2304,6 +2349,8 @@ html[data-theme='light'] .progress-track {
     bottom: calc(0.85rem + env(safe-area-inset-bottom, 0px));
     top: auto;
     width: auto;
+    max-height: 82vh;
+    overflow-y: auto;
     z-index: 950;
     padding: 0.85rem;
     border-radius: 16px;
@@ -7894,12 +7941,31 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes shameSlamShake {
-  0%, 100% { transform: translate(0, 0); }
-  42% { transform: translate(0, 0); }
-  50% { transform: translate(-10px, 9px) rotate(-0.8deg); }
-  58% { transform: translate(9px, -7px) rotate(0.7deg); }
-  66% { transform: translate(-7px, 5px) rotate(-0.4deg); }
-  74% { transform: translate(4px, -3px); }
+
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+
+  42% {
+    transform: translate(0, 0);
+  }
+
+  50% {
+    transform: translate(-10px, 9px) rotate(-0.8deg);
+  }
+
+  58% {
+    transform: translate(9px, -7px) rotate(0.7deg);
+  }
+
+  66% {
+    transform: translate(-7px, 5px) rotate(-0.4deg);
+  }
+
+  74% {
+    transform: translate(4px, -3px);
+  }
 }
 
 .month-recap-container {
@@ -7936,11 +8002,14 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes sirenFlash {
-  0%, 100% {
+
+  0%,
+  100% {
     background: radial-gradient(circle at 20% 15%, rgba(239, 68, 68, 0.34), transparent 55%),
       radial-gradient(circle at 80% 85%, rgba(185, 28, 28, 0.28), transparent 55%),
       rgba(127, 29, 29, 0.14);
   }
+
   50% {
     background: radial-gradient(circle at 80% 15%, rgba(239, 68, 68, 0.45), transparent 60%),
       radial-gradient(circle at 20% 85%, rgba(59, 130, 246, 0.22), transparent 55%),
@@ -7978,8 +8047,15 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes positiveAuraPulse {
-  0%, 100% { opacity: 0.72; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .positive-aura-overlay {
@@ -8012,8 +8088,17 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes starTwinkle {
-  0%, 100% { opacity: 0.25; transform: scale(0.7) rotate(0deg); }
-  50% { opacity: 1; transform: scale(1.25) rotate(18deg); }
+
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.7) rotate(0deg);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.25) rotate(18deg);
+  }
 }
 
 .positive-star-sparkle {
@@ -8126,10 +8211,27 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes badgeCrashDownShame {
-  0% { transform: translateY(-230px) scale(3.5) rotate(12deg); opacity: 0; filter: drop-shadow(0 30px 30px rgba(0, 0, 0, 0.95)); }
-  52% { transform: translateY(12px) scale(0.84) rotate(-5deg); opacity: 1; filter: drop-shadow(0 0 34px rgba(239, 68, 68, 0.98)); }
-  74% { transform: translateY(-6px) scale(1.12) rotate(3deg); }
-  100% { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; filter: drop-shadow(0 0 20px rgba(239, 68, 68, 0.85)); }
+  0% {
+    transform: translateY(-230px) scale(3.5) rotate(12deg);
+    opacity: 0;
+    filter: drop-shadow(0 30px 30px rgba(0, 0, 0, 0.95));
+  }
+
+  52% {
+    transform: translateY(12px) scale(0.84) rotate(-5deg);
+    opacity: 1;
+    filter: drop-shadow(0 0 34px rgba(239, 68, 68, 0.98));
+  }
+
+  74% {
+    transform: translateY(-6px) scale(1.12) rotate(3deg);
+  }
+
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+    opacity: 1;
+    filter: drop-shadow(0 0 20px rgba(239, 68, 68, 0.85));
+  }
 }
 
 .badge-crash-icon.is-shame {
@@ -8167,7 +8269,11 @@ html[data-theme='light'] .splendor-wager-badge {
     transform: scale(1.36);
     box-shadow: 0 0 36px rgba(239, 68, 68, 0.95), inset 0 0 18px rgba(239, 68, 68, 0.65);
   }
-  60% { transform: scale(0.95); }
+
+  60% {
+    transform: scale(0.95);
+  }
+
   100% {
     transform: scale(1);
     box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);

@@ -14,6 +14,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ChevronUp,
   Clock,
   CreditCard,
@@ -127,6 +129,43 @@ function formatShortMonth(ym) {
   const [y, m] = ym.split('-').map(Number);
   const d = new Date(y, m - 1, 1);
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
+function formatDateNoYear(isoDate) {
+  if (!isoDate) return '';
+  const parts = String(isoDate).slice(0, 10).split('-').map(Number);
+  if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+    const d = new Date(parts[0], parts[1] - 1, parts[2]);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return String(isoDate).length >= 10 ? String(isoDate).slice(5, 10) : String(isoDate);
+}
+
+function formatPlaidPfc(pfc) {
+  if (!pfc) return '';
+  return String(pfc)
+    .toLowerCase()
+    .split('_')
+    .map((w) => (w === 'and' ? '&' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+function formatPaymentChannel(ch) {
+  if (!ch) return '';
+  const map = { 'in store': 'In Store', online: 'Online', other: 'Other' };
+  return map[String(ch).toLowerCase()] || String(ch);
+}
+
+function formatPlaidLocation(loc) {
+  if (!loc || typeof loc !== 'object') return '';
+  const parts = [];
+  if (loc.address) parts.push(loc.address);
+  const cityState = [loc.city, loc.region].filter(Boolean).join(', ');
+  if (cityState || loc.postal_code) {
+    parts.push([cityState, loc.postal_code].filter(Boolean).join(' '));
+  }
+  if (loc.store_number) parts.push(`Store #${loc.store_number}`);
+  return parts.join(' • ');
 }
 
 function shiftMonthString(ym, delta) {
@@ -4243,17 +4282,34 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         const isEditingCustomCat = customCatTxId === tx.id;
                         const isMenuOpen = openMenuTxId === tx.id;
                         const txAccColor = tx.account_color || '#06b6d4';
+                        const displayTitle = (tx.merchant_name || tx.name || '').trim() || tx.name;
+                        const cleanNote =
+                          tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid'
+                            ? tx.notes.trim()
+                            : '';
+                        const hasSeparateDesc =
+                          Boolean(tx.name) && tx.name.trim() !== displayTitle;
+                        const descTooltipParts = [];
+                        if (hasSeparateDesc) {
+                          descTooltipParts.push(`Description: ${tx.name.trim()}`);
+                        }
+                        if (cleanNote) {
+                          descTooltipParts.push(`Note: ${cleanNote}`);
+                        }
+                        const descTooltipText = descTooltipParts.join(' • ');
 
                         return (
                           <tr
                             key={tx.id}
-                            className="tx-row"
+                            className={`tx-row ${tx.is_pending ? 'tx-row-pending' : ''}`}
                             style={{
                               borderLeft: tx.account_name ? `4px solid ${txAccColor}` : undefined,
                             }}
                           >
                             <td className="tx-cell-date">
-                              <span className="tx-date-text">{tx.date}</span>
+                              <span className="tx-date-text" title={tx.date}>
+                                {formatDateNoYear(tx.date)}
+                              </span>
                               {(isShifted || showAllMonthsInLedger) && (
                                 <span
                                   className={`pill ${isShifted ? 'pill-cyan' : 'pill-outline'}`}
@@ -4270,33 +4326,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                             </td>
                             <td className="tx-cell-desc">
                               <div className="tx-desc-main-line">
-                                <strong>{tx.name}</strong>
-                                {tx.account_name && (
-                                  <span
-                                    className="tx-account-color-pill"
-                                    style={{
-                                      borderColor: txAccColor,
-                                      backgroundColor: `${txAccColor}1f`,
-                                      color: txAccColor,
-                                    }}
-                                    title={`Paid with ${tx.account_name}${tx.account_mask ? ` (•••• ${tx.account_mask})` : ''
-                                      }`}
-                                  >
-                                    <span
-                                      className="tx-account-color-dot"
-                                      style={{ backgroundColor: txAccColor }}
-                                    />
-                                    {tx.account_name}
-                                    {tx.account_mask ? ` ••${tx.account_mask}` : ''}
-                                  </span>
-                                )}
-                                {Boolean(tx.is_pending) && (
-                                  <span
-                                    className="tx-pending-pill"
-                                    title="Pending transaction with bank — counting towards your budget"
-                                  >
-                                    <Clock size={11} /> Pending
-                                  </span>
+                                <strong>{displayTitle}</strong>
+                                {descTooltipText && (
+                                  <InfoTip text={descTooltipText} size={13} />
                                 )}
                                 {Boolean(tx.is_savings_spend) && (
                                   <span
@@ -4353,9 +4385,6 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   </span>
                                 )}
                               </div>
-                              {Boolean(tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid') && (
-                                <small className="tx-note"> — {tx.notes.trim()}</small>
-                              )}
                             </td>
 
                             {/* Reassignable Category Column */}
@@ -4501,7 +4530,9 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                   <div className="tx-hamburger-popover">
                                     <div className="tx-popover-header">
                                       <div>
-                                        <span style={{ display: 'block' }}>{tx.name}</span>
+                                        <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-main)' }}>
+                                          {displayTitle}
+                                        </span>
                                         <small>
                                           Allocated to:{' '}
                                           <strong className="text-cyan">
@@ -4517,6 +4548,120 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                       >
                                         <X size={16} />
                                       </button>
+                                    </div>
+
+                                    {/* Transaction & Plaid Details */}
+                                    <div className="tx-popover-details">
+                                      <div className="tx-popover-detail-row">
+                                        <span className="tx-popover-detail-label">Status</span>
+                                        <span className="tx-popover-detail-val">
+                                          {tx.is_pending ? (
+                                            <span className="tx-pending-pill" style={{ fontSize: '0.66rem' }}>
+                                              <Clock size={10} /> Pending
+                                            </span>
+                                          ) : (
+                                            'Posted'
+                                          )}
+                                        </span>
+                                      </div>
+                                      <div className="tx-popover-detail-row">
+                                        <span className="tx-popover-detail-label">Date</span>
+                                        <span className="tx-popover-detail-val">{tx.date}</span>
+                                      </div>
+                                      {tx.plaid_details?.authorized_date &&
+                                        tx.plaid_details.authorized_date !== tx.date && (
+                                          <div className="tx-popover-detail-row">
+                                            <span className="tx-popover-detail-label">Authorized</span>
+                                            <span className="tx-popover-detail-val">
+                                              {tx.plaid_details.authorized_date}
+                                            </span>
+                                          </div>
+                                        )}
+                                      {tx.account_name && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Account</span>
+                                          <span className="tx-popover-detail-val" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                            <span
+                                              className="tx-account-color-dot"
+                                              style={{ backgroundColor: txAccColor }}
+                                            />
+                                            {tx.account_name}
+                                            {tx.account_mask ? ` ••${tx.account_mask}` : ''}
+                                            {tx.account_institution ? ` (${tx.account_institution})` : ''}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {tx.name && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Description</span>
+                                          <span className="tx-popover-detail-val">{tx.name}</span>
+                                        </div>
+                                      )}
+                                      {cleanNote && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Note</span>
+                                          <span className="tx-popover-detail-val">{cleanNote}</span>
+                                        </div>
+                                      )}
+                                      {tx.plaid_details?.payment_channel && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Channel</span>
+                                          <span className="tx-popover-detail-val">
+                                            {formatPaymentChannel(tx.plaid_details.payment_channel)}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {(tx.plaid_details?.pfc_detailed || tx.plaid_details?.pfc_primary) && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Plaid Category</span>
+                                          <span className="tx-popover-detail-val">
+                                            {formatPlaidPfc(
+                                              tx.plaid_details.pfc_detailed || tx.plaid_details.pfc_primary
+                                            )}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {formatPlaidLocation(tx.plaid_details?.location) && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Location</span>
+                                          <span className="tx-popover-detail-val">
+                                            {formatPlaidLocation(tx.plaid_details.location)}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {tx.plaid_details?.website && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Website</span>
+                                          <span className="tx-popover-detail-val">
+                                            {tx.plaid_details.website}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {tx.plaid_details?.counterparties?.length > 0 && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Counterparty</span>
+                                          <span className="tx-popover-detail-val">
+                                            {tx.plaid_details.counterparties.join(', ')}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {tx.plaid_details?.check_number && (
+                                        <div className="tx-popover-detail-row">
+                                          <span className="tx-popover-detail-label">Check #</span>
+                                          <span className="tx-popover-detail-val">
+                                            {tx.plaid_details.check_number}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {tx.plaid_details?.iso_currency_code &&
+                                        tx.plaid_details.iso_currency_code !== 'USD' && (
+                                          <div className="tx-popover-detail-row">
+                                            <span className="tx-popover-detail-label">Currency</span>
+                                            <span className="tx-popover-detail-val">
+                                              {tx.plaid_details.iso_currency_code}
+                                            </span>
+                                          </div>
+                                        )}
                                     </div>
 
                                     {/* Mark as CC Payment */}
@@ -4653,7 +4798,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                         className="tx-popover-item"
                                         onClick={() => handleAllocateMonth(tx.id, 'prev')}
                                       >
-                                        <ChevronLeft size={14} />
+                                        <ChevronsLeft size={14} />
                                         Allocate to Previous Month ({formatShortMonth(tx.previous_budget_month)})
                                       </button>
                                     )}
@@ -4663,7 +4808,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                       className="tx-popover-item"
                                       onClick={() => handleAllocateMonth(tx.id, 'next')}
                                     >
-                                      <ChevronRight size={14} />
+                                      <ChevronsRight size={14} />
                                       Allocate to Next Month ({formatShortMonth(tx.next_budget_month)})
                                     </button>
 

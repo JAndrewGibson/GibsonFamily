@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     is_gift INTEGER NOT NULL DEFAULT 0,
     gift_reveal_date TEXT,
     gift_buyer_partner_id INTEGER,
+    plaid_meta TEXT,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
@@ -652,6 +653,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE transactions ADD COLUMN gift_buyer_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
     if "savings_account_id" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN savings_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL")
+    if "plaid_meta" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN plaid_meta TEXT")
     db.execute(
         "UPDATE transactions SET budget_month = substr(date, 1, 7) WHERE budget_month IS NULL OR budget_month = ''"
     )
