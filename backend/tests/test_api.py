@@ -3016,11 +3016,12 @@ def test_security_audit_webauthn_cryptography_rate_limits_pii_and_plaid_revocati
         )
         assert forged_res.status_code == 401
 
-        # Sign-count regression (sign_count=4 <= stored 5) must be rejected as a cloned authenticator
+        # Non-monotonic sign_count (e.g. synced passkeys: sign_count=4 <= stored 5, or 0) must still succeed
+        # when the cryptographic signature and single-use challenge are valid.
         a_opt2 = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id}).get_json()
         a_cd_raw2 = json.dumps({"type": "webauthn.get", "challenge": a_opt2["challenge"], "origin": "http://localhost:5173"}).encode("utf-8")
         regressed_auth_data, regressed_sig = sign_fn(a_cd_raw2, assertion_rp_id="localhost", next_sign_count=4)
-        cloned_res = client.post(
+        synced_res = client.post(
             "/api/auth/webauthn/authenticate/verify",
             json={
                 "credential": {
@@ -3033,8 +3034,32 @@ def test_security_audit_webauthn_cryptography_rate_limits_pii_and_plaid_revocati
                 }
             },
         )
-        assert cloned_res.status_code == 401
-        assert "counter regression" in cloned_res.get_json()["error"]
+        assert synced_res.status_code == 200
+        assert synced_res.get_json()["verified"] is True
+
+        # Zero sign_count assertions (iCloud Keychain / Google Password Manager) must succeed repeatedly
+        zero_cred_raw = b"zero-sign-count-cred"
+        zero_cred_id = _b64url(zero_cred_raw)
+        zero_att_cbor, zero_sign_fn = _build_test_webauthn_attestation_and_signer(zero_cred_raw, rp_id="localhost", sign_count=0)
+        z_opt = client.post("/api/auth/webauthn/register/options", headers=auth_p1, json={"partner_id": p1_id}).get_json()
+        z_reg_cd = _b64url(json.dumps({"type": "webauthn.create", "challenge": z_opt["challenge"], "origin": "http://localhost:5173"}).encode("utf-8"))
+        z_reg_res = client.post(
+            "/api/auth/webauthn/register/verify",
+            headers=auth_p1,
+            json={"partner_id": p1_id, "credential": {"id": zero_cred_id, "response": {"clientDataJSON": z_reg_cd, "attestationObject": _b64url(zero_att_cbor)}}},
+        )
+        assert z_reg_res.status_code == 201
+
+        for _ in range(2):
+            za_opt = client.post("/api/auth/webauthn/authenticate/options", json={"partner_id": p1_id}).get_json()
+            za_cd_raw = json.dumps({"type": "webauthn.get", "challenge": za_opt["challenge"], "origin": "http://localhost:5173"}).encode("utf-8")
+            za_auth_data, za_sig = zero_sign_fn(za_cd_raw, assertion_rp_id="localhost", next_sign_count=0)
+            za_res = client.post(
+                "/api/auth/webauthn/authenticate/verify",
+                json={"credential": {"id": zero_cred_id, "response": {"clientDataJSON": _b64url(za_cd_raw), "authenticatorData": _b64url(za_auth_data), "signature": _b64url(za_sig)}}},
+            )
+            assert za_res.status_code == 200
+            assert za_res.get_json()["verified"] is True
 
         # 7. Verify password change requires current_password and invalidates other active sessions
         second_login = client.post(

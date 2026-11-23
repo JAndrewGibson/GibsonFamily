@@ -2,8 +2,11 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import struct
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta, timezone
 from flask import current_app, g, jsonify, request
 from cryptography.hazmat.primitives import hashes
@@ -333,7 +336,15 @@ def verify_webauthn_assertion_signature(
 
     incoming_sign_count = struct.unpack(">I", auth_data_bytes[33:37])[0]
     if (stored_sign_count > 0 or incoming_sign_count > 0) and incoming_sign_count <= stored_sign_count:
-        raise ValueError("WebAuthn signature counter regression detected (potential cloned credential)")
+        # Modern synced passkeys (iCloud Keychain, Google Password Manager, Windows Hello, etc.)
+        # routinely report sign_count=0 or non-monotonic counters across devices.
+        # Replay protection is already enforced via single-use challenges; log and continue.
+        logger.warning(
+            "WebAuthn non-monotonic sign_count (stored=%s, incoming=%s) for rp_id=%s",
+            stored_sign_count,
+            incoming_sign_count,
+            expected_rp_id,
+        )
 
     key_info = json.loads(stored_public_key[len("cose:"):])
     client_data_hash = hashlib.sha256(client_data_raw).digest()
@@ -364,7 +375,7 @@ def verify_webauthn_assertion_signature(
     else:
         raise ValueError(f"Unsupported stored COSE key algorithm: {kty}/{alg}")
 
-    return incoming_sign_count if incoming_sign_count > 0 else stored_sign_count + 1
+    return max(stored_sign_count, incoming_sign_count)
 
 
 def hash_session_token(raw_token: str) -> str:
