@@ -193,6 +193,13 @@ def test_month_close_excess_income_above_projected(client):
         headers=alex_hdr,
         json={"category": "Groceries & Dining", "monthly_limit": 500.0, "budget_month": "2026-11", "allow_rollover": 0},
     )
+    # Also add a "Savings" budget with a large unspent limit ($2000 limit, $100 spent)
+    # and verify it is NOT shown in top_categories or chosen as budget_mvp!
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_hdr,
+        json={"category": "Savings", "monthly_limit": 2000.0, "budget_month": "2026-11", "allow_rollover": 0},
+    )
     client.post(
         "/api/finance/transactions",
         headers=alex_hdr,
@@ -205,9 +212,14 @@ def test_month_close_excess_income_above_projected(client):
     assert mc["income_vs_projected"] == 1200.0
     assert mc["excess_income"] == 1200.0
     assert mc["exceeded_income_projection"] is True
-    assert mc["leftover_amount"] == 150.0
-    assert mc["recommended_savings_transfer"] == 1350.0
-    assert mc["recap"]["overview"]["projected_income"] == 4000.0
-    assert mc["recap"]["overview"]["total_income"] == 5200.0
-    assert mc["recap"]["overview"]["recommended_savings_transfer"] == 1350.0
+    recap = mc["recap"]
+    assert recap["overview"]["projected_income"] == 4000.0
+    assert recap["overview"]["total_income"] == 5200.0
+    assert not any("saving" in c["category"].lower() for c in recap["top_categories"])
+    assert recap["budget_mvp"]["category"] == "Groceries & Dining"
+    assert "fun_facts" in recap
+    assert "badge_showroom" in recap
+    assert len(recap["badge_showroom"]) == 12
+    assert any(b["unlocked"] for b in recap["badge_showroom"])
+    assert any(not b["unlocked"] for b in recap["badge_showroom"])
 

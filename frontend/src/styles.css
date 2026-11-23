@@ -7582,3 +7582,42 @@ html[data-theme='light'] .splendor-wager-badge {
   transform: scaleY(0);
   animation: recapGrowBar 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
+
+/* Full-Screen Mobile Month-End Recap & Top Header Scroll Gradient */
+@media (max-width: 768px) {
+  .month-recap-backdrop {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  .month-recap-container {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    border: none !important;
+    margin: 0 !important;
+  }
+
+  .month-recap-top-header {
+    padding-top: calc(12px + env(safe-area-inset-top, 0px)) !important;
+    padding-bottom: 32px !important;
+    background: linear-gradient(
+      180deg,
+      var(--bg-card) 0%,
+      var(--bg-card) 70%,
+      rgba(15, 23, 42, 0.88) 86%,
+      rgba(15, 23, 42, 0) 100%
+    ) !important;
+  }
+
+  .month-recap-scroll-body {
+    padding-top: calc(92px + env(safe-area-inset-top, 0px)) !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}

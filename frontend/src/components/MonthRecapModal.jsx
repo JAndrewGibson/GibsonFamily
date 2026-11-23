@@ -194,6 +194,7 @@ export default function MonthRecapModal({
   const [recap, setRecap] = useState(null);
   const [slideIndex, setSlideIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [badgeFilter, setBadgeFilter] = useState('all');
   const timerRef = useRef(null);
 
   const loadRecap = async () => {
@@ -217,7 +218,7 @@ export default function MonthRecapModal({
   }, [isOpen, selectedMonth]);
 
   const slides = recap?.slides || [];
-  const totalSlides = slides.length || 7;
+  const totalSlides = slides.length || 9;
 
   // Auto-advance slides every 6 seconds if playing
   useEffect(() => {
@@ -268,10 +269,17 @@ export default function MonthRecapModal({
 
   const overview = recap?.overview || {};
   const trends = recap?.trends || {};
+  const funFacts = recap?.fun_facts || {};
+  const badgeShowroom = recap?.badge_showroom || [];
+  const filteredBadges = badgeShowroom.filter((b) => {
+    if (badgeFilter === 'unlocked') return Boolean(b.unlocked);
+    if (badgeFilter === 'locked') return !b.unlocked;
+    return true;
+  });
 
   return (
     <div
-      className="finance-modal-backdrop"
+      className="finance-modal-backdrop month-recap-backdrop"
       onClick={onClose}
       style={{
         zIndex: 1100,
@@ -296,143 +304,151 @@ export default function MonthRecapModal({
           border: '1px solid rgba(255, 255, 255, 0.15)',
         }}
       >
-        {/* Story Progress Indicators at Top (Spotify Wrapped Style) */}
+        {/* Top Header Overlay with Solid-to-Gradient Mask so Scrolled Content Never Collides with Bars/Title */}
         <div
+          className="month-recap-top-header"
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
-            padding: '12px 16px 8px 16px',
-            display: 'flex',
-            gap: '5px',
+            padding: '12px 16px 28px 16px',
             zIndex: 30,
-            background: 'linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%)',
+            background:
+              'linear-gradient(180deg, var(--bg-card) 0%, var(--bg-card) 64%, rgba(15, 23, 42, 0.82) 84%, rgba(15, 23, 42, 0) 100%)',
+            pointerEvents: 'none',
           }}
         >
-          {Array.from({ length: totalSlides }).map((_, i) => {
-            const isCompleted = i < slideIndex;
-            const isActive = i === slideIndex;
-            return (
-              <div
-                key={i}
-                onClick={() => setSlideIndex(i)}
-                style={{
-                  flex: 1,
-                  height: '4px',
-                  borderRadius: '2px',
-                  background: isCompleted
-                    ? 'rgba(255, 255, 255, 0.95)'
-                    : isActive
-                    ? 'rgba(255, 255, 255, 0.95)'
-                    : 'rgba(255, 255, 255, 0.25)',
-                  cursor: 'pointer',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  transition: 'background 0.2s ease',
-                }}
-              >
-                {isActive && isPlaying && (
-                  <div
-                    style={{
-                      height: '100%',
-                      background: '#fff',
-                      animation: 'recapProgress 6s linear infinite',
-                    }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Top Controls (Month label, Play/Pause, Close) */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '26px',
-            left: '16px',
-            right: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            zIndex: 30,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-            <span
-              style={{
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                background: 'rgba(0, 0, 0, 0.45)',
-                padding: '0.2rem 0.6rem',
-                borderRadius: '999px',
-                color: '#fff',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                backdropFilter: 'blur(4px)',
-              }}
-            >
-              {recap?.month_label || selectedMonth} Recap
-            </span>
+          {/* Story Progress Indicators at Top */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '5px',
+              marginBottom: '10px',
+              pointerEvents: 'auto',
+            }}
+          >
+            {Array.from({ length: totalSlides }).map((_, i) => {
+              const isCompleted = i < slideIndex;
+              const isActive = i === slideIndex;
+              return (
+                <div
+                  key={i}
+                  onClick={() => setSlideIndex(i)}
+                  style={{
+                    flex: 1,
+                    height: '4px',
+                    borderRadius: '2px',
+                    background: isCompleted
+                      ? 'rgba(255, 255, 255, 0.95)'
+                      : isActive
+                      ? 'rgba(255, 255, 255, 0.95)'
+                      : 'rgba(255, 255, 255, 0.25)',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    transition: 'background 0.2s ease',
+                  }}
+                >
+                  {isActive && isPlaying && (
+                    <div
+                      style={{
+                        height: '100%',
+                        background: '#fff',
+                        animation: 'recapProgress 6s linear infinite',
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <button
-              onClick={() => setIsPlaying((p) => !p)}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                background: 'rgba(0, 0, 0, 0.45)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                backdropFilter: 'blur(4px)',
-              }}
-              title={isPlaying ? 'Pause recap' : 'Play recap'}
-            >
-              {isPlaying ? <Pause size={14} /> : <Play size={14} style={{ marginLeft: '2px' }} />}
-            </button>
+          {/* Top Controls (Month label, Play/Pause, Close) */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              pointerEvents: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  padding: '0.22rem 0.65rem',
+                  borderRadius: '999px',
+                  color: '#fff',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  backdropFilter: 'blur(4px)',
+                }}
+              >
+                {recap?.month_label || selectedMonth} Recap
+              </span>
+            </div>
 
-            <button
-              onClick={onClose}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                background: 'rgba(0, 0, 0, 0.45)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                backdropFilter: 'blur(4px)',
-              }}
-              aria-label="Close recap"
-            >
-              <X size={16} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <button
+                onClick={() => setIsPlaying((p) => !p)}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(4px)',
+                }}
+                title={isPlaying ? 'Pause recap' : 'Play recap'}
+              >
+                {isPlaying ? <Pause size={14} /> : <Play size={14} style={{ marginLeft: '2px' }} />}
+              </button>
+
+              <button
+                onClick={onClose}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(4px)',
+                }}
+                aria-label="Close recap"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Slide Content Area */}
         <div
+          className="month-recap-scroll-body"
           style={{
             flex: 1,
             position: 'relative',
             display: 'flex',
             flexDirection: 'column',
-            justifyContent: 'center',
-            padding: '76px 24px 80px 24px',
+            padding: '84px 24px 86px 24px',
             overflowY: 'auto',
           }}
         >
+          <div style={{ marginTop: 'auto', marginBottom: 'auto', width: '100%' }}>
           {loading ? (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
               Cooking up your {selectedMonth} Recap...
@@ -960,8 +976,18 @@ export default function MonthRecapModal({
 
                   {/* Milestone Badges */}
                   <div>
-                    <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.5rem' }}>
-                      BADGES UNLOCKED THIS MONTH
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        BADGES UNLOCKED THIS MONTH ({recap?.milestones?.length || 0}/{badgeShowroom.length || 12})
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: '0.72rem', padding: '0.2rem 0.55rem' }}
+                        onClick={() => setSlideIndex(7)}
+                      >
+                        Open Badge Showroom →
+                      </button>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem' }}>
                       {recap?.milestones?.map((m) => (
@@ -978,7 +1004,7 @@ export default function MonthRecapModal({
                             gap: '0.2rem',
                           }}
                         >
-                          <span style={{ fontSize: '1.2rem' }}>🏆</span>
+                          <span style={{ fontSize: '1.2rem' }}>{m.emoji || '🏆'}</span>
                           <span style={{ fontWeight: 700, fontSize: '0.78rem' }}>{m.title}</span>
                           <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{m.subtitle}</span>
                         </div>
@@ -988,8 +1014,213 @@ export default function MonthRecapModal({
                 </div>
               )}
 
-              {/* SLIDE 6: Spotify Wrapped Summary Poster */}
+              {/* SLIDE 6: Month Fun Facts, Pace, Category Swings & Household Activity */}
               {slideIndex === 6 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        color: 'var(--text-muted)',
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      DEEP DIVE & RHYTHM
+                    </span>
+                    <h2 style={{ margin: '0.2rem 0 0 0', fontSize: '1.55rem', fontWeight: 800 }}>
+                      Month Fun Facts
+                    </h2>
+                  </div>
+
+                  {/* Spending Timing & No-Spend Streak Grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '0.8rem' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                        Favorite Shopping Day
+                      </div>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fbbf24', marginTop: '0.2rem' }}>
+                        {funFacts.favorite_day_of_week?.day_name || 'Saturday'}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                        ${fmtMoney(funFacts.favorite_day_of_week?.spent)} across {funFacts.favorite_day_of_week?.tx_count || 0} purchases
+                      </div>
+                    </div>
+
+                    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '0.8rem' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                        No-Spend Freeze
+                      </div>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#06b6d4', marginTop: '0.2rem' }}>
+                        {funFacts.no_spend_days_count || 0} $0 Days
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                        Longest streak: <strong>{funFacts.longest_no_spend_streak || 0} days</strong> in a row
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Weekday vs Weekend & First-Half vs Second-Half */}
+                  <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '0.85rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                      <span>Weekdays: ${fmtMoney(funFacts.weekday_spent)} ({funFacts.weekday_tx_count || 0})</span>
+                      <span style={{ color: '#a855f7' }}>Weekends: ${fmtMoney(funFacts.weekend_spent)} ({funFacts.weekend_tx_count || 0})</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      <span>1st Half (Days 1–15): {funFacts.first_half_pct ?? 50}%</span>
+                      <span>2nd Half (Days 16+): {funFacts.second_half_pct ?? 50}%</span>
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: '#818cf8', fontWeight: 600, marginTop: '0.25rem' }}>
+                      Pacing Verdict: {funFacts.pacing_label || 'Evenly Paced Month'}
+                    </div>
+                  </div>
+
+                  {/* Biggest Category Swings (MoM) & Essentials vs Discretionary */}
+                  <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Category Swings & Breakdown
+                    </div>
+                    {funFacts.biggest_category_drop && (
+                      <div style={{ fontSize: '0.78rem', color: '#10b981', fontWeight: 600 }}>
+                        ↓ Biggest Drop: <strong>{funFacts.biggest_category_drop.category}</strong> ({fmtSignedMoney(funFacts.biggest_category_drop.delta)} vs last month)
+                      </div>
+                    )}
+                    {funFacts.biggest_category_jump && (
+                      <div style={{ fontSize: '0.78rem', color: '#f43f5e', fontWeight: 600 }}>
+                        ↑ Biggest Jump: <strong>{funFacts.biggest_category_jump.category}</strong> ({fmtSignedMoney(funFacts.biggest_category_jump.delta)} vs last month)
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                      <span>Essentials/Bills: <strong>${fmtMoney(funFacts.essential_spent)}</strong></span>
+                      <span>Discretionary: <strong>${fmtMoney(funFacts.discretionary_spent)}</strong></span>
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                      <span>Refunds Credited: <strong style={{ color: '#10b981' }}>${fmtMoney(funFacts.returns_total)}</strong> ({funFacts.returns_count || 0})</span>
+                      <span>Receipts Split: <strong>{funFacts.split_tx_count || 0}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Savings, Goals & Couples Household Activity */}
+                  <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Vault, Goals & Household Life
+                    </div>
+                    <div style={{ fontSize: '0.78rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                      <span>Savings & Brokerage Vault: <strong style={{ color: '#10b981' }}>${fmtMoney(funFacts.total_savings_brokerage_balance)}</strong></span>
+                      <span>Transfers In: <strong>+${fmtMoney(funFacts.savings_transfers_month)}</strong></span>
+                    </div>
+                    {funFacts.future_purchases?.active_count > 0 && (
+                      <div style={{ fontSize: '0.76rem', color: '#06b6d4' }}>
+                        Big Purchases Roadmap ({funFacts.future_purchases.active_count}): <strong>${fmtMoney(funFacts.future_purchases.total_saved)}</strong> / ${fmtMoney(funFacts.future_purchases.total_target)} ({funFacts.future_purchases.progress_pct}%)
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.15rem' }}>
+                      <span>✅ Tasks Done: <strong>{funFacts.household_activity?.recurring_tasks_completed || 0}</strong></span>
+                      <span>🛒 Groceries: <strong>{funFacts.household_activity?.groceries_checked || 0}</strong></span>
+                      <span>🎁 Gifts Revealed: <strong>{funFacts.gifts_revealed?.count || 0}</strong></span>
+                      <span>💎 Splendor Games: <strong>{funFacts.household_activity?.splendor_games_completed || 0}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SLIDE 7: Household Badge Showroom (Unlocked & Locked Badges) */}
+              {slideIndex === 7 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        color: 'var(--text-muted)',
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      TROPHY CASE ({recap?.badges_unlocked_count || recap?.milestones?.length || 0} OF {badgeShowroom.length || 12} UNLOCKED)
+                    </span>
+                    <h2 style={{ margin: '0.2rem 0 0 0', fontSize: '1.55rem', fontWeight: 800 }}>
+                      Badge Showroom
+                    </h2>
+                  </div>
+
+                  {/* Filter Pills */}
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
+                    {[
+                      { id: 'all', label: `All (${badgeShowroom.length})` },
+                      { id: 'unlocked', label: `Unlocked (${badgeShowroom.filter((b) => b.unlocked).length})` },
+                      { id: 'locked', label: `Locked (${badgeShowroom.filter((b) => !b.unlocked).length})` },
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setBadgeFilter(tab.id)}
+                        style={{
+                          padding: '0.28rem 0.7rem',
+                          borderRadius: '999px',
+                          fontSize: '0.74rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          background: badgeFilter === tab.id ? 'rgba(99, 102, 241, 0.35)' : 'rgba(255,255,255,0.06)',
+                          color: '#fff',
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
+                    {filteredBadges.map((b) => (
+                      <div
+                        key={b.id}
+                        style={{
+                          background: b.unlocked
+                            ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(16, 185, 129, 0.14) 100%)'
+                            : 'rgba(255, 255, 255, 0.03)',
+                          border: b.unlocked
+                            ? '1px solid rgba(16, 185, 129, 0.45)'
+                            : '1px dashed rgba(255, 255, 255, 0.15)',
+                          borderRadius: '12px',
+                          padding: '0.7rem 0.65rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.25rem',
+                          opacity: b.unlocked ? 1 : 0.62,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '1.35rem', filter: b.unlocked ? 'none' : 'grayscale(100%)' }}>
+                            {b.emoji || '🏆'}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '0.62rem',
+                              fontWeight: 800,
+                              textTransform: 'uppercase',
+                              padding: '0.1rem 0.4rem',
+                              borderRadius: '999px',
+                              background: b.unlocked ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                              color: b.unlocked ? '#6ee7b7' : 'var(--text-muted)',
+                            }}
+                          >
+                            {b.unlocked ? 'Unlocked' : 'Locked 🔒'}
+                          </span>
+                        </div>
+                        <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fff' }}>{b.title}</div>
+                        <div style={{ fontSize: '0.7rem', color: b.unlocked ? '#c7d2fe' : 'var(--text-muted)', lineHeight: 1.3 }}>
+                          {b.unlocked ? b.subtitle : b.criteria}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SLIDE 8: Spotify Wrapped Summary Poster */}
+              {slideIndex === 8 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
                   <div
                     style={{
@@ -1084,6 +1315,7 @@ export default function MonthRecapModal({
               )}
             </>
           )}
+          </div>
         </div>
 
         {/* Bottom Story Navigation (Prev / Next Buttons & Touch zones) */}

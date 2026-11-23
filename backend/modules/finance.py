@@ -129,6 +129,11 @@ def is_tx_cc_payment(tx: dict) -> bool:
     return cat in CC_PAYMENT_ALIASES
 
 
+def _is_savings_category_name(name: str) -> bool:
+    """Returns True if a budget category name represents a savings bucket rather than an expense category."""
+    return "saving" in (name or "").strip().lower()
+
+
 def is_gift_addon_enabled(db=None) -> bool:
     """Returns True if the optional Gift Surprises add-on is enabled in app_settings."""
     try:
@@ -1415,10 +1420,12 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         else:
             yoy_spend_trend = f"Spending identical to last {month_name}!"
 
-    # 4. Top Spending Categories
+    # 4. Top Spending Categories (exclude savings categories)
     spend_by_cat = {}
     for cat_item in this_leftover["leftover_categories"] + this_leftover["rollover_categories"]:
         c_name = cat_item["category"]
+        if _is_savings_category_name(c_name):
+            continue
         spend_by_cat[c_name] = {
             "category": c_name,
             "spent": cat_item["spent"],
@@ -1426,7 +1433,11 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             "color": cat_item.get("color", "#6366f1"),
         }
 
-    sorted_cats = sorted(spend_by_cat.values(), key=lambda x: x["spent"], reverse=True)
+    sorted_cats = sorted(
+        [c for c in spend_by_cat.values() if c["spent"] > 0] or list(spend_by_cat.values()),
+        key=lambda x: x["spent"],
+        reverse=True,
+    )
     top_categories = []
     for idx, c in enumerate(sorted_cats[:5]):
         cat_pct = round((c["spent"] / this_spent) * 100, 1) if this_spent > 0 else 0.0
@@ -1520,11 +1531,11 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         default=None,
     )
 
-    # 6. Budget MVP Category (Non-rollover category with highest dollar surplus)
+    # 6. Budget MVP Category (Non-rollover, non-savings category with highest dollar surplus)
     budget_mvp = None
     eligible_mvps = [
         c for c in this_leftover["leftover_categories"]
-        if c["leftover"] > 0 and c["monthly_limit"] > 0
+        if c["leftover"] > 0 and c["monthly_limit"] > 0 and not _is_savings_category_name(c["category"])
     ]
     if eligible_mvps:
         best_mvp = max(eligible_mvps, key=lambda c: c["leftover"])
@@ -1616,19 +1627,338 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             "theme_gradient": "linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #ec4899 100%)",
         }
 
-    # 9. Milestone Badges Unlocked
-    milestones = []
-    if this_spent <= total_budget and total_budget > 0:
-        milestones.append({"id": "on_budget", "icon": "shield-check", "title": "On Budget", "subtitle": "Kept under total limit"})
-    if total_leftover > 0:
-        milestones.append({"id": "leftover_stash", "icon": "piggy-bank", "title": "Surplus Stashed", "subtitle": f"${total_leftover:.2f} sent to savings"})
-    if mom_direction == "down":
-        milestones.append({"id": "spend_slashed", "icon": "trending-down", "title": "Slashed Spending", "subtitle": mom_spend_trend or "Down vs last month"})
-    if any(p["rollover_out"] > 0 for p in partner_rollovers):
-        milestones.append({"id": "rollover_hero", "icon": "sparkles", "title": "Rollover Hero", "subtitle": "Partner savings carried forward"})
-    if net_cashflow > 0:
-        milestones.append({"id": "green_cashflow", "icon": "dollar-sign", "title": "In the Green", "subtitle": f"+${net_cashflow:.2f} net cash flow"})
-    milestones.append({"id": "month_closed", "icon": "check-circle", "title": "Month Closed", "subtitle": f"{month_label} officially wrapped"})
+    # 9. Fun Facts & Deep-Dive Insights (Pace, Swings, Wealth/Goals, Household Activity)
+    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    dow_spent = {name: 0.0 for name in weekday_names}
+    dow_counts = {name: 0 for name in weekday_names}
+    weekday_spent = 0.0
+    weekend_spent = 0.0
+    weekday_tx_count = 0
+    weekend_tx_count = 0
+    for tx in budget_txs:
+        amt = float(tx.get("amount") or 0.0)
+        raw_d = (tx.get("date") or "")[:10]
+        try:
+            dt_obj = date.fromisoformat(raw_d)
+            w_idx = dt_obj.weekday()
+        except Exception:
+            w_idx = 0
+        w_name = weekday_names[w_idx]
+        dow_spent[w_name] = round(dow_spent[w_name] + amt, 2)
+        dow_counts[w_name] += 1
+        if w_idx >= 5:
+            weekend_spent = round(weekend_spent + amt, 2)
+            weekend_tx_count += 1
+        else:
+            weekday_spent = round(weekday_spent + amt, 2)
+            weekday_tx_count += 1
+
+    fav_dow_name = max(weekday_names, key=lambda k: (dow_spent[k], dow_counts[k])) if budget_txs else "Saturday"
+    favorite_day_of_week = {
+        "day_name": fav_dow_name,
+        "spent": round(dow_spent.get(fav_dow_name, 0.0), 2),
+        "tx_count": dow_counts.get(fav_dow_name, 0),
+    }
+
+    no_spend_days_count = sum(1 for d in daily_spending if d["daily_spent"] <= 0)
+    longest_no_spend_streak = 0
+    cur_streak = 0
+    for d in daily_spending:
+        if d["daily_spent"] <= 0:
+            cur_streak += 1
+            if cur_streak > longest_no_spend_streak:
+                longest_no_spend_streak = cur_streak
+        else:
+            cur_streak = 0
+
+    first_half_spent = round(sum(d["daily_spent"] for d in daily_spending if d["day"] <= 15), 2)
+    second_half_spent = round(sum(d["daily_spent"] for d in daily_spending if d["day"] > 15), 2)
+    total_daily_sum = first_half_spent + second_half_spent
+    first_half_pct = round((first_half_spent / total_daily_sum) * 100, 1) if total_daily_sum > 0 else 50.0
+    second_half_pct = round(100.0 - first_half_pct, 1) if total_daily_sum > 0 else 50.0
+    if first_half_pct >= 60.0:
+        pacing_label = "Front-Loaded Month (Days 1–15)"
+    elif second_half_pct >= 60.0:
+        pacing_label = "Back-Loaded Month (Days 16+)"
+    else:
+        pacing_label = "Evenly Paced Month"
+
+    # MoM Category Swings (exclude savings categories)
+    prev_cat_map = {
+        c["category"]: c["spent"]
+        for c in (prev_leftover["leftover_categories"] + prev_leftover["rollover_categories"])
+        if not _is_savings_category_name(c["category"])
+    }
+    this_cat_map = {
+        c["category"]: c["spent"]
+        for c in (this_leftover["leftover_categories"] + this_leftover["rollover_categories"])
+        if not _is_savings_category_name(c["category"])
+    }
+    all_swing_cats = set(prev_cat_map.keys()) | set(this_cat_map.keys())
+    cat_deltas = []
+    for c_name in all_swing_cats:
+        p_val = float(prev_cat_map.get(c_name, 0.0))
+        t_val = float(this_cat_map.get(c_name, 0.0))
+        if p_val > 0 or t_val > 0:
+            cat_deltas.append({
+                "category": c_name,
+                "prev_spent": round(p_val, 2),
+                "this_spent": round(t_val, 2),
+                "delta": round(t_val - p_val, 2),
+            })
+    biggest_category_drop = min((d for d in cat_deltas if d["delta"] < 0), key=lambda d: d["delta"], default=None)
+    biggest_category_jump = max((d for d in cat_deltas if d["delta"] > 0), key=lambda d: d["delta"], default=None)
+
+    essential_keywords = ("housing", "utilit", "rent", "mortgage", "bill", "insur", "health", "medical", "subscr", "internet", "phone", "grocer")
+    essential_spent = 0.0
+    discretionary_spent = 0.0
+    for tx in budget_txs:
+        c_low = (tx.get("category") or "").lower()
+        if any(k in c_low for k in essential_keywords):
+            essential_spent = round(essential_spent + float(tx.get("amount") or 0.0), 2)
+        else:
+            discretionary_spent = round(discretionary_spent + float(tx.get("amount") or 0.0), 2)
+
+    month_incomes_rows = db.execute(
+        """
+        SELECT income_type, amount FROM income_entries
+        WHERE COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) = ?
+        """,
+        (ym,),
+    ).fetchall()
+    returns_count = sum(1 for r in month_incomes_rows if is_return_refund((r["income_type"] or "").lower()))
+    returns_total = round(
+        sum(float(r["amount"] or 0.0) for r in month_incomes_rows if is_return_refund((r["income_type"] or "").lower())),
+        2,
+    )
+    split_tx_count = sum(1 for t in budget_txs if bool(t.get("is_split")))
+    savings_spends_month = round(sum(float(t.get("amount") or 0.0) for t in month_txs if is_tx_savings_spend(t)), 2)
+    savings_transfers_month = round(
+        sum(
+            float(r["amount"] or 0.0)
+            for r in month_incomes_rows
+            if (r["income_type"] or "").strip().lower() in ("transfer", "account_transfer", "savings_transfer", "transfer_to_savings")
+        ),
+        2,
+    )
+
+    all_accs = [dict(r) for r in db.execute("SELECT * FROM accounts").fetchall()]
+    total_sav_brok_balance = round(
+        sum(
+            float(a.get("balance_current") or 0.0)
+            for a in all_accs
+            if classify_savings_account(a)["is_savings_or_brokerage"]
+        ),
+        2,
+    )
+
+    try:
+        fp_rows = db.execute("SELECT target_amount, current_saved FROM future_purchases WHERE status != 'completed'").fetchall()
+        fp_count = len(fp_rows)
+        fp_saved = round(sum(float(r["current_saved"] or 0.0) for r in fp_rows), 2)
+        fp_target = round(sum(float(r["target_amount"] or 0.0) for r in fp_rows), 2)
+        fp_pct = round((fp_saved / fp_target) * 100, 1) if fp_target > 0 else 0.0
+    except Exception:
+        fp_count, fp_saved, fp_target, fp_pct = 0, 0.0, 0.0, 0.0
+
+    try:
+        pr_rows = db.execute("SELECT amount FROM purchase_requests WHERE status IN ('approved', 'timeline')").fetchall()
+        pr_approved_count = len(pr_rows)
+        pr_approved_total = round(sum(float(r["amount"] or 0.0) for r in pr_rows), 2)
+    except Exception:
+        pr_approved_count, pr_approved_total = 0, 0.0
+
+    today_iso_str = date.today().isoformat()
+    gifts_revealed_txs = [
+        t for t in month_txs
+        if bool(t.get("is_gift"))
+        and (t.get("gift_reveal_date") or "")[:7] == ym
+        and (t.get("gift_reveal_date") or "")[:10] <= today_iso_str
+    ]
+    gifts_revealed_count = len(gifts_revealed_txs)
+    gifts_revealed_total = round(sum(float(t.get("amount") or 0.0) for t in gifts_revealed_txs), 2)
+    any_gift_marked = bool(db.execute("SELECT 1 FROM transactions WHERE is_gift = 1 LIMIT 1").fetchone())
+
+    try:
+        rt_completed = db.execute(
+            "SELECT COUNT(*) AS cnt FROM recurring_task_completions WHERE substr(occurrence_date, 1, 7) = ? AND completed = 1",
+            (ym,),
+        ).fetchone()["cnt"]
+    except Exception:
+        rt_completed = 0
+
+    try:
+        groc_checked = db.execute("SELECT COUNT(*) AS cnt FROM grocery_items WHERE checked = 1").fetchone()["cnt"]
+    except Exception:
+        groc_checked = 0
+
+    try:
+        splendor_completed = db.execute("SELECT COUNT(*) AS cnt FROM splendor_matches WHERE status = 'completed'").fetchone()["cnt"]
+    except Exception:
+        splendor_completed = 0
+
+    is_month_closed_flag = bool(
+        db.execute("SELECT 1 FROM closed_months WHERE budget_month = ? LIMIT 1", (ym,)).fetchone()
+    )
+
+    fun_facts = {
+        "weekday_spent": weekday_spent,
+        "weekend_spent": weekend_spent,
+        "weekday_tx_count": weekday_tx_count,
+        "weekend_tx_count": weekend_tx_count,
+        "favorite_day_of_week": favorite_day_of_week,
+        "no_spend_days_count": no_spend_days_count,
+        "longest_no_spend_streak": longest_no_spend_streak,
+        "first_half_spent": first_half_spent,
+        "second_half_spent": second_half_spent,
+        "first_half_pct": first_half_pct,
+        "second_half_pct": second_half_pct,
+        "pacing_label": pacing_label,
+        "biggest_category_drop": biggest_category_drop,
+        "biggest_category_jump": biggest_category_jump,
+        "essential_spent": essential_spent,
+        "discretionary_spent": discretionary_spent,
+        "returns_count": returns_count,
+        "returns_total": returns_total,
+        "split_tx_count": split_tx_count,
+        "total_savings_brokerage_balance": total_sav_brok_balance,
+        "savings_transfers_month": savings_transfers_month,
+        "savings_spends_month": savings_spends_month,
+        "future_purchases": {
+            "active_count": fp_count,
+            "total_saved": fp_saved,
+            "total_target": fp_target,
+            "progress_pct": fp_pct,
+        },
+        "approved_requests": {
+            "count": pr_approved_count,
+            "total": pr_approved_total,
+        },
+        "gifts_revealed": {
+            "count": gifts_revealed_count,
+            "total": gifts_revealed_total,
+        },
+        "household_activity": {
+            "recurring_tasks_completed": rt_completed,
+            "groceries_checked": groc_checked,
+            "splendor_games_completed": splendor_completed,
+        },
+    }
+
+    # 10. Milestone Badges Unlocked & Complete Badge Showroom (Unlocked + Locked)
+    badge_definitions = [
+        {
+            "id": "on_budget",
+            "emoji": "🛡️",
+            "icon": "shield-check",
+            "title": "On Budget",
+            "criteria": "Keep total monthly spending under your total budget limit.",
+            "unlocked": bool(this_spent <= total_budget and total_budget > 0),
+            "subtitle": f"Spent ${this_spent:,.2f} of ${total_budget:,.2f} limit" if (this_spent <= total_budget and total_budget > 0) else "Stay under total monthly budget limit",
+        },
+        {
+            "id": "leftover_stash",
+            "emoji": "🐷",
+            "icon": "piggy-bank",
+            "title": "Surplus Stashed",
+            "criteria": "Finish the month with unspent non-rollover budget surplus for savings.",
+            "unlocked": bool(total_leftover > 0),
+            "subtitle": f"${total_leftover:,.2f} non-rollover surplus" if total_leftover > 0 else "Finish with unspent non-rollover budget",
+        },
+        {
+            "id": "income_outperformer",
+            "emoji": "🚀",
+            "icon": "trending-up",
+            "title": "Income Outperformer",
+            "criteria": "Earn more actual monthly income than your projected income target.",
+            "unlocked": bool(this_leftover["exceeded_income_projection"] and this_leftover["excess_income"] > 0),
+            "subtitle": f"+${this_leftover['excess_income']:,.2f} above projected income!" if (this_leftover["exceeded_income_projection"] and this_leftover["excess_income"] > 0) else "Beat your monthly projected income",
+        },
+        {
+            "id": "super_saver_30",
+            "emoji": "💎",
+            "icon": "award",
+            "title": "30%+ Super Saver",
+            "criteria": "Achieve a household savings rate of 30% or higher in a month.",
+            "unlocked": bool(savings_rate_pct >= 30.0),
+            "subtitle": f"Banked {savings_rate_pct:.0f}% of household income" if savings_rate_pct >= 30.0 else f"Current rate: {savings_rate_pct:.0f}% (Target: 30%+)",
+        },
+        {
+            "id": "spend_slashed",
+            "emoji": "✂️",
+            "icon": "trending-down",
+            "title": "Slashed Spending",
+            "criteria": "Reduce total monthly spending compared to the prior month.",
+            "unlocked": bool(mom_direction == "down"),
+            "subtitle": mom_spend_trend or "Spend less than the previous month",
+        },
+        {
+            "id": "no_spend_streak_5",
+            "emoji": "🧊",
+            "icon": "sparkles",
+            "title": "Freeze Master",
+            "criteria": "Record a streak of 5 or more consecutive $0 no-spend days.",
+            "unlocked": bool(longest_no_spend_streak >= 5),
+            "subtitle": f"{longest_no_spend_streak}-day $0 spend streak!" if longest_no_spend_streak >= 5 else f"Longest streak: {longest_no_spend_streak} days (Need 5+)",
+        },
+        {
+            "id": "rollover_hero",
+            "emoji": "✨",
+            "icon": "sparkles",
+            "title": "Rollover Hero",
+            "criteria": "Carry forward positive unused Partner Spending Money into next month.",
+            "unlocked": bool(any(p["rollover_out"] > 0 for p in partner_rollovers)),
+            "subtitle": "Partner savings carried forward" if any(p["rollover_out"] > 0 for p in partner_rollovers) else "Save unused Spending Money for next month",
+        },
+        {
+            "id": "green_cashflow",
+            "emoji": "💵",
+            "icon": "dollar-sign",
+            "title": "In the Green",
+            "criteria": "End the month with positive net cash flow (earned more than spent).",
+            "unlocked": bool(net_cashflow > 0),
+            "subtitle": f"+${net_cashflow:,.2f} net cash flow" if net_cashflow > 0 else "Earn more than you spend in a month",
+        },
+        {
+            "id": "split_strategist",
+            "emoji": "🧾",
+            "icon": "CheckCircle2",
+            "title": "Receipt Strategist",
+            "criteria": "Split a multi-category transaction across 2+ budget categories.",
+            "unlocked": bool(split_tx_count > 0),
+            "subtitle": f"Split {split_tx_count} receipt(s) this month" if split_tx_count > 0 else "Use Split Category on a multi-item purchase",
+        },
+        {
+            "id": "surprise_giver",
+            "emoji": "🎁",
+            "icon": "sparkles",
+            "title": "Surprise Giver",
+            "criteria": "Mark a partner gift purchase with a secret reveal date.",
+            "unlocked": bool(any_gift_marked or gifts_revealed_count > 0),
+            "subtitle": "Kept a partner gift a surprise!" if (any_gift_marked or gifts_revealed_count > 0) else "Mark a purchase as a Gift Surprise",
+        },
+        {
+            "id": "routine_champion",
+            "emoji": "✅",
+            "icon": "check-circle",
+            "title": "Routine Champion",
+            "criteria": "Complete shared recurring household tasks or check off groceries.",
+            "unlocked": bool(rt_completed > 0 or groc_checked > 0),
+            "subtitle": f"{rt_completed} routine(s) & {groc_checked} groceries done" if (rt_completed > 0 or groc_checked > 0) else "Complete a recurring task or grocery run",
+        },
+        {
+            "id": "month_closed",
+            "emoji": "🏁",
+            "icon": "check-circle",
+            "title": "Month Closed",
+            "criteria": "Officially review and close out a monthly budget period.",
+            "unlocked": True,
+            "subtitle": f"{month_label} wrapped" if is_month_closed_flag else f"Unlocked on closing {month_label}",
+        },
+    ]
+
+    milestones = [b for b in badge_definitions if b["unlocked"]]
+    badge_showroom = badge_definitions
 
     # 10. Slide Deck Array (Spotify Wrapped stories format)
     slides = [
@@ -1688,6 +2018,18 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             "instruction": f"Transfer ${total_leftover:.2f} of non-rollover leftover into your savings account!" if total_leftover > 0 else "All non-rollover categories were fully utilized.",
         },
         {
+            "id": "fun_facts",
+            "title": "Month Fun Facts & Rhythm",
+            "badge": "Deep Dive",
+            "fun_facts": fun_facts,
+        },
+        {
+            "id": "badge_showroom",
+            "title": "Household Badge Showroom",
+            "badge": "Trophy Case",
+            "badge_showroom": badge_showroom,
+        },
+        {
             "id": "summary_poster",
             "title": f"{month_label} Wrapped",
             "badge": "Official Household Record",
@@ -1741,6 +2083,10 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         "partner_rollovers": partner_rollovers,
         "leftover_breakdown": this_leftover["leftover_categories"],
         "rollover_breakdown": this_leftover["rollover_categories"],
+        "fun_facts": fun_facts,
+        "badge_showroom": badge_showroom,
+        "badges_unlocked_count": len(milestones),
+        "badges_total_count": len(badge_showroom),
         "milestones": milestones,
         "slides": slides,
     }
@@ -3721,15 +4067,16 @@ def month_close_status():
         },
     ]
 
-    recap_obj = None
-    if is_closed and closed_row["recap_data"]:
+    recap_obj = _build_algorithmic_month_recap(db, selected_month)
+    if is_closed:
         try:
-            recap_obj = json.loads(closed_row["recap_data"])
+            db.execute(
+                "UPDATE closed_months SET recap_data = ? WHERE budget_month = ?",
+                (json.dumps(recap_obj), selected_month),
+            )
+            db.commit()
         except Exception:
-            recap_obj = _build_algorithmic_month_recap(db, selected_month)
-    else:
-        # Generate live preview
-        recap_obj = _build_algorithmic_month_recap(db, selected_month)
+            pass
 
     try:
         y, m = int(selected_month[:4]), int(selected_month[5:7])
@@ -3932,13 +4279,16 @@ def get_month_recap():
         (selected_month,),
     ).fetchone()
 
-    if closed_row and closed_row["recap_data"]:
+    recap_data = _build_algorithmic_month_recap(db, selected_month)
+    if closed_row:
         try:
-            recap_data = json.loads(closed_row["recap_data"])
+            db.execute(
+                "UPDATE closed_months SET recap_data = ? WHERE budget_month = ?",
+                (json.dumps(recap_data), selected_month),
+            )
+            db.commit()
         except Exception:
-            recap_data = _build_algorithmic_month_recap(db, selected_month)
-    else:
-        recap_data = _build_algorithmic_month_recap(db, selected_month)
+            pass
 
     return jsonify(recap_data)
 
