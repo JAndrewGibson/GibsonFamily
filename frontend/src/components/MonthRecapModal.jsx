@@ -1172,49 +1172,100 @@ export default function MonthRecapModal({
                     ))}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '0.55rem' }}>
-                    {filteredBadges.map((b) => (
-                      <div
-                        key={b.id}
-                        style={{
-                          background: b.unlocked
-                            ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(16, 185, 129, 0.14) 100%)'
-                            : 'rgba(255, 255, 255, 0.03)',
-                          border: b.unlocked
-                            ? '1px solid rgba(16, 185, 129, 0.45)'
-                            : '1px dashed rgba(255, 255, 255, 0.15)',
-                          borderRadius: '12px',
-                          padding: '0.7rem 0.65rem',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.25rem',
-                          opacity: b.unlocked ? 1 : 0.62,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: '1.35rem', filter: b.unlocked ? 'none' : 'grayscale(100%)' }}>
-                            {b.emoji || '🏆'}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: '0.62rem',
-                              fontWeight: 800,
-                              textTransform: 'uppercase',
-                              padding: '0.1rem 0.4rem',
-                              borderRadius: '999px',
-                              background: b.unlocked ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-                              color: b.unlocked ? '#6ee7b7' : 'var(--text-muted)',
-                            }}
-                          >
-                            {b.unlocked ? 'Unlocked' : 'Locked 🔒'}
-                          </span>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.55rem' }}>
+                    {filteredBadges.map((b) => {
+                      const pct =
+                        !b.is_repeatable && Number(b.progress_target) > 0
+                          ? Math.min(100, Math.round((Number(b.progress_current || 0) / Number(b.progress_target)) * 100))
+                          : b.unlocked
+                          ? 100
+                          : 0;
+                      return (
+                        <div
+                          key={b.id}
+                          style={{
+                            background: b.unlocked
+                              ? b.is_repeatable
+                                ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.18) 0%, rgba(236, 72, 153, 0.14) 100%)'
+                                : 'linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(16, 185, 129, 0.14) 100%)'
+                              : 'rgba(255, 255, 255, 0.03)',
+                            border: b.unlocked
+                              ? b.is_repeatable
+                                ? '1px solid rgba(245, 158, 11, 0.5)'
+                                : '1px solid rgba(16, 185, 129, 0.45)'
+                              : '1px dashed rgba(255, 255, 255, 0.15)',
+                            borderRadius: '12px',
+                            padding: '0.7rem 0.65rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.28rem',
+                            opacity: b.unlocked ? 1 : 0.68,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '1.35rem', filter: b.unlocked ? 'none' : 'grayscale(100%)' }}>
+                              {b.emoji || '🏆'}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              {b.is_repeatable && b.times_earned > 0 && (
+                                <span
+                                  style={{
+                                    fontSize: '0.62rem',
+                                    fontWeight: 900,
+                                    padding: '0.1rem 0.42rem',
+                                    borderRadius: '999px',
+                                    background: 'rgba(245, 158, 11, 0.25)',
+                                    color: '#fbbf24',
+                                    border: '1px solid rgba(245, 158, 11, 0.45)',
+                                  }}
+                                >
+                                  ×{b.times_earned}
+                                </span>
+                              )}
+                              <span
+                                style={{
+                                  fontSize: '0.6rem',
+                                  fontWeight: 800,
+                                  textTransform: 'uppercase',
+                                  padding: '0.1rem 0.4rem',
+                                  borderRadius: '999px',
+                                  background: b.unlocked ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                                  color: b.unlocked ? '#6ee7b7' : 'var(--text-muted)',
+                                }}
+                              >
+                                {b.unlocked ? 'Unlocked' : 'Locked 🔒'}
+                              </span>
+                            </div>
+                          </div>
+                          {b.tier_label && (
+                            <div style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', color: b.is_repeatable ? '#fbbf24' : '#818cf8', letterSpacing: '0.04em' }}>
+                              {b.tier_label}
+                            </div>
+                          )}
+                          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fff' }}>{b.title}</div>
+                          <div style={{ fontSize: '0.69rem', color: b.unlocked ? '#c7d2fe' : 'var(--text-muted)', lineHeight: 1.3 }}>
+                            {b.unlocked ? b.subtitle : b.criteria}
+                          </div>
+                          {!b.is_repeatable && b.progress_text && (
+                            <div style={{ marginTop: 'auto', paddingTop: '0.2rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.63rem', color: 'var(--text-muted)', marginBottom: '2px' }}>
+                                <span>Progress</span>
+                                <strong>{b.progress_text}</strong>
+                              </div>
+                              <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                                <div
+                                  style={{
+                                    width: `${pct}%`,
+                                    height: '100%',
+                                    background: b.unlocked ? '#10b981' : '#6366f1',
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fff' }}>{b.title}</div>
-                        <div style={{ fontSize: '0.7rem', color: b.unlocked ? '#c7d2fe' : 'var(--text-muted)', lineHeight: 1.3 }}>
-                          {b.unlocked ? b.subtitle : b.criteria}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1385,3 +1436,180 @@ export default function MonthRecapModal({
   );
 }
 
+
+export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
+  const [loading, setLoading] = useState(true);
+  const [recap, setRecap] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [familyFilter, setFamilyFilter] = useState('all');
+
+  useEffect(() => {
+    if (!isOpen || !selectedMonth) return;
+    setLoading(true);
+    apiFetch(`/api/finance/month-recap?month=${selectedMonth}`)
+      .then((res) => setRecap(res))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [isOpen, selectedMonth]);
+
+  if (!isOpen) return null;
+
+  const badges = recap?.badge_showroom || [];
+  const families = ['all', ...Array.from(new Set(badges.map((b) => b.family).filter(Boolean)))];
+  const visible = badges.filter((b) => {
+    if (filter === 'unlocked' && !b.unlocked) return false;
+    if (filter === 'locked' && b.unlocked) return false;
+    if (filter === 'records' && !b.is_repeatable) return false;
+    if (familyFilter !== 'all' && b.family !== familyFilter) return false;
+    return true;
+  });
+
+  const unlockedCount = badges.filter((b) => b.unlocked).length;
+
+  return (
+    <div className="finance-modal-backdrop" onClick={onClose} style={{ zIndex: 1080 }}>
+      <div
+        className="finance-modal-card finance-modal-lg"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: '760px', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
+      >
+        <div className="finance-modal-header">
+          <div>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', margin: 0 }}>
+              <Award size={20} color="#fbbf24" />
+              Household Badge Showroom & Trophy Case
+            </h3>
+            <p className="text-muted" style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem' }}>
+              {unlockedCount} of {badges.length} badges unlocked • Includes multi-month endurance streaks, tiered challenges & repeatable record-breakers
+            </p>
+          </div>
+          <button type="button" className="btn-icon-subtle" onClick={onClose} aria-label="Close badge showroom">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="finance-modal-body" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+              {[
+                { id: 'all', label: `All (${badges.length})` },
+                { id: 'unlocked', label: `Unlocked (${unlockedCount})` },
+                { id: 'locked', label: `Locked (${badges.length - unlockedCount})` },
+                { id: 'records', label: `Record Breakers (${badges.filter((b) => b.is_repeatable).length})` },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`btn btn-sm ${filter === t.id ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setFilter(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <select
+              className="input input-sm"
+              style={{ width: 'auto', minWidth: '170px' }}
+              value={familyFilter}
+              onChange={(e) => setFamilyFilter(e.target.value)}
+            >
+              {families.map((f) => (
+                <option key={f} value={f}>
+                  {f === 'all' ? 'All Badge Categories' : f}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {loading ? (
+            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+              Loading Household Badge Showroom...
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.65rem' }}>
+              {visible.map((b) => {
+                const pct =
+                  !b.is_repeatable && Number(b.progress_target) > 0
+                    ? Math.min(100, Math.round((Number(b.progress_current || 0) / Number(b.progress_target)) * 100))
+                    : b.unlocked
+                    ? 100
+                    : 0;
+                return (
+                  <div
+                    key={b.id}
+                    style={{
+                      background: b.unlocked
+                        ? b.is_repeatable
+                          ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(236, 72, 153, 0.12) 100%)'
+                          : 'linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(16, 185, 129, 0.12) 100%)'
+                        : 'var(--bg-panel)',
+                      border: b.unlocked
+                        ? b.is_repeatable
+                          ? '1px solid rgba(245, 158, 11, 0.5)'
+                          : '1px solid rgba(16, 185, 129, 0.45)'
+                        : '1px dashed var(--border)',
+                      borderRadius: '12px',
+                      padding: '0.8rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.3rem',
+                      opacity: b.unlocked ? 1 : 0.72,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.3rem' }}>
+                      <span style={{ fontSize: '1.45rem', filter: b.unlocked ? 'none' : 'grayscale(100%)' }}>
+                        {b.emoji || '🏆'}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        {b.is_repeatable && b.times_earned > 0 && (
+                          <span className="pill pill-amber" style={{ fontSize: '0.66rem', fontWeight: 800 }}>
+                            Earned ×{b.times_earned}
+                          </span>
+                        )}
+                        <span className={`pill ${b.unlocked ? 'pill-green' : 'pill-outline'}`} style={{ fontSize: '0.65rem' }}>
+                          {b.unlocked ? 'Unlocked' : 'Locked 🔒'}
+                        </span>
+                      </div>
+                    </div>
+                    {b.tier_label && (
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: b.is_repeatable ? '#f59e0b' : '#818cf8' }}>
+                        {b.family} • {b.tier_label}
+                      </div>
+                    )}
+                    <div style={{ fontWeight: 800, fontSize: '0.88rem' }}>{b.title}</div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
+                      {b.criteria}
+                    </div>
+                    {b.unlocked && b.subtitle && (
+                      <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 600 }}>
+                        {b.subtitle}
+                      </div>
+                    )}
+                    {!b.is_repeatable && b.progress_text && (
+                      <div style={{ marginTop: 'auto', paddingTop: '0.3rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                          <span>Threshold</span>
+                          <strong>{b.progress_text}</strong>
+                        </div>
+                        <div style={{ height: '5px', background: 'rgba(148, 163, 184, 0.2)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              width: `${pct}%`,
+                              height: '100%',
+                              background: b.unlocked ? '#10b981' : '#6366f1',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

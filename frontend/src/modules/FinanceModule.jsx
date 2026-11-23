@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   ArrowUpDown,
+  Award,
   BarChart3,
   Bell,
   BellOff,
@@ -47,7 +48,7 @@ import {
 import { apiFetch, getCookie, setCookie } from '../api';
 import InfoTip from '../components/InfoTip';
 import MonthCloseModal from '../components/MonthCloseModal';
-import MonthRecapModal from '../components/MonthRecapModal';
+import MonthRecapModal, { BadgeShowroomModal } from '../components/MonthRecapModal';
 
 const DEFAULT_CATEGORIES = [
   'Groceries & Dining',
@@ -367,6 +368,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [giftError, setGiftError] = useState('');
   const [giftSaving, setGiftSaving] = useState(false);
   const [togglingGiftAddon, setTogglingGiftAddon] = useState(false);
+  const [showBadgeShowroomModal, setShowBadgeShowroomModal] = useState(false);
 
   // Transaction Note Modal State
   const [editingNoteTx, setEditingNoteTx] = useState(null);
@@ -2190,6 +2192,23 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         {summary.month_close?.is_closed
                           ? 'Replay your household financial wrap-up'
                           : 'Review leftover surplus, transfer to savings & unlock recap'}
+                      </small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="finance-option-item"
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      setShowBadgeShowroomModal(true);
+                    }}
+                  >
+                    <Award size={16} color="#fbbf24" />
+                    <div className="finance-option-copy">
+                      <strong>Badge Showroom & Trophy Case</strong>
+                      <small>
+                        View all 50 household badges, multi-month streaks & record breakers
                       </small>
                     </div>
                   </button>
@@ -7320,6 +7339,15 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
             loadSummary(selectedMonth);
             if (onDataChanged) onDataChanged();
           }}
+        />
+      )}
+
+      {/* Standalone Household Badge Showroom Modal */}
+      {showBadgeShowroomModal && (
+        <BadgeShowroomModal
+          isOpen={showBadgeShowroomModal}
+          onClose={() => setShowBadgeShowroomModal(false)}
+          selectedMonth={selectedMonth}
         />
       )}
     </div>
