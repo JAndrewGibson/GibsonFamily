@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 from pathlib import Path
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -11,6 +13,7 @@ from backend.modules.finance import finance_bp
 from backend.modules.requests_and_plans import requests_bp
 from backend.modules.couples_hub import hub_bp
 from backend.modules.splendor import splendor_bp
+from backend.modules.recap import recap_bp
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -138,7 +141,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "font-src 'self' https://fonts.gstatic.com data:; "
             "img-src 'self' data: https:; "
             "connect-src 'self' https://*.plaid.com; "
-            "frame-src 'self' https://cdn.plaid.com https://*.plaid.com; "
+            "frame-src 'self' https://cdn.plaid.com https://*.plaid.com https://www.youtube.com https://www.youtube-nocookie.com https://www.instagram.com https://instagram.com; "
             "object-src 'none'; "
             "base-uri 'self'; "
             "frame-ancestors 'none'"
@@ -155,6 +158,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.register_blueprint(requests_bp)
     app.register_blueprint(hub_bp)
     app.register_blueprint(splendor_bp)
+    app.register_blueprint(recap_bp)
 
     @app.route("/api/health", methods=["GET"])
     def health():
@@ -211,7 +215,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         planned_reqs = db.execute("SELECT COUNT(*) AS cnt FROM purchase_requests WHERE status = 'budget_planned'").fetchone()["cnt"]
         open_todos = db.execute("SELECT COUNT(*) AS cnt FROM todos WHERE completed = 0").fetchone()["cnt"]
         unchecked_groceries = db.execute("SELECT COUNT(*) AS cnt FROM grocery_items WHERE checked = 0").fetchone()["cnt"]
-        active_admin = db.execute("SELECT COUNT(*) AS cnt FROM admin_records WHERE status != 'completed'").fetchone()["cnt"]
+        active_admin_projects = db.execute("SELECT COUNT(*) AS cnt FROM admin_projects WHERE status = 'active'").fetchone()["cnt"]
+        due_recurring_tasks = 0
+        try:
+            from backend.modules.couples_hub import _hydrate_recurring_task
+            rec_rows = db.execute("SELECT * FROM recurring_tasks WHERE is_active = 1").fetchall()
+            for r in rec_rows:
+                hydrated = _hydrate_recurring_task(db, r)
+                if hydrated["is_scheduled_today"] and not (hydrated["today_completion"] and hydrated["today_completion"].get("completed")):
+                    due_recurring_tasks += 1
+        except Exception:
+            pass
         future_goals = db.execute("SELECT COUNT(*) AS cnt FROM future_purchases").fetchone()["cnt"]
         unread_notifs = db.execute(
             "SELECT COUNT(*) AS cnt FROM notifications WHERE recipient_partner_id = ? AND is_read = 0",
@@ -220,6 +234,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         splendor_my_turn = db.execute(
             "SELECT COUNT(*) AS cnt FROM splendor_games WHERE status = 'active' AND current_turn_partner_id = ?",
             (actor["id"],),
+        ).fetchone()["cnt"]
+        unwatched_recap_clips = db.execute(
+            "SELECT COUNT(*) AS cnt FROM recap_clips WHERE watched = 0"
         ).fetchone()["cnt"]
         sv_row = db.execute("SELECT value FROM app_settings WHERE key = 'state_version'").fetchone()
         state_version = int(sv_row["value"]) if sv_row and str(sv_row["value"]).isdigit() else 1
@@ -230,10 +247,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             "planned_requests": planned_reqs,
             "open_todos": open_todos,
             "unchecked_groceries": unchecked_groceries,
-            "active_admin_records": active_admin,
+            "active_admin_projects": active_admin_projects,
+            "due_recurring_tasks": due_recurring_tasks,
             "future_goals": future_goals,
             "unread_notifications": unread_notifs,
             "splendor_my_turn": splendor_my_turn,
+            "unwatched_recap_clips": unwatched_recap_clips,
         }
 
     @app.route("/api/overview", methods=["GET"])
@@ -265,6 +284,25 @@ def create_app(test_config: dict | None = None) -> Flask:
             "app": "Family Hub API",
             "message": "Frontend dist not built yet. Run `npm run build --prefix frontend`.",
         })
+
+    if not app.config.get("TESTING") and not app.config.get("_RECURRING_THREAD_STARTED"):
+        # Avoid starting duplicate scheduler in Werkzeug reloader parent process
+        if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+            app.config["_RECURRING_THREAD_STARTED"] = True
+
+            def _recurring_scheduler_loop():
+                from backend.modules.couples_hub import check_and_dispatch_recurring_notifications
+                while True:
+                    time.sleep(60)
+                    try:
+                        with app.app_context():
+                            db = get_db()
+                            check_and_dispatch_recurring_notifications(db)
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_recurring_scheduler_loop, daemon=True)
+            t.start()
 
     return app
 

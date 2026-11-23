@@ -1651,6 +1651,52 @@ def create_link_token():
         return jsonify({"error": f"Unable to reach Plaid API: {exc}"}), 502
 
 
+def _notify_account_owners_for_new_tx(
+    db,
+    account_id: int | None,
+    tx_id: int,
+    tx_name: str,
+    amount: float,
+    tx_date: str,
+    actor_partner_id: int | None = None,
+) -> None:
+    """Notify partner(s) attached to an account to categorize a newly appeared expense."""
+    if not account_id or amount <= 0:
+        return
+    acc = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        return
+    # Respect per-account notification toggle (defaults to 1)
+    notify_flag = acc["notify_on_tx"] if "notify_on_tx" in acc.keys() else 1
+    if not notify_flag:
+        return
+
+    owner_pid = acc["owner_partner_id"]
+    owner_scope = (acc["owner_scope"] or "shared").strip().lower()
+    recipients: list[int] = []
+    if owner_pid:
+        recipients = [int(owner_pid)]
+    elif owner_scope in ("shared", "both"):
+        recipients = [int(r["id"]) for r in db.execute("SELECT id FROM partners").fetchall()]
+
+    if not recipients:
+        return
+
+    clean_name = (tx_name or "New Expense").strip()
+    acc_label = (acc["name"] or "Account").strip()
+    for pid in recipients:
+        create_notification(
+            db,
+            recipient_partner_id=pid,
+            actor_partner_id=actor_partner_id,
+            notif_type="tx_categorize",
+            title=f"Categorize: {clean_name} (${abs(amount):.2f})",
+            message=f"New transaction on {acc_label}: {clean_name} for ${abs(amount):.2f} ({tx_date}). Tap to categorize.",
+            link_tab="finance",
+            reference_id=tx_id,
+        )
+
+
 def _sync_plaid_accounts_and_transactions(
     access_token: str,
     institution_name: str,
@@ -1746,7 +1792,7 @@ def _sync_plaid_accounts_and_transactions(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?)
             ON CONFLICT(plaid_account_id) DO UPDATE SET
                 item_id = COALESCE(excluded.item_id, accounts.item_id),
-                owner_partner_id = COALESCE(accounts.owner_partner_id, excluded.owner_partner_id),
+                owner_partner_id = accounts.owner_partner_id,
                 balance_current = excluded.balance_current,
                 balance_available = excluded.balance_available
             """,
@@ -1986,7 +2032,12 @@ def _sync_plaid_accounts_and_transactions(
                     imported_txs += 1
                     continue
 
-            db.execute(
+            existing_plaid_tx = db.execute(
+                "SELECT id FROM transactions WHERE plaid_transaction_id = ?",
+                (tx.get("transaction_id"),),
+            ).fetchone()
+
+            cur_tx = db.execute(
                 """
                 INSERT INTO transactions
                 (account_id, plaid_transaction_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending)
@@ -2012,6 +2063,17 @@ def _sync_plaid_accounts_and_transactions(
                 ),
             )
             imported_txs += 1
+            if not existing_plaid_tx and local_acc_id and amount > 0:
+                cutoff_recent = (date.today() - timedelta(days=14)).isoformat()
+                if tx_date >= cutoff_recent:
+                    _notify_account_owners_for_new_tx(
+                        db,
+                        local_acc_id,
+                        cur_tx.lastrowid,
+                        tx.get("merchant_name") or tx.get("name") or "Plaid Transaction",
+                        amount,
+                        tx_date,
+                    )
 
         # Process modified transactions (e.g., pending transitions to posted or amounts adjust)
         for mtx in tx_data.get("modified", []):
@@ -4036,11 +4098,12 @@ def create_account():
     color = (data.get("color") or "").strip() or ACCOUNT_COLOR_PALETTE[existing_cnt % len(ACCOUNT_COLOR_PALETTE)]
     bal_curr = float(data.get("balance_current", 0.0))
     bal_avail = float(data.get("balance_available", bal_curr))
+    notify_on_tx = 1 if data.get("notify_on_tx", True) else 0
 
     cur = db.execute(
         """
-        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name, color, is_savings_account)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO accounts (name, official_name, type, subtype, mask, balance_current, balance_available, owner_scope, owner_partner_id, institution_name, color, is_savings_account, notify_on_tx)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -4055,6 +4118,7 @@ def create_account():
             data.get("institution_name", "Manual Entry"),
             color,
             is_savings_account,
+            notify_on_tx,
         ),
     )
     _upsert_account_balance_snapshot(db, cur.lastrowid, bal_curr)
@@ -4149,6 +4213,10 @@ def update_account(acc_id: int):
     if "owner_scope" in data:
         fields.append("owner_scope = ?")
         params.append(str(data["owner_scope"]).strip())
+
+    if "notify_on_tx" in data:
+        fields.append("notify_on_tx = ?")
+        params.append(1 if data["notify_on_tx"] else 0)
 
     if fields:
         params.append(acc_id)
@@ -4324,6 +4392,17 @@ def create_transaction():
     )
     new_id = cur.lastrowid
     db.commit()
+    if account_id and category.lower() in ("general", "uncategorized", "") and not is_savings_spend and not is_cc_payment:
+        actor = getattr(g, "current_partner", None)
+        _notify_account_owners_for_new_tx(
+            db,
+            int(account_id),
+            new_id,
+            data.get("merchant_name") or name,
+            amount,
+            tx_date,
+            actor_partner_id=actor["id"] if actor else None,
+        )
     tx = dict(
         db.execute(
             """

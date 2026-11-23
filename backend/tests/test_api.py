@@ -2542,10 +2542,11 @@ def test_facelift_modules_household_and_spending_money_sync(client):
         "Savings",
         "Big Purchases",
         "Groceries",
-        "Medical",
-        "To Do",
+        "Admin Planning",
+        "Recurring Tasks",
         "Games",
         "Splendor",
+        "Weekly Recap",
     ]
     splendor_mod = next(m for m in mods if m["id"] == "splendor")
     assert splendor_mod["parent_id"] == "games"
@@ -3109,6 +3110,269 @@ def test_security_audit_webauthn_cryptography_rate_limits_pii_and_plaid_revocati
         good_reset = client.post("/api/auth/reset-all", headers=auth_p1, json={"password": "NewStrongPassword99!"})
         assert good_reset.status_code == 200
         assert removed_plaid_tokens == ["access-production-token-to-revoke"]
+
+
+def test_account_ownership_categorization_notifications(app_instance, client):
+    from datetime import date
+    from unittest.mock import MagicMock, patch
+
+    setup = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex.acct@test.local", "password": "Password123!"},
+                {"name": "Jordan", "email": "jordan.acct@test.local", "password": "Password123!"},
+            ],
+        },
+    ).get_json()
+    alex_id = setup["partners"][0]["id"]
+    jordan_id = setup["partners"][1]["id"]
+    h_alex = {"Authorization": f"Bearer {setup['token']}"}
+    jordan_login = client.post(
+        "/api/auth/login",
+        json={"email": "jordan.acct@test.local", "password": "Password123!"},
+    ).get_json()
+    h_jordan = {"Authorization": f"Bearer {jordan_login['token']}"}
+
+    # Create 2 accounts: one attached to Alex, one attached to Both (shared)
+    acc_alex = client.post(
+        "/api/finance/accounts",
+        headers=h_alex,
+        json={"name": "Alex Card", "owner_partner_id": alex_id, "owner_scope": "individual", "notify_on_tx": True},
+    ).get_json()
+    acc_both = client.post(
+        "/api/finance/accounts",
+        headers=h_alex,
+        json={"name": "Joint Checking", "owner_partner_id": None, "owner_scope": "shared", "notify_on_tx": True},
+    ).get_json()
+
+    today_str = date.today().isoformat()
+    # Uncategorized transaction on Alex's account -> only Alex notified
+    client.post(
+        "/api/finance/transactions",
+        headers=h_alex,
+        json={
+            "account_id": acc_alex["id"],
+            "name": "Corner Market",
+            "amount": 18.50,
+            "date": today_str,
+            "category": "General",
+        },
+    )
+    alex_notifs = client.get("/api/notifications", headers=h_alex).get_json()["notifications"]
+    jordan_notifs = client.get("/api/notifications", headers=h_jordan).get_json()["notifications"]
+    assert any(n["notif_type"] == "tx_categorize" and "Corner Market" in n["title"] for n in alex_notifs)
+    assert not any(n["notif_type"] == "tx_categorize" and "Corner Market" in n["title"] for n in jordan_notifs)
+
+    # New transaction on Joint Checking (Both) via Plaid sync -> BOTH Alex & Jordan notified
+    with app_instance.app_context():
+        from backend.database import get_db
+        from backend.modules.finance import _sync_plaid_accounts_and_transactions
+
+        db = get_db()
+        db.execute("UPDATE accounts SET plaid_account_id = 'plaid_joint_1' WHERE id = ?", (acc_both["id"],))
+        db.commit()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = [
+            {"accounts": [{"account_id": "plaid_joint_1", "name": "Joint Checking", "type": "depository", "subtype": "checking", "mask": "1111", "balances": {"current": 1000.0}}]},
+            {
+                "added": [
+                    {
+                        "transaction_id": "plaid_tx_joint_new_1",
+                        "account_id": "plaid_joint_1",
+                        "amount": 42.75,
+                        "date": today_str,
+                        "name": "Target Store",
+                        "merchant_name": "Target",
+                        "pending": False,
+                    }
+                ],
+                "modified": [],
+                "removed": [],
+                "has_more": False,
+                "next_cursor": "cur_1",
+            },
+        ]
+        with patch("backend.modules.finance.requests.post", return_value=mock_resp):
+            _sync_plaid_accounts_and_transactions("tok_test", "Bank", alex_id, "item_joint")
+
+    alex_notifs2 = client.get("/api/notifications", headers=h_alex).get_json()["notifications"]
+    jordan_notifs2 = client.get("/api/notifications", headers=h_jordan).get_json()["notifications"]
+    assert any(n["notif_type"] == "tx_categorize" and "Target" in n["title"] for n in alex_notifs2)
+    assert any(n["notif_type"] == "tx_categorize" and "Target" in n["title"] for n in jordan_notifs2)
+
+    # Disable alerts on Joint Checking -> no notification on next uncategorized tx
+    client.put(f"/api/finance/accounts/{acc_both['id']}", headers=h_alex, json={"notify_on_tx": False})
+    client.post(
+        "/api/finance/transactions",
+        headers=h_alex,
+        json={"account_id": acc_both["id"], "name": "Silent Cafe", "amount": 9.0, "date": today_str, "category": "General"},
+    )
+    alex_notifs3 = client.get("/api/notifications", headers=h_alex).get_json()["notifications"]
+    assert not any("Silent Cafe" in n["title"] for n in alex_notifs3)
+
+
+def test_admin_planning_projects_shopping_notes_and_standalone_todos(client):
+    setup = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex.plan@test.local", "password": "Password123!"},
+                {"name": "Jordan", "email": "jordan.plan@test.local", "password": "Password123!"},
+            ],
+        },
+    ).get_json()
+    headers = {"Authorization": f"Bearer {setup['token']}"}
+    alex_id = setup["partners"][0]["id"]
+
+    # 1. Create Christmas Project with shopping list, to-dos, and note
+    proj_res = client.post(
+        "/api/hub/projects",
+        headers=headers,
+        json={
+            "title": "Christmas Project",
+            "description": "Holiday prep",
+            "shopping_items": [
+                {"name": "Decorations", "quantity": "2", "estimated_price": 45.0},
+                {"name": "Wrapping paper", "quantity": "3", "estimated_price": 15.0},
+            ],
+            "todos": [
+                {"title": "Put up decorations", "assigned_to": alex_id},
+                {"title": "Set up tree", "assigned_to": alex_id},
+            ],
+            "notes": [{"title": "Dinner Menu", "content": "Roast, potatoes, pie"}],
+        },
+    )
+    assert proj_res.status_code == 201
+    proj = proj_res.get_json()
+    assert proj["title"] == "Christmas Project"
+    assert len(proj["shopping_items"]) == 2
+    assert proj["shopping_total"] == 60.0
+    assert len(proj["todos"]) == 2
+    assert len(proj["notes"]) == 1
+
+    # 2. Toggle shopping item & edit note
+    item_id = proj["shopping_items"][0]["id"]
+    toggled = client.put(f"/api/hub/projects/shopping/{item_id}/toggle", headers=headers).get_json()
+    assert toggled["purchased"] == 1
+
+    note_id = proj["notes"][0]["id"]
+    updated_note = client.put(
+        f"/api/hub/projects/notes/{note_id}",
+        headers=headers,
+        json={"title": "Dinner Menu", "content": "Ham, potatoes, apple pie"},
+    ).get_json()
+    assert "apple pie" in updated_note["content"]
+
+    # 3. Create standalone to-do outside of any project
+    standalone_res = client.post(
+        "/api/hub/todos",
+        headers=headers,
+        json={"title": "Call dentist", "category": "Household", "assigned_to": alex_id},
+    )
+    assert standalone_res.status_code == 201
+    assert standalone_res.get_json()["project_id"] is None
+
+    standalone_only = client.get("/api/hub/todos?scope=standalone", headers=headers).get_json()["todos"]
+    all_todos = client.get("/api/hub/todos?scope=all", headers=headers).get_json()["todos"]
+    assert len(standalone_only) == 1
+    assert standalone_only[0]["title"] == "Call dentist"
+    assert len(all_todos) == 3
+
+
+def test_recurring_tasks_day_assignments_and_notifications(app_instance, client):
+    from datetime import datetime, timezone
+
+    setup = client.post(
+        "/api/auth/partners",
+        json={
+            "household_name": "Gibson",
+            "partners": [
+                {"name": "Alex", "email": "alex.rec@test.local", "password": "Password123!"},
+                {"name": "Jordan", "email": "jordan.rec@test.local", "password": "Password123!"},
+            ],
+        },
+    ).get_json()
+    alex_id = setup["partners"][0]["id"]
+    jordan_id = setup["partners"][1]["id"]
+    h_alex = {"Authorization": f"Bearer {setup['token']}"}
+    jordan_login = client.post(
+        "/api/auth/login",
+        json={"email": "jordan.rec@test.local", "password": "Password123!"},
+    ).get_json()
+    h_jordan = {"Authorization": f"Bearer {jordan_login['token']}"}
+
+    # Create nightly "Reset the House" with day-by-day partner assignment
+    create_res = client.post(
+        "/api/hub/recurring-tasks",
+        headers=h_alex,
+        json={
+            "title": "Reset the House",
+            "description": "Nightly reset",
+            "checklist_items": ["Start the dishwasher", "Pick up the living room"],
+            "days_of_week": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            "day_assignments": {
+                "mon": str(alex_id),
+                "tue": str(jordan_id),
+                "wed": "both",
+                "thu": str(alex_id),
+                "fri": str(jordan_id),
+                "sat": "both",
+                "sun": "both",
+            },
+            "notify_enabled": True,
+            "notify_time": "20:00",
+            "timezone_offset_minutes": 0,
+        },
+    )
+    assert create_res.status_code == 201
+    task = create_res.get_json()
+    assert task["title"] == "Reset the House"
+    assert len(task["checklist_items"]) == 2
+
+    with app_instance.app_context():
+        from backend.database import get_db
+        from backend.modules.couples_hub import check_and_dispatch_recurring_notifications
+
+        db = get_db()
+        # Monday 2026-11-23 at 20:05 UTC -> Alex only
+        mon_dt = datetime(2026, 11, 23, 20, 5, tzinfo=timezone.utc)
+        sent_mon = check_and_dispatch_recurring_notifications(db, now_utc=mon_dt)
+        assert sent_mon == 1
+
+        # Tuesday 2026-11-24 at 20:05 UTC -> Jordan only
+        tue_dt = datetime(2026, 11, 24, 20, 5, tzinfo=timezone.utc)
+        sent_tue = check_and_dispatch_recurring_notifications(db, now_utc=tue_dt)
+        assert sent_tue == 1
+
+        # Wednesday 2026-11-25 at 20:05 UTC -> Both (2 notifications)
+        wed_dt = datetime(2026, 11, 25, 20, 5, tzinfo=timezone.utc)
+        sent_wed = check_and_dispatch_recurring_notifications(db, now_utc=wed_dt)
+        assert sent_wed == 2
+
+    alex_notifs = [n for n in client.get("/api/notifications", headers=h_alex).get_json()["notifications"] if n["notif_type"] == "recurring_task"]
+    jordan_notifs = [n for n in client.get("/api/notifications", headers=h_jordan).get_json()["notifications"] if n["notif_type"] == "recurring_task"]
+    assert len(alex_notifs) == 2  # Mon + Wed
+    assert len(jordan_notifs) == 2  # Tue + Wed
+
+    # Complete task for Thursday 2026-11-26 before 20:00 -> should not notify
+    comp_res = client.post(
+        f"/api/hub/recurring-tasks/{task['id']}/complete",
+        headers=h_alex,
+        json={"occurrence_date": "2026-11-26", "completed": True, "checked_steps": [0, 1]},
+    )
+    assert comp_res.status_code == 200
+    with app_instance.app_context():
+        from backend.database import get_db
+        from backend.modules.couples_hub import check_and_dispatch_recurring_notifications
+
+        thu_dt = datetime(2026, 11, 26, 20, 5, tzinfo=timezone.utc)
+        assert check_and_dispatch_recurring_notifications(get_db(), now_utc=thu_dt) == 0
+
 
 
 

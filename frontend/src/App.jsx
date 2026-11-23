@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   CalendarClock,
   CheckSquare,
-  FileHeart,
+  Clapperboard,
+  ClipboardList,
   Fingerprint,
   Gamepad2,
   Gem,
@@ -16,6 +17,7 @@ import {
   PiggyBank,
   Radio,
   RefreshCw,
+  Repeat,
   Settings,
   ShoppingCart,
   Wallet,
@@ -33,11 +35,12 @@ import FinanceModule from './modules/FinanceModule';
 import SavingsModule from './modules/SavingsModule';
 import DashboardModule from './modules/DashboardModule';
 import SplendorModule from './modules/SplendorModule';
+import RecapModule from './modules/RecapModule';
+import AdminPlanningModule from './modules/AdminPlanningModule';
+import RecurringTasksModule from './modules/RecurringTasksModule';
 import {
-  AdminDocsSubModule,
   GroceriesSubModule,
   ModuleManagerSubModule,
-  TodosSubModule,
 } from './modules/CouplesHubModule';
 
 const ICON_MAP = {
@@ -46,11 +49,13 @@ const ICON_MAP = {
   'piggy-bank': PiggyBank,
   handshake: Handshake,
   'calendar-clock': CalendarClock,
-  'file-heart': FileHeart,
+  'clipboard-list': ClipboardList,
+  repeat: Repeat,
   'check-square': CheckSquare,
   'shopping-cart': ShoppingCart,
   'gamepad-2': Gamepad2,
   gem: Gem,
+  clapperboard: Clapperboard,
 };
 
 function formatFamilyBrand(rawName) {
@@ -76,9 +81,24 @@ export default function App() {
     planned_requests: 0,
     open_todos: 0,
     unchecked_groceries: 0,
-    active_admin_records: 0,
+    active_admin_projects: 0,
+    due_recurring_tasks: 0,
     future_goals: 0,
     unread_notifications: 0,
+    unwatched_recap_clips: 0,
+  });
+
+  const [pendingShareUrl, setPendingShareUrl] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('share_url') || params.get('share_text') || '';
+    const match = raw.match(/https?:\/\/\S+/i);
+    return match ? match[0] : '';
+  });
+  const [pendingShareTitle, setPendingShareTitle] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    return params.get('share_title') || '';
   });
 
   const [activeTab, setActiveTabState] = useState(() => {
@@ -87,10 +107,18 @@ export default function App() {
         return 'finance';
       }
       const urlParams = new URLSearchParams(window.location.search);
+      const hasShare = urlParams.has('share_url') || urlParams.has('share_text');
       const tabParam = urlParams.get('tab');
-      if (tabParam) {
-        const normalized = tabParam === 'splendor' ? 'games' : tabParam;
+      if (hasShare || tabParam) {
+        const normalized = hasShare
+          ? 'recap'
+          : tabParam === 'splendor'
+            ? 'games'
+            : tabParam;
         urlParams.delete('tab');
+        urlParams.delete('share_url');
+        urlParams.delete('share_text');
+        urlParams.delete('share_title');
         const nextSearch = urlParams.toString();
         const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
         window.history.replaceState({}, '', nextUrl);
@@ -423,17 +451,19 @@ export default function App() {
         return overview.pending_requests;
       case 'future_plans':
         return overview.future_goals;
-      case 'todos':
-        return overview.open_todos;
       case 'groceries':
         return overview.unchecked_groceries;
-      case 'admin_docs':
-        return overview.active_admin_records;
+      case 'admin_planning':
+        return overview.active_admin_projects || 0;
+      case 'recurring_tasks':
+        return overview.due_recurring_tasks || 0;
       case 'games':
       case 'splendor':
         return activeGameModules.some((g) => g.id === 'splendor')
           ? overview.splendor_my_turn || 0
           : 0;
+      case 'recap':
+        return overview.unwatched_recap_clips || 0;
       default:
         return 0;
     }
@@ -446,10 +476,11 @@ export default function App() {
     savings: 'Savings',
     future_plans: 'Big Buys',
     groceries: 'Groceries',
-    admin_docs: 'Medical',
-    todos: 'To Do',
+    admin_planning: 'Planning',
+    recurring_tasks: 'Routines',
     games: 'Games',
     splendor: 'Games',
+    recap: 'Recap',
   };
 
   const dashboardModule = enabledModules.find((m) => m.id === 'dashboard');
@@ -707,17 +738,16 @@ export default function App() {
                   startingMonth={startingBudgetMonth}
                 />
               )}
-              {activeTab === 'admin_docs' && (
-                <AdminDocsSubModule
+              {activeTab === 'admin_planning' && (
+                <AdminPlanningModule
                   activePartner={activePartner}
                   partners={partners}
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
                 />
               )}
-              {activeTab === 'todos' && (
-                <TodosSubModule
-                  activePartner={activePartner}
+              {activeTab === 'recurring_tasks' && (
+                <RecurringTasksModule
                   partners={partners}
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
@@ -728,6 +758,18 @@ export default function App() {
                   activePartner={activePartner}
                   onDataChanged={loadCoreState}
                   syncVersion={syncVersion}
+                />
+              )}
+              {activeTab === 'recap' && (
+                <RecapModule
+                  onDataChanged={loadCoreState}
+                  syncVersion={syncVersion}
+                  pendingShareUrl={pendingShareUrl}
+                  pendingShareTitle={pendingShareTitle}
+                  onClearPendingShare={() => {
+                    setPendingShareUrl('');
+                    setPendingShareTitle('');
+                  }}
                 />
               )}
               {(activeTab === 'games' || activeTab === 'splendor') && (

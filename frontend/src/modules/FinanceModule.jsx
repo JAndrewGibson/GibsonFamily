@@ -4,6 +4,8 @@ import {
   ArrowLeftRight,
   ArrowUpDown,
   BarChart3,
+  Bell,
+  BellOff,
   Building2,
   Calendar,
   Check,
@@ -671,6 +673,23 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
       onDataChanged?.();
     } catch (err) {
       console.error('Failed to update account color:', err);
+    } finally {
+      setUpdatingAccountId(null);
+    }
+  };
+
+  const handleToggleAccountNotify = async (acc) => {
+    setUpdatingAccountId(acc.id);
+    try {
+      const nextVal = acc.notify_on_tx === 0 ? 1 : 0;
+      await apiFetch(`/api/finance/accounts/${acc.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notify_on_tx: nextVal }),
+      });
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      console.error('Failed to update account notification setting:', err);
     } finally {
       setUpdatingAccountId(null);
     }
@@ -1851,7 +1870,7 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
 
         <div className="account-card-owner-assigner">
           <label htmlFor={`owner-select-${acc.id}`} className="owner-assign-label">
-            <User size={12} /> Owner:
+            <User size={12} /> Attached To:
           </label>
           <div className="owner-assign-select-wrapper">
             <select
@@ -1861,13 +1880,23 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
               disabled={isUpdating}
               onChange={(e) => handleUpdateAccountOwner(acc.id, e.target.value)}
             >
-              <option value="shared">👥 Shared / Joint</option>
+              <option value="shared">👥 Both Partners (Shared)</option>
               {partnersList.map((p) => (
                 <option key={p.id} value={p.id}>
                   👤 {p.name}
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              className={`btn btn-xs ${acc.notify_on_tx !== 0 ? 'btn-primary' : 'btn-secondary'}`}
+              disabled={isUpdating}
+              onClick={() => handleToggleAccountNotify(acc)}
+              title="Toggle new transaction categorization alerts for attached user(s)"
+            >
+              {acc.notify_on_tx !== 0 ? <Bell size={12} /> : <BellOff size={12} />}
+              {acc.notify_on_tx !== 0 ? 'Alerts On' : 'Alerts Off'}
+            </button>
             {isUpdating && <span className="assign-spinner">Saving...</span>}
           </div>
         </div>
@@ -5084,6 +5113,39 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 onChange={(e) => handleUpdateAccountColor(acc.id, e.target.value)}
                               />
                             </label>
+                          </div>
+                        </div>
+
+                        {/* Attached Partner(s) & Categorization Alerts */}
+                        <div className="account-card-owner-assigner" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '0.45rem' }}>
+                          <label htmlFor={`modal-owner-select-${acc.id}`} className="owner-assign-label">
+                            <User size={12} /> Attached User(s):
+                          </label>
+                          <div className="owner-assign-select-wrapper">
+                            <select
+                              id={`modal-owner-select-${acc.id}`}
+                              className="owner-assign-select"
+                              value={acc.owner_partner_id || 'shared'}
+                              disabled={updatingAccountId === acc.id}
+                              onChange={(e) => handleUpdateAccountOwner(acc.id, e.target.value)}
+                            >
+                              <option value="shared">👥 Both Partners (Shared)</option>
+                              {partnersList.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  👤 {p.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className={`btn btn-xs ${acc.notify_on_tx !== 0 ? 'btn-primary' : 'btn-secondary'}`}
+                              disabled={updatingAccountId === acc.id}
+                              onClick={() => handleToggleAccountNotify(acc)}
+                              title="Notify attached user(s) to categorize new transactions on this account"
+                            >
+                              {acc.notify_on_tx !== 0 ? <Bell size={12} /> : <BellOff size={12} />}
+                              {acc.notify_on_tx !== 0 ? 'Categorize Alerts On' : 'Alerts Off'}
+                            </button>
                           </div>
                         </div>
 

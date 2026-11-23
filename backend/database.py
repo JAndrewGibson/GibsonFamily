@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     institution_name TEXT NOT NULL DEFAULT 'Bank Account',
     color TEXT NOT NULL DEFAULT '#06b6d4',
     is_savings_account INTEGER DEFAULT NULL,
+    notify_on_tx INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (owner_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
 
@@ -311,8 +312,48 @@ CREATE TABLE IF NOT EXISTS module_registry (
     parent_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS admin_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    target_date TEXT,
+    color TEXT NOT NULL DEFAULT '#6366f1',
+    created_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (created_by) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_project_shopping_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    quantity TEXT NOT NULL DEFAULT '1',
+    estimated_price REAL NOT NULL DEFAULT 0.0,
+    notes TEXT NOT NULL DEFAULT '',
+    purchased INTEGER NOT NULL DEFAULT 0,
+    added_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES admin_projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (added_by) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_project_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT 'Note',
+    content TEXT NOT NULL DEFAULT '',
+    updated_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES admin_projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (updated_by) REFERENCES partners (id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS todos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
     title TEXT NOT NULL,
     category TEXT NOT NULL DEFAULT 'General',
     assigned_to INTEGER,
@@ -320,7 +361,40 @@ CREATE TABLE IF NOT EXISTS todos (
     completed INTEGER NOT NULL DEFAULT 0,
     priority TEXT NOT NULL DEFAULT 'medium',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES admin_projects (id) ON DELETE CASCADE,
     FOREIGN KEY (assigned_to) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS recurring_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    checklist_items TEXT NOT NULL DEFAULT '[]',
+    frequency TEXT NOT NULL DEFAULT 'daily',
+    days_of_week TEXT NOT NULL DEFAULT '["mon","tue","wed","thu","fri","sat","sun"]',
+    day_assignments TEXT NOT NULL DEFAULT '{}',
+    notify_enabled INTEGER NOT NULL DEFAULT 1,
+    notify_time TEXT NOT NULL DEFAULT '20:00',
+    timezone_offset_minutes INTEGER NOT NULL DEFAULT -480,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    last_notified_date TEXT NOT NULL DEFAULT '',
+    created_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (created_by) REFERENCES partners (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS recurring_task_completions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    occurrence_date TEXT NOT NULL,
+    completed_by INTEGER,
+    checked_steps TEXT NOT NULL DEFAULT '[]',
+    completed INTEGER NOT NULL DEFAULT 1,
+    completed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, occurrence_date),
+    FOREIGN KEY (task_id) REFERENCES recurring_tasks (id) ON DELETE CASCADE,
+    FOREIGN KEY (completed_by) REFERENCES partners (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS grocery_items (
@@ -379,6 +453,29 @@ CREATE TABLE IF NOT EXISTS splendor_games (
     FOREIGN KEY (forfeited_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL,
     FOREIGN KEY (last_bump_by_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS recap_clips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    normalized_url TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    external_id TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    thumbnail_url TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    submitted_by INTEGER NOT NULL,
+    week_key TEXT NOT NULL,
+    day_key TEXT NOT NULL,
+    watched INTEGER NOT NULL DEFAULT 0,
+    watched_at TEXT,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (submitted_by) REFERENCES partners (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_recap_clips_week ON recap_clips (week_key, watched);
+CREATE INDEX IF NOT EXISTS idx_recap_clips_day ON recap_clips (day_key, watched);
 """
 
 
@@ -444,21 +541,21 @@ DEFAULT_MODULES = [
         None,
     ),
     (
-        "admin_docs",
-        "Medical",
-        "Track medical paperwork, insurance renewals, tax filings, and household admin tasks.",
+        "admin_planning",
+        "Admin Planning",
+        "Organize household projects with shopping lists, to-do lists, and freeform notes, plus standalone to-dos.",
         "Admin",
-        "file-heart",
+        "clipboard-list",
         1,
         6,
         None,
     ),
     (
-        "todos",
-        "To Do",
-        "Assign and coordinate household chores, errands, and shared couple tasks.",
+        "recurring_tasks",
+        "Recurring Tasks",
+        "Daily & weekly recurring household routines with day-by-day partner assignment and push notifications.",
         "Admin",
-        "check-square",
+        "repeat",
         1,
         7,
         None,
@@ -482,6 +579,16 @@ DEFAULT_MODULES = [
         1,
         9,
         "games",
+    ),
+    (
+        "recap",
+        "Weekly Recap",
+        "Queue Instagram Reels and YouTube Shorts from both partners for a daily or weekly watch-together recap.",
+        "Admin",
+        "clapperboard",
+        1,
+        10,
+        None,
     ),
 ]
 
@@ -604,6 +711,8 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE accounts ADD COLUMN owner_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
     if "is_savings_account" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN is_savings_account INTEGER DEFAULT NULL")
+    if "notify_on_tx" not in acc_cols:
+        db.execute("ALTER TABLE accounts ADD COLUMN notify_on_tx INTEGER NOT NULL DEFAULT 1")
     if "color" not in acc_cols:
         db.execute("ALTER TABLE accounts ADD COLUMN color TEXT NOT NULL DEFAULT '#06b6d4'")
         palette = ["#06b6d4", "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#a855f7", "#3b82f6", "#ef4444"]
@@ -733,6 +842,22 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
     mr_cols = [r["name"] for r in db.execute("PRAGMA table_info(module_registry)").fetchall()]
     if "parent_id" not in mr_cols:
         db.execute("ALTER TABLE module_registry ADD COLUMN parent_id TEXT")
+
+    todo_cols = [r["name"] for r in db.execute("PRAGMA table_info(todos)").fetchall()]
+    if "project_id" not in todo_cols:
+        db.execute("ALTER TABLE todos ADD COLUMN project_id INTEGER REFERENCES admin_projects(id) ON DELETE CASCADE")
+
+    # One-time migration: replace legacy Medical (admin_docs) and standalone To Do (todos) with Admin Planning
+    admin_mig = db.execute(
+        "SELECT value FROM app_settings WHERE key = 'admin_planning_replace_v1'"
+    ).fetchone()
+    if not admin_mig:
+        db.execute("DELETE FROM module_registry WHERE id IN ('admin_docs', 'todos')")
+        db.execute("DELETE FROM admin_records")
+        db.execute("DELETE FROM todos WHERE project_id IS NULL")
+        db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('admin_planning_replace_v1', '1')"
+        )
 
     # One-time migration: deduplicate duplicate Plaid accounts
     cleanup_row = db.execute(

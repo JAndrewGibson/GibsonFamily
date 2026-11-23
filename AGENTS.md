@@ -51,10 +51,12 @@ GibsonFamily/
 │   │   ├── auth_webauthn.py          # Partner auth, rate-limited login, WebAuthn Passkeys & notifications API
 │   │   ├── finance.py                # Plaid Production/Sandbox API, per-month budgets, history & transactions
 │   │   ├── requests_and_plans.py     # Partner purchase requests, approvals, timelines & future purchases
-│   │   ├── couples_hub.py            # Module registry, medical/admin records, shared todos & groceries
-│   │   └── splendor.py               # 2-player digital Splendor board game (90 cards, 10 nobles, 24h bump & stats)
+│   │   ├── couples_hub.py            # Module registry, Admin Planning projects/todos, Recurring Tasks & groceries
+│   │   ├── splendor.py               # 2-player digital Splendor board game (90 cards, 10 nobles, 24h bump & stats)
+│   │   └── recap.py                  # Weekly/Daily Reels & Shorts recap queue, URL parser & notifications
 │   └── tests/
-│       └── test_api.py               # Automated pytest suite
+│       ├── test_api.py               # Automated pytest suite
+│       └── test_recap.py             # Weekly Recap API & URL parsing tests
 └── frontend/
     ├── index.html                    # Viewport meta (viewport-fit=cover), manifest link & Plaid Link SDK
     ├── package.json
@@ -78,8 +80,11 @@ GibsonFamily/
             ├── FuturePurchasesModule.jsx # Shared future purchase savings roadmap
             ├── FinanceModule.jsx     # Plaid link, income & fluctuation tracker, monthly budgets & ledger
             ├── SavingsModule.jsx     # Long-term Savings & Brokerage analytics (MoM, YoY, per-account & combined graphs, savings spend & transfers)
-            ├── CouplesHubModule.jsx  # Medical/admin docs, shared to-dos, groceries & module manager
-            └── SplendorModule.jsx    # Digital Splendor board game (3 tiers, 90 cards, 10 nobles, 24h turn bump & analytics)
+            ├── CouplesHubModule.jsx  # Groceries & Settings/Module manager
+            ├── AdminPlanningModule.jsx # Admin Planning projects (shopping lists, to-dos, freeform notes) & standalone to-dos
+            ├── RecurringTasksModule.jsx # Daily/weekly recurring routines with day-by-day partner assignment & push alerts
+            ├── SplendorModule.jsx    # Digital Splendor board game (3 tiers, 90 cards, 10 nobles, 24h turn bump & analytics)
+            └── RecapModule.jsx       # Weekly/Daily Reels & Shorts queue with back-to-back Recap Player
 ```
 
 ---
