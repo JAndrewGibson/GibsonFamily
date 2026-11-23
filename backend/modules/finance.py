@@ -1400,35 +1400,15 @@ def check_and_create_month_close_notifications(db, current_date: date | None = N
     return created_months
 
 
-def _build_household_badge_showroom(
+def _evaluate_badges_for_months(
     db,
+    target_months: set[str],
     ym: str,
-    month_label: str,
     this_leftover: dict,
-    this_income: float,
-    this_spent: float,
-    total_budget: float,
-    net_cashflow: float,
-    total_leftover: float,
-    savings_rate_pct: float,
-    mom_direction: str,
-    mom_spend_pct_val: float,
-    mom_spend_trend: str | None,
     longest_no_spend_streak: int,
-    partner_rollovers: list[dict],
-) -> dict:
-    """
-    Builds a 47-badge multi-tier, endurance-streak, and repeatable record-breaker Badge Showroom.
-    Badges ONLY unlock from officially closed months (`closed_months`).
-    """
-    closed_yms = {
-        (r["budget_month"] or "").strip()[:7]
-        for r in db.execute("SELECT budget_month FROM closed_months WHERE budget_month <= ?", (ym,)).fetchall()
-        if r["budget_month"]
-    }
-    is_target_month_closed = ym in closed_yms
-    # Only officially closed months count toward unlocking badges, streaks, and records
-    chron_months = sorted(closed_yms)
+    is_preview_mode: bool = False,
+) -> list[dict]:
+    chron_months = sorted(target_months)
 
     # Compute per-month metrics for streaks and repeatable record-breakers
     month_stats = []
@@ -1522,34 +1502,32 @@ def _build_household_badge_showroom(
                 lowest_spend_amt = ms["spent"]
                 frugal_records += 1
 
-    # Cumulative all-time counts across closed months up to `ym` for multi-tier badges
-    if closed_yms:
-        ph = ",".join("?" for _ in closed_yms)
-        closed_params = tuple(sorted(closed_yms))
+    # Cumulative all-time counts across target_months for multi-tier badges
+    if target_months:
+        ph = ",".join("?" for _ in target_months)
+        m_params = tuple(sorted(target_months))
         total_splits_all_time = db.execute(
             f"SELECT COUNT(*) AS cnt FROM transactions WHERE is_split = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) IN ({ph})",
-            closed_params,
+            m_params,
         ).fetchone()["cnt"]
         try:
             total_routines_all_time = db.execute(
                 f"SELECT COUNT(*) AS cnt FROM recurring_task_completions WHERE completed = 1 AND substr(occurrence_date, 1, 7) IN ({ph})",
-                closed_params,
+                m_params,
             ).fetchone()["cnt"]
         except Exception:
             total_routines_all_time = 0
         total_gifts_all_time = db.execute(
             f"SELECT COUNT(*) AS cnt FROM transactions WHERE is_gift = 1 AND COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) IN ({ph})",
-            closed_params,
+            m_params,
         ).fetchone()["cnt"]
     else:
         total_splits_all_time = 0
         total_routines_all_time = 0
         total_gifts_all_time = 0
 
-    closed_months_count = len(closed_yms)
-
-    # Best single-month metrics across closed months (for tiered single-month badges)
-    best_closed_savings_rate = max((ms["savings_rate_pct"] for ms in month_stats), default=0.0) if is_target_month_closed else max((ms["savings_rate_pct"] for ms in month_stats), default=0.0)
+    closed_months_count = len(target_months)
+    best_closed_savings_rate = max((ms["savings_rate_pct"] for ms in month_stats), default=0.0)
     best_closed_leftover = max((ms["leftover"] for ms in month_stats), default=0.0)
     best_closed_inc_beat_pct = 0.0
     for ms in month_stats:
@@ -1557,17 +1535,16 @@ def _build_household_badge_showroom(
         if m_lo.get("exceeded_income_projection"):
             best_closed_inc_beat_pct = max(best_closed_inc_beat_pct, float(m_lo.get("income_vs_projected_pct") or 0.0))
 
-    effective_no_spend_streak = longest_no_spend_streak if is_target_month_closed else 0
+    effective_no_spend_streak = longest_no_spend_streak if (ym in target_months) else 0
 
     def _tier_badge(b_id, family, tier_num, tier_name, emoji, title, criteria, current_val, target_val, unit_fmt="int", unlocked_override=None):
-        unlocked = bool(unlocked_override) if unlocked_override is not None else (bool(closed_yms) and current_val >= target_val)
+        unlocked = bool(unlocked_override) if unlocked_override is not None else (bool(target_months) and current_val >= target_val)
         if unit_fmt == "money":
             prog_str = f"${current_val:,.2f} / ${target_val:,.2f}"
         elif unit_fmt == "pct":
             prog_str = f"{current_val:.1f}% / {target_val:.0f}%"
         else:
             prog_str = f"{int(current_val)} / {int(target_val)}"
-        pending_close_note = " (Close month to unlock!)" if (not unlocked and not is_target_month_closed) else ""
         return {
             "id": b_id,
             "family": family,
@@ -1578,22 +1555,23 @@ def _build_household_badge_showroom(
             "title": title,
             "criteria": criteria,
             "unlocked": bool(unlocked),
+            "pending_unlock": False,
             "progress_current": current_val,
             "progress_target": target_val,
             "progress_text": prog_str,
             "times_earned": 1 if unlocked else 0,
             "is_repeatable": False,
-            "subtitle": f"Unlocked! ({prog_str})" if unlocked else f"Progress: {prog_str}{pending_close_note} — {criteria}",
+            "subtitle": f"Unlocked! ({prog_str})" if unlocked else f"Progress: {prog_str} — {criteria}",
         }
 
-    badges = [
+    return [
         # 1. Savings Rate Tiers (Top Tier = 50%!)
         _tier_badge("saver_rate_15", "Savings Rate", 1, "Bronze", "🌱", "15% Steady Saver", "Save 15% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 15.0, "pct"),
         _tier_badge("saver_rate_25", "Savings Rate", 2, "Silver", "🌿", "25% Power Saver", "Save 25% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 25.0, "pct"),
         _tier_badge("saver_rate_35", "Savings Rate", 3, "Gold", "🌲", "35% Super Saver", "Save 35% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 35.0, "pct"),
         _tier_badge("saver_rate_50", "Savings Rate", 4, "Diamond", "💎", "50% Wealth Legend", "Save 50% or more of your monthly income in a closed month.", max(0.0, best_closed_savings_rate), 50.0, "pct"),
 
-        # 2. Repeatable Record-Breaker Badges (Awarded each time you break your record, shows times_earned ×N)
+        # 2. Repeatable Record-Breaker Badges
         {
             "id": "record_highest_savings",
             "family": "Record Breakers",
@@ -1602,8 +1580,9 @@ def _build_household_badge_showroom(
             "emoji": "🏆",
             "icon": "award",
             "title": "New Savings Record!",
-            "criteria": "Awarded every time a month breaks your all-time highest dollar amount saved.",
+            "criteria": "Awarded every time a closed month breaks your all-time highest dollar amount saved.",
             "unlocked": sav_amt_records > 0,
+            "pending_unlock": False,
             "progress_current": best_sav_amt,
             "progress_target": best_sav_amt,
             "progress_text": f"Record: ${best_sav_amt:,.2f}",
@@ -1619,8 +1598,9 @@ def _build_household_badge_showroom(
             "emoji": "⚡",
             "icon": "award",
             "title": "Savings Rate Record!",
-            "criteria": "Awarded every time a month breaks your all-time highest savings rate percentage.",
+            "criteria": "Awarded every time a closed month breaks your all-time highest savings rate percentage.",
             "unlocked": sav_rate_records > 0,
+            "pending_unlock": False,
             "progress_current": best_sav_rate,
             "progress_target": best_sav_rate,
             "progress_text": f"Record: {best_sav_rate:.1f}%",
@@ -1636,8 +1616,9 @@ def _build_household_badge_showroom(
             "emoji": "👑",
             "icon": "award",
             "title": "Income High-Water Mark!",
-            "criteria": "Awarded every time you break your all-time highest monthly earned income.",
+            "criteria": "Awarded every time a closed month breaks your all-time highest monthly earned income.",
             "unlocked": inc_records > 0,
+            "pending_unlock": False,
             "progress_current": best_inc_amt,
             "progress_target": best_inc_amt,
             "progress_text": f"Record: ${best_inc_amt:,.2f}",
@@ -1653,34 +1634,35 @@ def _build_household_badge_showroom(
             "emoji": "🪶",
             "icon": "award",
             "title": "Leanest Month Record!",
-            "criteria": "Awarded each time an active budgeted month sets a new all-time lowest total spend.",
+            "criteria": "Awarded each time a closed budgeted month sets a new all-time lowest total spend.",
             "unlocked": frugal_records > 0,
+            "pending_unlock": False,
             "progress_current": lowest_spend_amt or 0.0,
             "progress_target": lowest_spend_amt or 0.0,
             "progress_text": f"Record Low: ${(lowest_spend_amt or 0.0):,.2f}",
             "times_earned": frugal_records,
             "is_repeatable": True,
-            "subtitle": f"Earned ×{frugal_records} · Record Low Spend: ${(lowest_spend_amt or 0.0):,.2f}" if frugal_records > 0 else "Complete a budgeted month to set a baseline",
+            "subtitle": f"Earned ×{frugal_records} · Record Low Spend: ${(lowest_spend_amt or 0.0):,.2f}" if frugal_records > 0 else "Close a budgeted month to set a baseline",
         },
 
         # 3. On-Budget Multi-Month Endurance Streaks
-        _tier_badge("on_budget_1", "On-Budget Endurance", 1, "Bronze", "🛡️", "On Budget I (1 Mo)", "Finish 1 month at or under your total monthly budget limit.", on_budget_streak, 1),
-        _tier_badge("on_budget_3", "On-Budget Endurance", 2, "Silver", "🛡️", "On Budget II (3 Mo Streak)", "Stay under your total monthly budget for 3 consecutive months.", on_budget_streak, 3),
-        _tier_badge("on_budget_6", "On-Budget Endurance", 3, "Gold", "🏰", "On Budget III (6 Mo Streak)", "Stay under your total monthly budget for 6 consecutive months.", on_budget_streak, 6),
-        _tier_badge("on_budget_12", "On-Budget Endurance", 4, "Diamond", "👑", "Unbreakable Budget IV (12 Mo)", "Stay under your total monthly budget for 12 consecutive months.", on_budget_streak, 12),
+        _tier_badge("on_budget_1", "On-Budget Endurance", 1, "Bronze", "🛡️", "On Budget I (1 Mo)", "Finish 1 closed month at or under your total monthly budget limit.", on_budget_streak, 1),
+        _tier_badge("on_budget_3", "On-Budget Endurance", 2, "Silver", "🛡️", "On Budget II (3 Mo Streak)", "Stay under your total monthly budget for 3 consecutive closed months.", on_budget_streak, 3),
+        _tier_badge("on_budget_6", "On-Budget Endurance", 3, "Gold", "🏰", "On Budget III (6 Mo Streak)", "Stay under your total monthly budget for 6 consecutive closed months.", on_budget_streak, 6),
+        _tier_badge("on_budget_12", "On-Budget Endurance", 4, "Diamond", "👑", "Unbreakable Budget IV (12 Mo)", "Stay under your total monthly budget for 12 consecutive closed months.", on_budget_streak, 12),
 
         # 4. Rollover Category Multi-Month Endurance Streaks
-        _tier_badge("rollover_streak_1", "Rollover Endurance", 1, "Bronze", "✨", "Rollover Starter (1 Mo)", "Carry forward positive unused rollover in a category for 1 month.", max_rollover_streak, 1),
-        _tier_badge("rollover_streak_2", "Rollover Endurance", 2, "Silver", "🌟", "Rollover Keeper (2 Mo Streak)", "Carry positive rollover in the same category for 2 consecutive months.", max_rollover_streak, 2),
-        _tier_badge("rollover_streak_3", "Rollover Endurance", 3, "Gold", "💫", "Rollover Builder (3 Mo Streak)", "Carry positive rollover in the same category for 3 consecutive months.", max_rollover_streak, 3),
-        _tier_badge("rollover_streak_6", "Rollover Endurance", 4, "Diamond", "🏦", "Rollover Fortress (6 Mo Streak)", "Carry positive rollover in the same category for 6 consecutive months.", max_rollover_streak, 6),
-        _tier_badge("rollover_streak_12", "Rollover Endurance", 5, "Master", "🏛️", "Rollover Dynasty (12 Mo Streak)", "Carry positive rollover in the same category for 12 consecutive months.", max_rollover_streak, 12),
+        _tier_badge("rollover_streak_1", "Rollover Endurance", 1, "Bronze", "✨", "Rollover Starter (1 Mo)", "Carry forward positive unused rollover in a category for 1 closed month.", max_rollover_streak, 1),
+        _tier_badge("rollover_streak_2", "Rollover Endurance", 2, "Silver", "🌟", "Rollover Keeper (2 Mo Streak)", "Carry positive rollover in the same category for 2 consecutive closed months.", max_rollover_streak, 2),
+        _tier_badge("rollover_streak_3", "Rollover Endurance", 3, "Gold", "💫", "Rollover Builder (3 Mo Streak)", "Carry positive rollover in the same category for 3 consecutive closed months.", max_rollover_streak, 3),
+        _tier_badge("rollover_streak_6", "Rollover Endurance", 4, "Diamond", "🏦", "Rollover Fortress (6 Mo Streak)", "Carry positive rollover in the same category for 6 consecutive closed months.", max_rollover_streak, 6),
+        _tier_badge("rollover_streak_12", "Rollover Endurance", 5, "Master", "🏛️", "Rollover Dynasty (12 Mo Streak)", "Carry positive rollover in the same category for 12 consecutive closed months.", max_rollover_streak, 12),
 
         # 5. Positive Net Cash Flow Multi-Month Endurance Streaks
-        _tier_badge("green_cashflow_1", "Cash Flow Endurance", 1, "Bronze", "💵", "In the Green I (1 Mo)", "End 1 month with positive net cash flow (earned more than spent).", green_cashflow_streak, 1),
-        _tier_badge("green_cashflow_3", "Cash Flow Endurance", 2, "Silver", "💰", "Green Streak II (3 Mo)", "Maintain positive net cash flow for 3 consecutive months.", green_cashflow_streak, 3),
-        _tier_badge("green_cashflow_6", "Cash Flow Endurance", 3, "Gold", "🏦", "Green Streak III (6 Mo)", "Maintain positive net cash flow for 6 consecutive months.", green_cashflow_streak, 6),
-        _tier_badge("green_cashflow_12", "Cash Flow Endurance", 4, "Diamond", "🚀", "Cash Flow Titan IV (12 Mo)", "Maintain positive net cash flow for 12 consecutive months.", green_cashflow_streak, 12),
+        _tier_badge("green_cashflow_1", "Cash Flow Endurance", 1, "Bronze", "💵", "In the Green I (1 Mo)", "End 1 closed month with positive net cash flow (earned more than spent).", green_cashflow_streak, 1),
+        _tier_badge("green_cashflow_3", "Cash Flow Endurance", 2, "Silver", "💰", "Green Streak II (3 Mo)", "Maintain positive net cash flow for 3 consecutive closed months.", green_cashflow_streak, 3),
+        _tier_badge("green_cashflow_6", "Cash Flow Endurance", 3, "Gold", "🏦", "Green Streak III (6 Mo)", "Maintain positive net cash flow for 6 consecutive closed months.", green_cashflow_streak, 6),
+        _tier_badge("green_cashflow_12", "Cash Flow Endurance", 4, "Diamond", "🚀", "Cash Flow Titan IV (12 Mo)", "Maintain positive net cash flow for 12 consecutive closed months.", green_cashflow_streak, 12),
 
         # 6. No-Spend Freeze Day Streaks
         _tier_badge("no_spend_3", "No-Spend Freeze", 1, "Bronze", "❄️", "Freeze Spark (3 Days)", "Record 3 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 3),
@@ -1688,45 +1670,98 @@ def _build_household_badge_showroom(
         _tier_badge("no_spend_10", "No-Spend Freeze", 3, "Gold", "🌨️", "Deep Freeze (10 Days)", "Record 10 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 10),
         _tier_badge("no_spend_15", "No-Spend Freeze", 4, "Diamond", "🏔️", "Absolute Zero (15 Days)", "Record 15 consecutive $0 no-spend days in a closed month.", effective_no_spend_streak, 15),
 
-        # 7. Surplus Stasher Tiers (Non-Rollover Unspent Budget Leftover)
+        # 7. Surplus Stasher Tiers
         _tier_badge("surplus_100", "Surplus Stasher", 1, "Bronze", "🐷", "Surplus Stasher I ($100+)", "Finish a closed month with at least $100 in unspent non-rollover budget surplus.", best_closed_leftover, 100.0, "money"),
         _tier_badge("surplus_500", "Surplus Stasher", 2, "Silver", "🐖", "Surplus Stasher II ($500+)", "Finish a closed month with at least $500 in unspent non-rollover budget surplus.", best_closed_leftover, 500.0, "money"),
         _tier_badge("surplus_1000", "Surplus Stasher", 3, "Gold", "🔐", "Surplus Stasher III ($1,000+)", "Finish a closed month with at least $1,000 in unspent non-rollover budget surplus.", best_closed_leftover, 1000.0, "money"),
         _tier_badge("surplus_2500", "Surplus Stasher", 4, "Diamond", "🏛️", "Vault Filler IV ($2,500+)", "Finish a closed month with at least $2,500 in unspent non-rollover budget surplus.", best_closed_leftover, 2500.0, "money"),
 
-        # 8. Income Outperformer Tiers (Beating Projected Monthly Income)
+        # 8. Income Outperformer Tiers
         _tier_badge("income_beat_5", "Income Outperformer", 1, "Bronze", "📈", "Income Beat I (+5%)", "Earn at least 5% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 5.0, "pct"),
         _tier_badge("income_beat_15", "Income Outperformer", 2, "Silver", "🚀", "Income Surge II (+15%)", "Earn at least 15% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 15.0, "pct"),
         _tier_badge("income_beat_30", "Income Outperformer", 3, "Gold", "☄️", "Income Windfall III (+30%)", "Earn at least 30% more actual income than your monthly projected income in a closed month.", best_closed_inc_beat_pct, 30.0, "pct"),
 
         # 9. Spending Slasher Multi-Month Streaks
-        _tier_badge("slash_1", "Spending Slasher", 1, "Bronze", "✂️", "Spending Slasher I (1 Mo)", "Reduce total monthly spending compared to the prior month.", spend_down_streak, 1),
-        _tier_badge("slash_2", "Spending Slasher", 2, "Silver", "🗡️", "Double Slash II (2 Mo Streak)", "Reduce total monthly spending for 2 consecutive months.", spend_down_streak, 2),
-        _tier_badge("slash_3", "Spending Slasher", 3, "Gold", "⚔️", "Triple Slash III (3 Mo Streak)", "Reduce total monthly spending for 3 consecutive months.", spend_down_streak, 3),
+        _tier_badge("slash_1", "Spending Slasher", 1, "Bronze", "✂️", "Spending Slasher I (1 Mo)", "Reduce total monthly spending compared to the prior closed month.", spend_down_streak, 1),
+        _tier_badge("slash_2", "Spending Slasher", 2, "Silver", "🗡️", "Double Slash II (2 Mo Streak)", "Reduce total monthly spending for 2 consecutive closed months.", spend_down_streak, 2),
+        _tier_badge("slash_3", "Spending Slasher", 3, "Gold", "⚔️", "Triple Slash III (3 Mo Streak)", "Reduce total monthly spending for 3 consecutive closed months.", spend_down_streak, 3),
 
-        # 10. Receipt Strategist Tiers (Explicit Split Receipt Thresholds: 3, 10, 25, 50)
+        # 10. Receipt Strategist Tiers
         _tier_badge("split_3", "Receipt Strategist", 1, "Bronze", "🧾", "Receipt Splitter I (3 Splits)", "Split 3 multi-category transactions across 2+ budget categories.", total_splits_all_time, 3),
         _tier_badge("split_10", "Receipt Strategist", 2, "Silver", "📋", "Receipt Strategist II (10 Splits)", "Split 10 multi-category transactions across 2+ budget categories.", total_splits_all_time, 10),
         _tier_badge("split_25", "Receipt Strategist", 3, "Gold", "🧮", "Receipt Architect III (25 Splits)", "Split 25 multi-category transactions across 2+ budget categories.", total_splits_all_time, 25),
         _tier_badge("split_50", "Receipt Strategist", 4, "Diamond", "🧠", "Split Grandmaster IV (50 Splits)", "Split 50 multi-category transactions across 2+ budget categories.", total_splits_all_time, 50),
 
-        # 11. Routine Champion Tiers (Explicit Recurring Tasks Completed Thresholds: 10, 30, 75, 150)
+        # 11. Routine Champion Tiers
         _tier_badge("routine_10", "Routine Champion", 1, "Bronze", "✅", "Routine Starter I (10 Tasks)", "Complete 10 shared recurring household tasks.", total_routines_all_time, 10),
         _tier_badge("routine_30", "Routine Champion", 2, "Silver", "🔁", "Routine Specialist II (30 Tasks)", "Complete 30 shared recurring household tasks.", total_routines_all_time, 30),
         _tier_badge("routine_75", "Routine Champion", 3, "Gold", "🏅", "Routine Master III (75 Tasks)", "Complete 75 shared recurring household tasks.", total_routines_all_time, 75),
         _tier_badge("routine_150", "Routine Champion", 4, "Diamond", "👑", "Routine Legend IV (150 Tasks)", "Complete 150 shared recurring household tasks.", total_routines_all_time, 150),
 
-        # 12. Surprise Giver Tiers (Partner Gift Surprises: 1, 5, 15)
+        # 12. Surprise Giver Tiers
         _tier_badge("gift_1", "Surprise Giver", 1, "Bronze", "🎁", "Secret Giver I (1 Gift)", "Mark 1 partner surprise gift using the Gift Surprises add-on.", total_gifts_all_time, 1),
         _tier_badge("gift_5", "Surprise Giver", 2, "Silver", "💝", "Thoughtful Partner II (5 Gifts)", "Mark 5 partner surprise gifts using the Gift Surprises add-on.", total_gifts_all_time, 5),
         _tier_badge("gift_15", "Surprise Giver", 3, "Gold", "🎉", "Master of Surprises III (15 Gifts)", "Mark 15 partner surprise gifts using the Gift Surprises add-on.", total_gifts_all_time, 15),
 
-        # 13. Month Closer Endurance Tiers (Officially Closed Budget Months: 1, 3, 6, 12)
+        # 13. Month Closer Endurance Tiers
         _tier_badge("closed_1", "Month Closer", 1, "Bronze", "🏁", "First Wrap I (1 Month Closed)", "Officially review and close 1 monthly budget period.", closed_months_count, 1),
         _tier_badge("closed_3", "Month Closer", 2, "Silver", "📅", "Quarter Closer II (3 Months Closed)", "Officially review and close 3 monthly budget periods.", closed_months_count, 3),
         _tier_badge("closed_6", "Month Closer", 3, "Gold", "📚", "Half-Year Historian III (6 Months)", "Officially review and close 6 monthly budget periods.", closed_months_count, 6),
         _tier_badge("closed_12", "Month Closer", 4, "Diamond", "🏛️", "Annual Archivist IV (12 Months)", "Officially review and close 12 monthly budget periods.", closed_months_count, 12),
     ]
+
+
+def _build_household_badge_showroom(
+    db,
+    ym: str,
+    month_label: str,
+    this_leftover: dict,
+    this_income: float,
+    this_spent: float,
+    total_budget: float,
+    net_cashflow: float,
+    total_leftover: float,
+    savings_rate_pct: float,
+    mom_direction: str,
+    mom_spend_pct_val: float,
+    mom_spend_trend: str | None,
+    longest_no_spend_streak: int,
+    partner_rollovers: list[dict],
+) -> dict:
+    """
+    Builds a 50-badge multi-tier, endurance-streak, and repeatable record-breaker Badge Showroom.
+    Badges ONLY unlock from officially closed months (`closed_months`).
+    When previewing an unclosed month, badges that would unlock on close are flagged with `pending_unlock: True`.
+    """
+    closed_yms = {
+        (r["budget_month"] or "").strip()[:7]
+        for r in db.execute("SELECT budget_month FROM closed_months WHERE budget_month <= ?", (ym,)).fetchall()
+        if r["budget_month"]
+    }
+    is_target_month_closed = ym in closed_yms
+    badges = _evaluate_badges_for_months(db, closed_yms, ym, this_leftover, longest_no_spend_streak)
+
+    if not is_target_month_closed:
+        preview_badges = _evaluate_badges_for_months(
+            db, closed_yms | {ym}, ym, this_leftover, longest_no_spend_streak, is_preview_mode=True
+        )
+        preview_map = {pb["id"]: pb for pb in preview_badges}
+        for b in badges:
+            pb = preview_map.get(b["id"])
+            if not pb:
+                continue
+            would_earn = (not b["unlocked"] and pb["unlocked"]) or (
+                b["is_repeatable"] and pb["times_earned"] > b["times_earned"]
+            )
+            b["pending_unlock"] = bool(would_earn)
+            if not b["unlocked"]:
+                b["progress_current"] = pb["progress_current"]
+                b["progress_text"] = pb["progress_text"]
+                b["subtitle"] = (
+                    f"Ready to unlock when you close {month_label}! ({pb['progress_text']})"
+                    if would_earn
+                    else f"Progress: {pb['progress_text']} — {b['criteria']}"
+                )
 
     milestones = [b for b in badges if b["unlocked"]]
     return {

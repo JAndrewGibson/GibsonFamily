@@ -3487,10 +3487,23 @@ html[data-theme='light'] .history-cat-row {
       'amt notes notes';
     gap: 0.5rem;
   }
-  .split-row-cat { grid-area: cat; }
-  .split-row-amt { grid-area: amt; }
-  .split-row-notes { grid-area: notes; }
-  .split-row-del { grid-area: del; justify-self: end; }
+
+  .split-row-cat {
+    grid-area: cat;
+  }
+
+  .split-row-amt {
+    grid-area: amt;
+  }
+
+  .split-row-notes {
+    grid-area: notes;
+  }
+
+  .split-row-del {
+    grid-area: del;
+    justify-self: end;
+  }
 }
 
 .tx-note {
@@ -5015,16 +5028,14 @@ html[data-theme='light'] .tx-pending-pill {
 
 .progress-fill.fill-rainbow,
 .hbar-fill.fill-rainbow {
-  background: linear-gradient(
-    90deg,
-    #ef4444 0%,
-    #f97316 18%,
-    #eab308 36%,
-    #10b981 55%,
-    #06b6d4 74%,
-    #6366f1 88%,
-    #ec4899 100%
-  ) !important;
+  background: linear-gradient(90deg,
+      #ef4444 0%,
+      #f97316 18%,
+      #eab308 36%,
+      #10b981 55%,
+      #06b6d4 74%,
+      #6366f1 88%,
+      #ec4899 100%) !important;
   background-size: 200% 100%;
   animation: rainbowShift 5s linear infinite;
   box-shadow: 0 0 10px rgba(236, 72, 153, 0.35);
@@ -5034,20 +5045,19 @@ html[data-theme='light'] .tx-pending-pill {
   0% {
     background-position: 0% 50%;
   }
+
   100% {
     background-position: 200% 50%;
   }
 }
 
 .pill-rainbow {
-  background: linear-gradient(
-    90deg,
-    rgba(239, 68, 68, 0.22),
-    rgba(234, 179, 8, 0.22),
-    rgba(16, 185, 129, 0.22),
-    rgba(6, 182, 212, 0.22),
-    rgba(168, 85, 247, 0.26)
-  );
+  background: linear-gradient(90deg,
+      rgba(239, 68, 68, 0.22),
+      rgba(234, 179, 8, 0.22),
+      rgba(16, 185, 129, 0.22),
+      rgba(6, 182, 212, 0.22),
+      rgba(168, 85, 247, 0.26));
   border: 1px solid rgba(236, 72, 153, 0.55);
   color: #f9a8d4;
   font-weight: 700;
@@ -5065,15 +5075,13 @@ html[data-theme='light'] .pill-rainbow {
   border-radius: 4px;
   margin-right: 0.35rem;
   vertical-align: middle;
-  background: linear-gradient(
-    90deg,
-    #ef4444,
-    #f59e0b,
-    #10b981,
-    #06b6d4,
-    #8b5cf6,
-    #ec4899
-  );
+  background: linear-gradient(90deg,
+      #ef4444,
+      #f59e0b,
+      #10b981,
+      #06b6d4,
+      #8b5cf6,
+      #ec4899);
 }
 
 .text-rainbow-label {
@@ -5137,13 +5145,11 @@ html[data-theme='light'] .layered-budget-track {
 }
 
 .layered-segment.seg-savings-end.seg-savings-invaded {
-  background: repeating-linear-gradient(
-    -45deg,
-    rgba(239, 68, 68, 0.38),
-    rgba(239, 68, 68, 0.38) 7px,
-    rgba(100, 116, 139, 0.48) 7px,
-    rgba(100, 116, 139, 0.48) 14px
-  );
+  background: repeating-linear-gradient(-45deg,
+      rgba(239, 68, 68, 0.38),
+      rgba(239, 68, 68, 0.38) 7px,
+      rgba(100, 116, 139, 0.48) 7px,
+      rgba(100, 116, 139, 0.48) 14px);
   border-left-color: #ef4444;
 }
 
@@ -6136,9 +6142,11 @@ html[data-theme='light'] .splendor-noble-pts {
 html[data-theme='light'] .splendor-tier-badge.tier-3 {
   color: #7e22ce;
 }
+
 html[data-theme='light'] .splendor-tier-badge.tier-2 {
   color: #b45309;
 }
+
 html[data-theme='light'] .splendor-tier-badge.tier-1 {
   color: #047857;
 }
@@ -6757,22 +6765,41 @@ html[data-theme='light'] .splendor-wager-badge {
   animation: splendorParticleFall 2.2s ease-in forwards;
 }
 
-.splendor-particle.p-0 { background: #f8fafc; }
-.splendor-particle.p-1 { background: #3b82f6; }
-.splendor-particle.p-2 { background: #10b981; }
-.splendor-particle.p-3 { background: #ef4444; }
-.splendor-particle.p-4 { background: #eab308; }
-.splendor-particle.p-5 { background: #a855f7; }
+.splendor-particle.p-0 {
+  background: #f8fafc;
+}
+
+.splendor-particle.p-1 {
+  background: #3b82f6;
+}
+
+.splendor-particle.p-2 {
+  background: #10b981;
+}
+
+.splendor-particle.p-3 {
+  background: #ef4444;
+}
+
+.splendor-particle.p-4 {
+  background: #eab308;
+}
+
+.splendor-particle.p-5 {
+  background: #a855f7;
+}
 
 @keyframes splendorPopBounce {
   0% {
     opacity: 0;
     transform: scale(0.75) translateY(20px);
   }
+
   70% {
     opacity: 1;
     transform: scale(1.04) translateY(-4px);
   }
+
   100% {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -6784,6 +6811,7 @@ html[data-theme='light'] .splendor-wager-badge {
     transform: translateY(0) rotate(0deg) scale(1);
     opacity: 1;
   }
+
   100% {
     transform: translateY(92vh) rotate(540deg) scale(0.7);
     opacity: 0;
@@ -6795,6 +6823,7 @@ html[data-theme='light'] .splendor-wager-badge {
     opacity: 0;
     transform: translate(-50%, 16px);
   }
+
   100% {
     opacity: 1;
     transform: translate(-50%, 0);
@@ -6802,8 +6831,13 @@ html[data-theme='light'] .splendor-wager-badge {
 }
 
 @keyframes splendorFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 768px) {
@@ -7540,6 +7574,7 @@ html[data-theme='light'] .splendor-wager-badge {
   from {
     stroke-dashoffset: 100;
   }
+
   to {
     stroke-dashoffset: 0;
   }
@@ -7549,6 +7584,7 @@ html[data-theme='light'] .splendor-wager-badge {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -7559,6 +7595,7 @@ html[data-theme='light'] .splendor-wager-badge {
     transform: scaleY(0);
     opacity: 0;
   }
+
   to {
     transform: scaleY(1);
     opacity: 1;
@@ -7605,13 +7642,11 @@ html[data-theme='light'] .splendor-wager-badge {
   .month-recap-top-header {
     padding-top: calc(12px + env(safe-area-inset-top, 0px)) !important;
     padding-bottom: 32px !important;
-    background: linear-gradient(
-      180deg,
-      var(--bg-card) 0%,
-      var(--bg-card) 70%,
-      rgba(15, 23, 42, 0.88) 86%,
-      rgba(15, 23, 42, 0) 100%
-    ) !important;
+    background: linear-gradient(180deg,
+        var(--bg-card) 0%,
+        var(--bg-card) 70%,
+        rgba(15, 23, 42, 0.88) 86%,
+        rgba(15, 23, 42, 0) 100%) !important;
   }
 
   .month-recap-scroll-body {
@@ -7638,9 +7673,11 @@ html[data-theme='light'] .splendor-wager-badge {
     transform: translateY(-24px) rotate(0deg) scale(0.8);
     opacity: 1;
   }
+
   75% {
     opacity: 0.95;
   }
+
   100% {
     transform: translateY(680px) rotate(640deg) scale(1);
     opacity: 0;
@@ -7667,9 +7704,11 @@ html[data-theme='light'] .splendor-wager-badge {
     transform: rotate(var(--ray-angle)) translateY(0) scale(0.4);
     opacity: 1;
   }
+
   65% {
     opacity: 1;
   }
+
   100% {
     transform: rotate(var(--ray-angle)) translateY(-68px) scale(0.1);
     opacity: 0;
@@ -7689,22 +7728,37 @@ html[data-theme='light'] .splendor-wager-badge {
 
 @keyframes badgeCrashDown {
   0% {
-    transform: translateY(-210px) scale(3.5) rotate(-14deg);
+    transform: translateY(-220px) scale(3.4) rotate(-14deg);
     opacity: 0;
-    filter: drop-shadow(0 30px 30px rgba(0, 0, 0, 0.8));
+    filter: drop-shadow(0 30px 30px rgba(0, 0, 0, 0.85));
   }
-  55% {
-    transform: translateY(8px) scale(0.84) rotate(4deg);
+
+  52% {
+    transform: translateY(10px) scale(0.84) rotate(4deg);
     opacity: 1;
-    filter: drop-shadow(0 0 28px rgba(251, 191, 36, 0.95));
+    filter: drop-shadow(0 0 30px rgba(251, 191, 36, 0.95));
   }
-  75% {
+
+  74% {
     transform: translateY(-6px) scale(1.12) rotate(-2deg);
   }
+
   100% {
     transform: translateY(0) scale(1) rotate(0deg);
     opacity: 1;
     filter: drop-shadow(0 0 18px rgba(16, 185, 129, 0.75));
+  }
+}
+
+@keyframes badgeTextFadeUp {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -7714,83 +7768,222 @@ html[data-theme='light'] .splendor-wager-badge {
     opacity: 0.95;
     border-width: 6px;
   }
+
   100% {
-    transform: translate(-50%, -50%) scale(2.8);
+    transform: translate(-50%, -50%) scale(3);
     opacity: 0;
     border-width: 1px;
   }
 }
 
 @keyframes recapSlamShake {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translate(0, 0);
   }
-  48% {
+
+  45% {
     transform: translate(0, 0);
   }
-  54% {
+
+  52% {
     transform: translate(-6px, 7px);
   }
-  60% {
+
+  59% {
     transform: translate(6px, -5px);
   }
+
   66% {
     transform: translate(-4px, 3px);
   }
-  72% {
+
+  73% {
     transform: translate(3px, -2px);
   }
 }
 
 @keyframes badgeLockIntoSlot {
   0% {
-    transform: scale(1.38);
+    transform: scale(1.36);
     box-shadow: 0 0 36px rgba(251, 191, 36, 0.95), inset 0 0 18px rgba(251, 191, 36, 0.65);
   }
+
   60% {
     transform: scale(0.95);
   }
+
   100% {
     transform: scale(1);
     box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
   }
 }
 
+@keyframes ceremonyOpen {
+  0% {
+    max-height: 0;
+    opacity: 0;
+    transform: scale(0.94);
+  }
+
+  100% {
+    max-height: 260px;
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes searchlightLeft {
+  0% {
+    transform: rotate(-34deg);
+    opacity: 0.25;
+  }
+
+  50% {
+    transform: rotate(26deg);
+    opacity: 0.85;
+  }
+
+  100% {
+    transform: rotate(-28deg);
+    opacity: 0.4;
+  }
+}
+
+@keyframes searchlightRight {
+  0% {
+    transform: rotate(34deg);
+    opacity: 0.25;
+  }
+
+  50% {
+    transform: rotate(-26deg);
+    opacity: 0.85;
+  }
+
+  100% {
+    transform: rotate(28deg);
+    opacity: 0.4;
+  }
+}
+
+@keyframes introTitlePop {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+
+  60% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .recap-slam-shake {
-  animation: recapSlamShake 0.65s ease-out;
+  animation: recapSlamShake 0.78s ease-out;
 }
 
 .badge-slam-stage {
   position: relative;
   text-align: center;
-  padding: 1.15rem 1rem;
+  padding: 1.35rem 1.15rem;
   border-radius: 18px;
-  background: radial-gradient(circle at center, rgba(251, 191, 36, 0.22) 0%, rgba(99, 102, 241, 0.18) 55%, rgba(15, 23, 42, 0.85) 100%);
+  background: radial-gradient(circle at center, rgba(251, 191, 36, 0.2) 0%, rgba(99, 102, 241, 0.18) 55%, rgba(15, 23, 42, 0.88) 100%);
   border: 1.5px solid rgba(251, 191, 36, 0.55);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 28px rgba(251, 191, 36, 0.22);
   overflow: hidden;
+  max-height: 260px;
+  opacity: 1;
+  transform: scale(1);
+  transition: max-height 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.42s ease,
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    padding 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+    border-width 0.45s ease;
+}
+
+.badge-slam-stage.is-collapsing {
+  max-height: 0;
+  opacity: 0;
+  transform: scale(0.92) translateY(-10px);
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+}
+
+.badge-ceremony-intro {
+  animation: ceremonyOpen 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  min-height: 126px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.searchlight-beam {
+  position: absolute;
+  bottom: -35px;
+  width: 110px;
+  height: 240px;
+  pointer-events: none;
+  clip-path: polygon(44% 100%, 56% 100%, 100% 0%, 0% 0%);
+  transform-origin: bottom center;
+  filter: blur(2px);
+}
+
+.searchlight-left {
+  left: 14%;
+  background: linear-gradient(to top, rgba(251, 191, 36, 0.52), rgba(251, 191, 36, 0.04) 85%, transparent);
+  animation: searchlightLeft 2.1s ease-in-out infinite;
+}
+
+.searchlight-right {
+  right: 14%;
+  background: linear-gradient(to top, rgba(56, 189, 248, 0.52), rgba(56, 189, 248, 0.04) 85%, transparent);
+  animation: searchlightRight 2.1s ease-in-out infinite;
+}
+
+.ceremony-intro-text {
+  position: relative;
+  z-index: 2;
+  font-size: 1.42rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #fff;
+  text-shadow: 0 0 22px rgba(251, 191, 36, 0.7), 0 2px 10px rgba(0, 0, 0, 0.7);
+  animation: introTitlePop 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
 }
 
 .badge-crash-icon {
-  font-size: 3.4rem;
+  font-size: 3.6rem;
   line-height: 1;
   display: inline-block;
-  animation: badgeCrashDown 0.58s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: badgeCrashDown 0.78s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.badge-slam-copy {
+  opacity: 0;
+  animation: badgeTextFadeUp 0.45s ease-out 0.35s forwards;
 }
 
 .badge-shockwave-ring {
   position: absolute;
   left: 50%;
-  top: 38%;
-  width: 84px;
-  height: 84px;
+  top: 34%;
+  width: 88px;
+  height: 88px;
   border-radius: 50%;
   border: 4px solid #fbbf24;
   pointer-events: none;
-  animation: badgeShockwave 0.75s ease-out 0.28s forwards;
+  animation: badgeShockwave 0.9s ease-out 0.38s forwards;
   opacity: 0;
 }
 
 .badge-slot-just-slammed {
-  animation: badgeLockIntoSlot 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: badgeLockIntoSlot 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }

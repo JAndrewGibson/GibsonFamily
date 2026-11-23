@@ -248,8 +248,9 @@ def test_month_close_excess_income_above_projected(client):
     assert "fun_facts" in recap
     assert "badge_showroom" in recap
     assert len(recap["badge_showroom"]) == 50
-    # Before closing the month, ZERO badges are unlocked!
+    # Before closing the month, ZERO badges are unlocked, but earned ones are flagged pending_unlock!
     assert all(not b["unlocked"] for b in recap["badge_showroom"])
+    assert any(b["id"] == "saver_rate_50" and b["pending_unlock"] is True for b in recap["badge_showroom"])
 
     # Once the month is officially closed, earned badges unlock!
     close_res = client.post(
