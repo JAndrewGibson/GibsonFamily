@@ -7534,3 +7534,51 @@ html[data-theme='light'] .splendor-wager-badge {
     grid-template-columns: 1fr;
   }
 }
+
+/* Animated Month-End Recap Spending Pace Graph */
+@keyframes recapDrawLine {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes recapFadeArea {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes recapGrowBar {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.recap-line-anim {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: recapDrawLine 1.15s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.recap-area-anim {
+  opacity: 0;
+  animation: recapFadeArea 0.9s ease-out 0.35s forwards;
+}
+
+.recap-bar-anim {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  transform: scaleY(0);
+  animation: recapGrowBar 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

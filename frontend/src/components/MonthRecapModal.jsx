@@ -35,6 +35,155 @@ function fmtSignedMoney(val) {
   return `${sign}$${Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBudget = 0 }) {
+  const [hoveredDay, setHoveredDay] = useState(null);
+  if (!Array.isArray(dailySpending) || dailySpending.length === 0) return null;
+
+  const w = 420;
+  const h = 135;
+  const padL = 8;
+  const padR = 8;
+  const padT = 14;
+  const padB = 22;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+
+  const maxCum = Math.max(
+    ...dailySpending.map((d) => Number(d.cumulative_spent || 0)),
+    Number(totalBudget || 0),
+    1
+  );
+  const maxDaily = Math.max(...dailySpending.map((d) => Number(d.daily_spent || 0)), 1);
+  const n = dailySpending.length;
+
+  const pts = dailySpending.map((d, idx) => {
+    const x = padL + (n > 1 ? (idx / (n - 1)) * plotW : plotW / 2);
+    const y = padT + plotH - (Number(d.cumulative_spent || 0) / maxCum) * plotH;
+    return { ...d, x, y };
+  });
+
+  const linePath = pts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ');
+  const areaPath = `${linePath} L ${pts[pts.length - 1].x.toFixed(1)} ${(padT + plotH).toFixed(1)} L ${pts[0].x.toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
+
+  const budgetY =
+    totalBudget > 0 ? padT + plotH - (Math.min(totalBudget, maxCum) / maxCum) * plotH : null;
+  const barWidth = Math.max(3, Math.min(10, plotW / n - 2));
+  const activePoint = hoveredDay ? pts.find((p) => p.day === hoveredDay) : pts[pts.length - 1];
+
+  return (
+    <div
+      style={{
+        background: 'var(--bg-panel)',
+        border: '1px solid var(--border)',
+        borderRadius: '12px',
+        padding: '0.85rem 0.95rem',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>
+          Spending Pace Throughout Month
+        </div>
+        <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#06b6d4' }}>
+          {activePoint
+            ? `Day ${activePoint.day}: $${fmtMoney(activePoint.cumulative_spent)} total${activePoint.daily_spent > 0 ? ` (+$${fmtMoney(activePoint.daily_spent)} that day)` : ''}`
+            : ''}
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', display: 'block', overflow: 'visible' }}>
+        <defs>
+          <linearGradient id="recapSpendAreaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.36" />
+            <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+
+        {budgetY !== null && (
+          <g>
+            <line
+              x1={padL}
+              y1={budgetY}
+              x2={w - padR}
+              y2={budgetY}
+              stroke="rgba(255,255,255,0.22)"
+              strokeDasharray="4 4"
+              strokeWidth="1"
+            />
+            <text x={w - padR} y={Math.max(10, budgetY - 4)} textAnchor="end" fill="rgba(255,255,255,0.5)" fontSize="8.5">
+              Budget ${fmtMoney(totalBudget)}
+            </text>
+          </g>
+        )}
+
+        {pts.map((p, idx) => {
+          if (p.daily_spent <= 0) return null;
+          const barH = Math.max(3, (p.daily_spent / maxDaily) * (plotH * 0.45));
+          return (
+            <rect
+              key={p.day}
+              x={p.x - barWidth / 2}
+              y={padT + plotH - barH}
+              width={barWidth}
+              height={barH}
+              rx="1.5"
+              fill={peakDay?.day === p.day ? '#f59e0b' : 'rgba(99, 102, 241, 0.55)'}
+              className="recap-bar-anim"
+              style={{ animationDelay: `${Math.min(idx * 22, 650)}ms`, cursor: 'pointer' }}
+              onMouseEnter={() => setHoveredDay(p.day)}
+              onClick={() => setHoveredDay(p.day)}
+            />
+          );
+        })}
+
+        <path d={areaPath} fill="url(#recapSpendAreaGrad)" className="recap-area-anim" />
+        <path
+          d={linePath}
+          fill="none"
+          stroke="#06b6d4"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pathLength="100"
+          className="recap-line-anim"
+        />
+
+        {pts.map((p) => (
+          <circle
+            key={`dot-${p.day}`}
+            cx={p.x}
+            cy={p.y}
+            r={hoveredDay === p.day ? 4 : 2}
+            fill={hoveredDay === p.day ? '#fff' : '#06b6d4'}
+            opacity={hoveredDay === p.day || p.day === pts.length ? 1 : 0}
+            style={{ cursor: 'pointer' }}
+            onMouseEnter={() => setHoveredDay(p.day)}
+            onClick={() => setHoveredDay(p.day)}
+          />
+        ))}
+
+        <text x={padL} y={h - 4} fill="rgba(255,255,255,0.5)" fontSize="9">
+          Day 1
+        </text>
+        <text x={padL + plotW / 2} y={h - 4} textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="9">
+          Day {Math.ceil(n / 2)}
+        </text>
+        <text x={w - padR} y={h - 4} textAnchor="end" fill="rgba(255,255,255,0.5)" fontSize="9">
+          Day {n}
+        </text>
+      </svg>
+
+      {peakDay && peakDay.daily_spent > 0 && (
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'flex', justifyContent: 'space-between' }}>
+          <span>Peak day: <strong style={{ color: '#fbbf24' }}>{peakDay.date}</strong> (${fmtMoney(peakDay.daily_spent)})</span>
+          <span>Tap/hover bars to inspect days</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MonthRecapModal({
   isOpen,
   onClose,
@@ -481,6 +630,13 @@ export default function MonthRecapModal({
                       </div>
                     )}
                   </div>
+
+                  <AnimatedMonthlySpendChart
+                    key={`spend-chart-${recap?.budget_month}-${slideIndex}`}
+                    dailySpending={recap?.daily_spending}
+                    peakDay={recap?.peak_spending_day}
+                    totalBudget={overview.total_budget}
+                  />
                 </div>
               )}
 

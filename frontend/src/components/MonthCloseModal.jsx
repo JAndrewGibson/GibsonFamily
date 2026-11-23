@@ -80,9 +80,9 @@ export default function MonthCloseModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           month: selectedMonth,
-          transferred_to_savings: recordTransferChecked && Number(transferAmount) > 0,
-          savings_account_id: selectedSavingsAccountId ? Number(selectedSavingsAccountId) : null,
-          transfer_amount: Number(transferAmount) || 0,
+          transferred_to_savings: false,
+          savings_account_id: null,
+          transfer_amount: 0,
           notes: notes.trim(),
         }),
       });
@@ -462,74 +462,6 @@ export default function MonthCloseModal({
                       {rolloverCats.map((r) => r.category).join(', ')} carry forward automatically into next month and
                       are not included in this savings transfer.
                     </div>
-                  </div>
-                )}
-
-                {/* Savings Destination & Transfer Action */}
-                {!isClosed && recommendedTransferAmt > 0 && (
-                  <div
-                    style={{
-                      marginTop: '0.85rem',
-                      padding: '0.85rem',
-                      background: 'var(--bg-card)',
-                      borderRadius: '10px',
-                      border: '1px solid var(--border)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.75rem',
-                    }}
-                  >
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
-                      <div>
-                        <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
-                          Destination Savings Account
-                        </label>
-                        <select
-                          className="input"
-                          style={{ width: '100%', fontSize: '0.85rem' }}
-                          value={selectedSavingsAccountId}
-                          onChange={(e) => setSelectedSavingsAccountId(e.target.value)}
-                        >
-                          {status?.savings_accounts?.map((acc) => (
-                            <option key={acc.id} value={acc.id}>
-                              {acc.name} (••••{acc.mask || '0000'}) - ${fmtMoney(acc.balance_current)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
-                          Transfer Amount ($)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          className="input"
-                          style={{ width: '100%', fontSize: '0.85rem', fontWeight: 600 }}
-                          value={transferAmount}
-                          onChange={(e) => setTransferAmount(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        fontSize: '0.82rem',
-                        cursor: 'pointer',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={recordTransferChecked}
-                        onChange={(e) => setRecordTransferChecked(e.target.checked)}
-                      />
-                      <span>Record this transfer in GibsonFamily Hub upon closing month</span>
-                    </label>
                   </div>
                 )}
               </div>

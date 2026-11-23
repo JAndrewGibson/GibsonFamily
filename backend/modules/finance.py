@@ -1,4 +1,5 @@
 import base64
+import calendar
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -1480,6 +1481,45 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             "total_spent": round(merchant_totals[top_m_name], 2),
         }
 
+    # 5b. Daily & Cumulative Spending Timeline (by purchase date)
+    try:
+        days_in_month = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
+    except Exception:
+        days_in_month = 30
+    daily_totals = {}
+    daily_counts = {}
+    for tx in budget_txs:
+        raw_date = (tx.get("date") or "")[:10]
+        if raw_date.startswith(ym) and len(raw_date) >= 10:
+            try:
+                day_num = max(1, min(days_in_month, int(raw_date[8:10])))
+            except ValueError:
+                day_num = 1
+        elif raw_date and raw_date < f"{ym}-01":
+            day_num = 1
+        else:
+            day_num = days_in_month
+        daily_totals[day_num] = daily_totals.get(day_num, 0.0) + float(tx.get("amount") or 0.0)
+        daily_counts[day_num] = daily_counts.get(day_num, 0) + 1
+
+    daily_spending = []
+    running_cum = 0.0
+    for d_num in range(1, days_in_month + 1):
+        d_spent = round(daily_totals.get(d_num, 0.0), 2)
+        running_cum = round(running_cum + d_spent, 2)
+        daily_spending.append({
+            "day": d_num,
+            "date": f"{ym}-{d_num:02d}",
+            "daily_spent": d_spent,
+            "cumulative_spent": running_cum,
+            "tx_count": daily_counts.get(d_num, 0),
+        })
+    peak_spending_day = max(
+        (d for d in daily_spending if d["daily_spent"] > 0),
+        key=lambda d: d["daily_spent"],
+        default=None,
+    )
+
     # 6. Budget MVP Category (Non-rollover category with highest dollar surplus)
     budget_mvp = None
     eligible_mvps = [
@@ -1695,6 +1735,8 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         "top_categories": top_categories,
         "top_merchant": top_merchant,
         "biggest_purchase": biggest_purchase,
+        "daily_spending": daily_spending,
+        "peak_spending_day": peak_spending_day,
         "budget_mvp": budget_mvp,
         "partner_rollovers": partner_rollovers,
         "leftover_breakdown": this_leftover["leftover_categories"],
