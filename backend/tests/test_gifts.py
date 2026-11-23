@@ -193,12 +193,27 @@ def test_month_close_excess_income_above_projected(client):
         headers=alex_hdr,
         json={"category": "Groceries & Dining", "monthly_limit": 500.0, "budget_month": "2026-11", "allow_rollover": 0},
     )
-    # Also add a "Savings" budget with a large unspent limit ($2000 limit, $100 spent)
-    # and verify it is NOT shown in top_categories or chosen as budget_mvp!
+    # Also add a "Savings" budget ($2000 limit, $2500 contributed -> exceeded goal!)
+    # and a "Rent & Utilities" fixed_bill budget ($2200 rent on the 1st)
     client.post(
         "/api/finance/budgets",
         headers=alex_hdr,
-        json={"category": "Savings", "monthly_limit": 2000.0, "budget_month": "2026-11", "allow_rollover": 0},
+        json={"category": "Savings", "monthly_limit": 2000.0, "budget_month": "2026-11", "allow_rollover": 0, "category_type": "savings"},
+    )
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_hdr,
+        json={"category": "Housing & Utilities", "monthly_limit": 2500.0, "budget_month": "2026-11", "allow_rollover": 0, "category_type": "fixed_bill"},
+    )
+    client.post(
+        "/api/finance/transactions",
+        headers=alex_hdr,
+        json={"name": "Monthly Rent", "amount": 2200.0, "date": "2026-11-01", "budget_month": "2026-11", "category": "Housing & Utilities"},
+    )
+    client.post(
+        "/api/finance/transactions",
+        headers=alex_hdr,
+        json={"name": "Transfer to Savings Vault", "amount": 2500.0, "date": "2026-11-02", "budget_month": "2026-11", "category": "Savings"},
     )
     client.post(
         "/api/finance/transactions",
@@ -206,17 +221,30 @@ def test_month_close_excess_income_above_projected(client):
         json={"name": "Market", "amount": 350.0, "date": "2026-11-05", "budget_month": "2026-11", "category": "Groceries & Dining"},
     )
 
+    # Verify Savings going OVER its $2000 target is NOT treated as debt/over-budget, and IS flagged as goal exceeded!
+    sum_nov = client.get("/api/finance/summary?month=2026-11", headers=alex_hdr).get_json()
+    sav_b = next(b for b in sum_nov["budgets"] if b["category"] == "Savings")
+    assert sav_b["is_savings_category"] is True
+    assert sav_b["is_in_debt"] is False
+    assert sav_b["is_savings_goal_exceeded"] is True
+
     mc = client.get("/api/finance/month-close-status?month=2026-11", headers=alex_hdr).get_json()
     assert mc["projected_income"] == 4000.0
     assert mc["total_income"] == 5200.0
     assert mc["income_vs_projected"] == 1200.0
     assert mc["excess_income"] == 1200.0
     assert mc["exceeded_income_projection"] is True
+    # Savings category is excluded from leftover_categories!
+    assert not any(c["category"] == "Savings" for c in mc["leftover_categories"])
+    assert any(c["category"] == "Savings" and c["is_exceeded"] is True for c in mc["savings_goal_categories"])
     recap = mc["recap"]
     assert recap["overview"]["projected_income"] == 4000.0
     assert recap["overview"]["total_income"] == 5200.0
     assert not any("saving" in c["category"].lower() for c in recap["top_categories"])
-    assert recap["budget_mvp"]["category"] == "Groceries & Dining"
+    # Fixed bill ("Housing & Utilities") IS in top_categories, but EXCLUDED from biggest_purchase and peak_spending_day!
+    assert any(c["category"] == "Housing & Utilities" for c in recap["top_categories"])
+    assert recap["biggest_purchase"]["name"] == "Market"
+    assert recap["peak_spending_day"]["date"] == "2026-11-05"
     assert "fun_facts" in recap
     assert "badge_showroom" in recap
     assert len(recap["badge_showroom"]) == 50

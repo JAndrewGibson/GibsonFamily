@@ -176,10 +176,69 @@ function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBu
 
       {peakDay && peakDay.daily_spent > 0 && (
         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'flex', justifyContent: 'space-between' }}>
-          <span>Peak day: <strong style={{ color: '#fbbf24' }}>{peakDay.date}</strong> (${fmtMoney(peakDay.daily_spent)})</span>
+          <span>Peak shopping day: <strong style={{ color: '#fbbf24' }}>{peakDay.date}</strong> (${fmtMoney(peakDay.daily_spent)})</span>
           <span>Tap/hover bars to inspect days</span>
         </div>
       )}
+    </div>
+  );
+}
+
+const CONFETTI_COLORS = ['#fbbf24', '#10b981', '#06b6d4', '#ec4899', '#818cf8', '#f43f5e', '#a855f7'];
+const FIREWORK_ORIGINS = [
+  { left: '18%', top: '20%', color: '#fbbf24', delay: '0s' },
+  { left: '82%', top: '22%', color: '#ec4899', delay: '0.22s' },
+  { left: '50%', top: '16%', color: '#06b6d4', delay: '0.45s' },
+  { left: '25%', top: '38%', color: '#10b981', delay: '0.68s' },
+  { left: '75%', top: '36%', color: '#a855f7', delay: '0.9s' },
+];
+
+function RecapCelebrationFX({ burstKey }) {
+  const pieces = Array.from({ length: 42 }).map((_, i) => ({
+    id: i,
+    left: `${(i * 2.4 + (i % 5) * 3) % 98}%`,
+    color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+    delay: `${(i % 14) * 0.06}s`,
+    duration: `${1.9 + (i % 5) * 0.35}s`,
+    size: 6 + (i % 4) * 2,
+  }));
+
+  return (
+    <div key={burstKey} className="recap-fx-layer" aria-hidden="true">
+      { pieces.map((p) => (
+        <span
+          key={p.id}
+          className="recap-confetti-piece"
+          style={{
+            left: p.left,
+            width: `${p.size}px`,
+            height: `${p.size * 1.6}px`,
+            background: p.color,
+            animationDelay: p.delay,
+            animationDuration: p.duration,
+          }}
+        />
+      )) }
+      { FIREWORK_ORIGINS.map((fw, idx) => (
+        <div
+          key={idx}
+          className="recap-firework-origin"
+          style={{ left: fw.left, top: fw.top }}
+        >
+          { Array.from({ length: 12 }).map((__, rayIdx) => (
+            <span
+              key={rayIdx}
+              className="recap-firework-spark"
+              style={{
+                '--ray-angle': `${rayIdx * 30}deg`,
+                background: fw.color,
+                boxShadow: `0 0 8px ${fw.color}`,
+                animationDelay: fw.delay,
+              }}
+            />
+          )) }
+        </div>
+      )) }
     </div>
   );
 }
@@ -195,6 +254,9 @@ export default function MonthRecapModal({
   const [slideIndex, setSlideIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [badgeFilter, setBadgeFilter] = useState('all');
+  const [ceremonyActive, setCeremonyActive] = useState(false);
+  const [slamIndex, setSlamIndex] = useState(0);
+  const [fxBurstKey, setFxBurstKey] = useState(0);
   const timerRef = useRef(null);
 
   const loadRecap = async () => {
@@ -220,14 +282,45 @@ export default function MonthRecapModal({
   const slides = recap?.slides || [];
   const totalSlides = slides.length || 9;
 
-  // Auto-advance slides every 6 seconds if playing
+  // Auto-advance slides every 6 seconds if playing (pause auto-advance during active badge slam ceremony)
   useEffect(() => {
-    if (!isOpen || !isPlaying || loading || totalSlides === 0) return;
+    if (!isOpen || !isPlaying || loading || totalSlides === 0 || ceremonyActive) return;
     timerRef.current = setTimeout(() => {
       setSlideIndex((prev) => (prev + 1) % totalSlides);
     }, 6000);
     return () => clearTimeout(timerRef.current);
-  }, [isOpen, isPlaying, slideIndex, loading, totalSlides]);
+  }, [isOpen, isPlaying, slideIndex, loading, totalSlides, ceremonyActive]);
+
+  const unlockedBadgesList = (recap?.badge_showroom || []).filter((b) => b.unlocked);
+
+  // Trigger Gamified Badge Slam Ceremony & Fireworks when entering Slide 7 (or Slide 5)
+  useEffect(() => {
+    if (!isOpen || loading) return;
+    if (slideIndex === 7 && unlockedBadgesList.length > 0) {
+      setCeremonyActive(true);
+      setSlamIndex(0);
+      setFxBurstKey((k) => k + 1);
+    } else if (slideIndex === 5 && unlockedBadgesList.length > 0) {
+      setFxBurstKey((k) => k + 1);
+      setCeremonyActive(false);
+    } else {
+      setCeremonyActive(false);
+    }
+  }, [isOpen, loading, slideIndex, unlockedBadgesList.length]);
+
+  // Step through unlocked badges crashing down one by one during the ceremony
+  useEffect(() => {
+    if (!ceremonyActive || unlockedBadgesList.length === 0) return;
+    const stepTimer = setTimeout(() => {
+      if (slamIndex < unlockedBadgesList.length - 1) {
+        setSlamIndex((prev) => prev + 1);
+        setFxBurstKey((k) => k + 1);
+      } else {
+        setCeremonyActive(false);
+      }
+    }, 1350);
+    return () => clearTimeout(stepTimer);
+  }, [ceremonyActive, slamIndex, unlockedBadgesList.length]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -288,7 +381,8 @@ export default function MonthRecapModal({
       }}
     >
       <div
-        className="month-recap-container"
+        className={`month-recap-container ${ceremonyActive ? 'recap-slam-shake' : ''}`}
+        key={ceremonyActive ? `shake-${slamIndex}` : 'steady'}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(94vw, 540px)',
@@ -304,6 +398,9 @@ export default function MonthRecapModal({
           border: '1px solid rgba(255, 255, 255, 0.15)',
         }}
       >
+        {(slideIndex === 5 || slideIndex === 7) && unlockedBadgesList.length > 0 && (
+          <RecapCelebrationFX burstKey={fxBurstKey} />
+        )}
         {/* Top Header Overlay with Solid-to-Gradient Mask so Scrolled Content Never Collides with Bars/Title */}
         <div
           className="month-recap-top-header"
@@ -1125,7 +1222,7 @@ export default function MonthRecapModal({
                 </div>
               )}
 
-              {/* SLIDE 7: Household Badge Showroom (Unlocked & Locked Badges) */}
+              {/* SLIDE 7: Household Badge Showroom & Gamified Badge Slam Ceremony */}
               {slideIndex === 7 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                   <div style={{ textAlign: 'center' }}>
@@ -1134,16 +1231,81 @@ export default function MonthRecapModal({
                         fontSize: '0.75rem',
                         fontWeight: 700,
                         textTransform: 'uppercase',
-                        color: 'var(--text-muted)',
+                        color: '#fbbf24',
                         letterSpacing: '0.06em',
                       }}
                     >
-                      TROPHY CASE ({recap?.badges_unlocked_count || recap?.milestones?.length || 0} OF {badgeShowroom.length || 12} UNLOCKED)
+                      🎆 TROPHY CASE ({unlockedBadgesList.length} OF {badgeShowroom.length || 50} UNLOCKED)
                     </span>
-                    <h2 style={{ margin: '0.2rem 0 0 0', fontSize: '1.55rem', fontWeight: 800 }}>
-                      Badge Showroom
-                    </h2>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
+                      <h2 style={{ margin: 0, fontSize: '1.55rem', fontWeight: 800 }}>
+                        Badge Showroom
+                      </h2>
+                      {unlockedBadgesList.length > 0 && !ceremonyActive && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.72rem', padding: '0.2rem 0.6rem', borderColor: 'rgba(251, 191, 36, 0.5)', color: '#fbbf24' }}
+                          onClick={() => {
+                            setBadgeFilter('all');
+                            setSlamIndex(0);
+                            setCeremonyActive(true);
+                            setFxBurstKey((k) => k + 1);
+                          }}
+                        >
+                          🎆 Replay Unlock Ceremony
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Gamified Badge Crashing Down & Locking-In Stage */}
+                  {ceremonyActive && unlockedBadgesList[slamIndex] && (
+                    <div
+                      key={`slam-stage-${unlockedBadgesList[slamIndex].id}-${slamIndex}`}
+                      className="badge-slam-stage"
+                    >
+                      <div className="badge-shockwave-ring" />
+                      <div className="badge-crash-icon">
+                        {unlockedBadgesList[slamIndex].emoji || '🏆'}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#fbbf24', marginTop: '0.35rem' }}>
+                        ⚡ BADGE UNLOCKED ({slamIndex + 1} OF {unlockedBadgesList.length}) • {unlockedBadgesList[slamIndex].tier_label}
+                      </div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#fff', marginTop: '0.15rem' }}>
+                        {unlockedBadgesList[slamIndex].title}
+                        {unlockedBadgesList[slamIndex].is_repeatable && unlockedBadgesList[slamIndex].times_earned > 0
+                          ? ` ×${unlockedBadgesList[slamIndex].times_earned}`
+                          : ''}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#a7f3d0', fontWeight: 600, marginTop: '0.15rem' }}>
+                        {unlockedBadgesList[slamIndex].subtitle}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '0.65rem' }}>
+                        {slamIndex < unlockedBadgesList.length - 1 && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '0.72rem', padding: '0.22rem 0.65rem' }}
+                            onClick={() => {
+                              setSlamIndex((prev) => prev + 1);
+                              setFxBurstKey((k) => k + 1);
+                            }}
+                          >
+                            Slam Next Badge ⚡
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.72rem', padding: '0.22rem 0.65rem' }}
+                          onClick={() => setCeremonyActive(false)}
+                        >
+                          Skip to Full Showroom
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Filter Pills */}
                   <div style={{ display: 'flex', justifyContent: 'center', gap: '0.4rem' }}>
@@ -1174,6 +1336,10 @@ export default function MonthRecapModal({
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.55rem' }}>
                     {filteredBadges.map((b) => {
+                      const unlockedIdx = unlockedBadgesList.findIndex((u) => u.id === b.id);
+                      const isWaitingToSlam = ceremonyActive && b.unlocked && unlockedIdx > slamIndex;
+                      const isJustSlammed = ceremonyActive && b.unlocked && unlockedIdx === slamIndex;
+                      const isLockedIntoPlace = b.unlocked && (!ceremonyActive || unlockedIdx <= slamIndex);
                       const pct =
                         !b.is_repeatable && Number(b.progress_target) > 0
                           ? Math.min(100, Math.round((Number(b.progress_current || 0) / Number(b.progress_target)) * 100))
@@ -1183,13 +1349,14 @@ export default function MonthRecapModal({
                       return (
                         <div
                           key={b.id}
+                          className={isJustSlammed ? 'badge-slot-just-slammed' : isLockedIntoPlace ? 'badge-slot-locked-in' : ''}
                           style={{
-                            background: b.unlocked
+                            background: isLockedIntoPlace
                               ? b.is_repeatable
                                 ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.18) 0%, rgba(236, 72, 153, 0.14) 100%)'
                                 : 'linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(16, 185, 129, 0.14) 100%)'
                               : 'rgba(255, 255, 255, 0.03)',
-                            border: b.unlocked
+                            border: isLockedIntoPlace
                               ? b.is_repeatable
                                 ? '1px solid rgba(245, 158, 11, 0.5)'
                                 : '1px solid rgba(16, 185, 129, 0.45)'
@@ -1199,7 +1366,9 @@ export default function MonthRecapModal({
                             display: 'flex',
                             flexDirection: 'column',
                             gap: '0.28rem',
-                            opacity: b.unlocked ? 1 : 0.68,
+                            opacity: isWaitingToSlam ? 0.25 : b.unlocked ? 1 : 0.68,
+                            transform: isWaitingToSlam ? 'scale(0.94)' : 'scale(1)',
+                            transition: 'all 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem' }}>

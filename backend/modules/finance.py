@@ -129,9 +129,52 @@ def is_tx_cc_payment(tx: dict) -> bool:
     return cat in CC_PAYMENT_ALIASES
 
 
-def _is_savings_category_name(name: str) -> bool:
-    """Returns True if a budget category name represents a savings bucket rather than an expense category."""
+VALID_CATEGORY_TYPES = {"everyday", "fixed_bill", "subscription", "savings"}
+
+
+def _infer_default_category_type(name: str) -> str:
+    low = (name or "").strip().lower()
+    if "saving" in low:
+        return "savings"
+    if any(k in low for k in ("housing", "utilit", "rent", "mortgage", "bill", "insur")):
+        return "fixed_bill"
+    if any(k in low for k in ("subscr", "stream")):
+        return "subscription"
+    return "everyday"
+
+
+def _is_savings_category_name(name: str, cat_type: str | None = None) -> bool:
+    """Returns True if a budget category represents a savings bucket rather than an expense category."""
+    if cat_type and str(cat_type).strip().lower() == "savings":
+        return True
     return "saving" in (name or "").strip().lower()
+
+
+def _get_category_type_map(db) -> dict[str, str]:
+    type_map = {}
+    try:
+        for r in db.execute("SELECT name, category_type FROM category_catalog").fetchall():
+            c_name = (r["name"] or "").strip()
+            c_type = (r["category_type"] or "").strip().lower()
+            if c_name:
+                type_map[c_name] = c_type if c_type in VALID_CATEGORY_TYPES else _infer_default_category_type(c_name)
+    except Exception:
+        pass
+    return type_map
+
+
+def _resolve_category_type(cat_name: str, type_map: dict[str, str] | None = None) -> str:
+    clean = (cat_name or "").strip()
+    if _is_savings_category_name(clean):
+        return "savings"
+    if type_map and clean in type_map:
+        return type_map[clean]
+    return _infer_default_category_type(clean)
+
+
+def _is_non_shopping_recap_category(cat_name: str, type_map: dict[str, str] | None = None) -> bool:
+    """Returns True for fixed bills (rent/utilities), recurring subscriptions, and savings transfers."""
+    return _resolve_category_type(cat_name, type_map) in ("fixed_bill", "subscription", "savings")
 
 
 def is_gift_addon_enabled(db=None) -> bool:
@@ -972,6 +1015,8 @@ def _build_category_management_payload(
         tot_spent = round(all_spend_map.get(cat_name, 0.0), 2)
         tot_cnt = all_cnt_map.get(cat_name, 0)
         allow_ro = bool(row.get("allow_rollover")) or (bool(b_row.get("allow_rollover")) if b_row else False) or is_spending_money_category(cat_name)
+        raw_ctype = (row.get("category_type") or (b_row.get("category_type") if b_row else "") or "").strip().lower()
+        cat_type = "savings" if _is_savings_category_name(cat_name, raw_ctype) else (raw_ctype if raw_ctype in VALID_CATEGORY_TYPES else _infer_default_category_type(cat_name))
         enriched_catalog.append({
             "id": row["id"],
             "name": cat_name,
@@ -979,6 +1024,8 @@ def _build_category_management_payload(
             "is_custom": not bool(row["is_preloaded"]),
             "is_archived": bool(row["is_archived"]),
             "allow_rollover": allow_ro,
+            "category_type": cat_type,
+            "is_savings_category": cat_type == "savings",
             "color": b_row["color"] if b_row else row["color"],
             "is_tracked": is_tracked,
             "monthly_limit": round(float(b_row["monthly_limit"]), 2) if b_row else 0.0,
@@ -1204,8 +1251,10 @@ def _compute_month_leftover_data(db, ym: str) -> dict:
 
     leftover_categories = []
     rollover_categories = []
+    savings_goal_categories = []
     total_leftover = 0.0
     total_spend = 0.0
+    cat_type_map = _get_category_type_map(db)
 
     for b in month_budgets:
         cat = b["category"]
@@ -1213,6 +1262,21 @@ def _compute_month_leftover_data(db, ym: str) -> dict:
         gross = round(spend_by_cat.get(cat, 0.0), 2)
         rets = round(returns_by_cat.get(cat, 0.0), 2)
         net = round(max(0.0, gross - rets), 2)
+        ctype = _resolve_category_type(cat, cat_type_map)
+
+        # Savings category represents transfers into savings, not an expense category!
+        # Going over is a win (saved more than planned); going under is never treated as "unspent expense leftover".
+        if ctype == "savings":
+            savings_goal_categories.append({
+                "category": cat,
+                "monthly_limit": lim,
+                "contributed": net,
+                "exceeded_by": round(max(0.0, net - lim), 2),
+                "is_exceeded": bool(net > lim and lim > 0),
+                "color": b.get("color", "#10b981"),
+            })
+            continue
+
         total_spend += net
         is_ro = bool(b.get("allow_rollover") or is_spending_money_category(cat))
 
@@ -1259,6 +1323,7 @@ def _compute_month_leftover_data(db, ym: str) -> dict:
         "exceeded_income_projection": exceeded_income_projection,
         "leftover_categories": leftover_categories,
         "rollover_categories": rollover_categories,
+        "savings_goal_categories": savings_goal_categories,
         "total_income": round(total_income, 2),
         "total_spend": round(total_spend, 2),
         "net_cashflow": net_cashflow,
@@ -1786,6 +1851,9 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         })
 
     # 5. Transactions Highlights (Most Frequent Merchant & Biggest Purchase)
+    # Exclude fixed bills (rent/utilities), recurring subscriptions, and savings transfers from shopping highlights,
+    # peak spending day, favorite shopping day, and no-spend day streaks!
+    cat_type_map = _get_category_type_map(db)
     month_txs = [
         dict(r)
         for r in db.execute(
@@ -1797,13 +1865,23 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             (ym,),
         ).fetchall()
     ]
-    budget_txs = [t for t in month_txs if not is_tx_savings_spend(t) and not is_tx_cc_payment(t)]
+    budget_txs = [
+        t for t in month_txs
+        if not is_tx_savings_spend(t)
+        and not is_tx_cc_payment(t)
+        and _resolve_category_type(t.get("category") or "", cat_type_map) != "savings"
+    ]
+    shopping_txs = [
+        t for t in budget_txs
+        if not _is_non_shopping_recap_category(t.get("category") or "", cat_type_map)
+    ]
+    recap_shopping_txs = shopping_txs if shopping_txs else budget_txs
 
     merchant_counts = {}
     merchant_totals = {}
     biggest_purchase = None
 
-    for tx in budget_txs:
+    for tx in recap_shopping_txs:
         raw_name = (tx.get("merchant_name") or tx.get("name") or "Store").strip()
         clean_name = raw_name.split("#")[0].strip() or raw_name
         merchant_counts[clean_name] = merchant_counts.get(clean_name, 0) + 1
@@ -1827,14 +1905,14 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
             "total_spent": round(merchant_totals[top_m_name], 2),
         }
 
-    # 5b. Daily & Cumulative Spending Timeline (by purchase date)
+    # 5b. Daily & Cumulative Spending Timeline (by purchase date, excluding rent/fixed bills/subscriptions for peak & no-spend days)
     try:
         days_in_month = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
     except Exception:
         days_in_month = 30
     daily_totals = {}
     daily_counts = {}
-    for tx in budget_txs:
+    for tx in recap_shopping_txs:
         raw_date = (tx.get("date") or "")[:10]
         if raw_date.startswith(ym) and len(raw_date) >= 10:
             try:
@@ -1970,7 +2048,7 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
     weekend_spent = 0.0
     weekday_tx_count = 0
     weekend_tx_count = 0
-    for tx in budget_txs:
+    for tx in recap_shopping_txs:
         amt = float(tx.get("amount") or 0.0)
         raw_d = (tx.get("date") or "")[:10]
         try:
@@ -2324,6 +2402,7 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         "partner_rollovers": partner_rollovers,
         "leftover_breakdown": this_leftover["leftover_categories"],
         "rollover_breakdown": this_leftover["rollover_categories"],
+        "savings_goal_categories": this_leftover.get("savings_goal_categories", []),
         "fun_facts": fun_facts,
         "badge_showroom": badge_showroom,
         "badges_unlocked_count": len(milestones),
@@ -3848,8 +3927,11 @@ def finance_summary():
     total_budget_limit = 0.0
     total_budget_spent = 0.0
     total_budget_gross_spent = 0.0
+    cat_type_map_summary = _get_category_type_map(db)
     for b in month_budgets:
         cat_name = b["category"]
+        cat_type = _resolve_category_type(cat_name, cat_type_map_summary)
+        is_sav_cat = cat_type == "savings"
         gross_spent = round(spend_by_category.get(cat_name, 0.0), 2)
         cat_returns = round(returns_by_cat.get(cat_name, 0.0), 2)
         net_spent = round(max(0.0, gross_spent - cat_returns), 2)
@@ -3875,10 +3957,15 @@ def finance_summary():
         )
         is_using_rollover = bool(ro_info.get("is_using_rollover", False)) if allow_ro else False
         is_in_debt = (
-            bool(ro_info.get("is_in_debt", False))
-            if allow_ro
-            else bool(net_spent > limit_val and limit_val > 0)
+            False
+            if is_sav_cat
+            else (
+                bool(ro_info.get("is_in_debt", False))
+                if allow_ro
+                else bool(net_spent > limit_val and limit_val > 0)
+            )
         )
+        is_savings_goal_exceeded = bool(is_sav_cat and net_spent > limit_val and limit_val > 0)
         effective_available = (
             round(float(ro_info.get("effective_available", limit_val + rollover_in)), 2)
             if allow_ro
@@ -3901,6 +3988,9 @@ def finance_summary():
             **b,
             "monthly_limit": limit_val,
             "allow_rollover": allow_ro,
+            "category_type": cat_type,
+            "is_savings_category": is_sav_cat,
+            "is_savings_goal_exceeded": is_savings_goal_exceeded,
             "gross_spent": gross_spent,
             "returns_credited": cat_returns,
             "spent": net_spent,
@@ -4345,6 +4435,7 @@ def month_close_status():
         "exceeded_income_projection": leftover_info["exceeded_income_projection"],
         "leftover_categories": leftover_info["leftover_categories"],
         "rollover_categories": leftover_info["rollover_categories"],
+        "savings_goal_categories": leftover_info.get("savings_goal_categories", []),
         "transferred_to_savings": transferred,
         "savings_account_id": closed_row["savings_account_id"] if closed_row else None,
         "savings_accounts": savings_accounts,
@@ -5775,6 +5866,9 @@ def upsert_budget():
     else:
         allow_rollover = 1 if is_spending_money_category(category) else 0
 
+    raw_ctype = (data.get("category_type") or (existing_cat_row["category_type"] if existing_cat_row and "category_type" in existing_cat_row.keys() else "") or "").strip().lower()
+    category_type = raw_ctype if raw_ctype in VALID_CATEGORY_TYPES else _infer_default_category_type(category)
+
     _ensure_category_in_catalog(
         db,
         category,
@@ -5784,9 +5878,11 @@ def upsert_budget():
         allow_rollover=allow_rollover,
     )
     db.execute(
-        "UPDATE category_catalog SET allow_rollover = ?, color = ? WHERE name = ?",
-        (allow_rollover, color, category),
+        "UPDATE category_catalog SET allow_rollover = ?, color = ?, category_type = ? WHERE name = ?",
+        (allow_rollover, color, category_type, category),
     )
+    db.execute("UPDATE budgets SET category_type = ? WHERE category = ?", (category_type, category))
+    db.execute("UPDATE monthly_budgets SET category_type = ? WHERE category = ?", (category_type, category))
     # Ensure the target month is initialized before modifying it
     _ensure_monthly_budgets_for_month(db, target_month)
 
@@ -5927,18 +6023,22 @@ def create_or_restore_category():
     else:
         allow_rollover = 1 if is_spending_money_category(name) else 0
 
+    raw_ctype = (data.get("category_type") or "").strip().lower()
+    category_type = raw_ctype if raw_ctype in VALID_CATEGORY_TYPES else _infer_default_category_type(name)
+
     db = get_db()
     _sync_category_catalog(db)
     db.execute(
         """
-        INSERT INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover)
-        VALUES (?, ?, 0, ?, ?)
+        INSERT INTO category_catalog (name, is_preloaded, is_archived, color, allow_rollover, category_type)
+        VALUES (?, ?, 0, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             is_archived = 0,
             color = excluded.color,
-            allow_rollover = excluded.allow_rollover
+            allow_rollover = excluded.allow_rollover,
+            category_type = excluded.category_type
         """,
-        (name, 1 if name in DEFAULT_CATEGORIES else 0, color, allow_rollover),
+        (name, 1 if name in DEFAULT_CATEGORIES else 0, color, allow_rollover, category_type),
     )
 
     if monthly_limit > 0:
@@ -5988,6 +6088,25 @@ def create_or_restore_category():
     db.commit()
     cat_row = dict(db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone())
     return jsonify(cat_row), 201
+
+
+@finance_bp.route("/categories/type", methods=["PUT"])
+def update_category_type():
+    """Updates `category_type` ('everyday', 'fixed_bill', 'subscription', 'savings') for a category across catalog and budgets."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or data.get("category") or "").strip()
+    raw_type = (data.get("category_type") or "").strip().lower()
+    if not name or raw_type not in VALID_CATEGORY_TYPES:
+        return jsonify({"error": f"Valid category name and category_type ({', '.join( sorted(VALID_CATEGORY_TYPES) )}) are required"}), 400
+
+    db = get_db()
+    _ensure_category_in_catalog(db, name, is_preloaded=1 if name in DEFAULT_CATEGORIES else 0, unarchive=False)
+    db.execute("UPDATE category_catalog SET category_type = ? WHERE name = ?", (raw_type, name))
+    db.execute("UPDATE budgets SET category_type = ? WHERE category = ?", (raw_type, name))
+    db.execute("UPDATE monthly_budgets SET category_type = ? WHERE category = ?", (raw_type, name))
+    db.commit()
+    cat_row = db.execute("SELECT * FROM category_catalog WHERE name = ?", (name,)).fetchone()
+    return jsonify(dict(cat_row) if cat_row else {"name": name, "category_type": raw_type})
 
 
 @finance_bp.route("/categories/rollover", methods=["PUT"])

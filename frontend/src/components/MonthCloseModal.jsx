@@ -150,8 +150,11 @@ export default function MonthCloseModal({
   const projectedIncomeAmt = Number(status?.projected_income || 0);
   const incomeVsProjectedPct = Number(status?.income_vs_projected_pct || 0);
   const exceededIncome = Boolean(status?.exceeded_income_projection && excessIncomeAmt > 0);
-  const leftoverCats = (status?.leftover_categories || []).filter((c) => c.leftover > 0);
+  const leftoverCats = (status?.leftover_categories || []).filter(
+    (c) => c.leftover > 0 && !String(c.category || '').toLowerCase().includes('saving')
+  );
   const rolloverCats = status?.rollover_categories || [];
+  const savingsGoalCats = status?.savings_goal_categories || [];
 
   return (
     <div className="finance-modal-backdrop" onClick={onClose} style={{ zIndex: 1050 }}>
@@ -462,6 +465,34 @@ export default function MonthCloseModal({
                       {rolloverCats.map((r) => r.category).join(', ')} carry forward automatically into next month and
                       are not included in this savings transfer.
                     </div>
+                  </div>
+                )}
+
+                {savingsGoalCats.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: '0.6rem',
+                      padding: '0.7rem 0.9rem',
+                      borderRadius: '10px',
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      border: '1px solid rgba(16, 185, 129, 0.35)',
+                      fontSize: '0.8rem',
+                      color: 'var(--text-main)',
+                    }}
+                  >
+                    {savingsGoalCats.map((sg) => (
+                      <div key={sg.category} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span>
+                          <strong>{sg.category} Allocation:</strong> Put{' '}
+                          <strong style={{ color: '#10b981' }}>${fmtMoney(sg.contributed)}</strong> into savings (Target: ${fmtMoney(sg.monthly_limit)})
+                        </span>
+                        {sg.is_exceeded && (
+                          <span className="pill pill-green" style={{ fontSize: '0.7rem', fontWeight: 700 }}>
+                            🎉 Exceeded goal by +${fmtMoney(sg.exceeded_by)}!
+                          </span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

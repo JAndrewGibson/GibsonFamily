@@ -1384,6 +1384,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
     onDataChanged?.();
   };
 
+  const handleUpdateCategoryType = async (catName, nextType) => {
+    await apiFetch('/api/finance/categories/type', {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: catName,
+        category_type: nextType,
+      }),
+    });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
   const handleRenameOrMergeCategory = async (oldName) => {
     const cleanTarget = renameCatTarget.trim();
     if (!cleanTarget || cleanTarget === oldName) {
@@ -3067,9 +3079,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
           ) : (
             <div className="budgets-stack">
               {sortedBudgets.map((b) => {
+                const isSavingsCat = Boolean(
+                  b.is_savings_category ||
+                  b.category_type === 'savings' ||
+                  (b.category || '').toLowerCase().includes('saving')
+                );
                 const over = b.spent > b.monthly_limit && b.monthly_limit > 0;
                 const isUsingRollover = Boolean(b.allow_rollover && b.is_using_rollover);
-                const isInDebt = b.allow_rollover ? Boolean(b.is_in_debt) : over;
+                const isInDebt = isSavingsCat ? false : (b.allow_rollover ? Boolean(b.is_in_debt) : over);
                 const fillClass = isUsingRollover
                   ? 'fill-rainbow'
                   : isInDebt
@@ -3080,6 +3097,33 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                     <div className="budget-row-top">
                       <div>
                         <strong>{b.category}</strong>
+                        {isSavingsCat && (
+                          <span
+                            className="pill pill-green"
+                            style={{ marginLeft: '0.4rem', fontSize: '0.68rem' }}
+                            title="Savings allocation category — going over means you saved even more than planned!"
+                          >
+                            {over ? '🎉 Goal Exceeded!' : '🐷 Savings Goal'}
+                          </span>
+                        )}
+                        {!isSavingsCat && b.category_type === 'fixed_bill' && (
+                          <span
+                            className="pill pill-outline"
+                            style={{ marginLeft: '0.4rem', fontSize: '0.66rem' }}
+                            title="Fixed bill / rent / utility — excluded from recap peak shopping day & biggest purchase"
+                          >
+                            📅 Fixed Bill
+                          </span>
+                        )}
+                        {!isSavingsCat && b.category_type === 'subscription' && (
+                          <span
+                            className="pill pill-outline"
+                            style={{ marginLeft: '0.4rem', fontSize: '0.66rem' }}
+                            title="Recurring subscription — excluded from recap peak shopping day & biggest purchase"
+                          >
+                            🔁 Subscription
+                          </span>
+                        )}
                         {b.allow_rollover && (
                           <span
                             className={`pill ${isUsingRollover ? 'pill-rainbow' : isInDebt ? 'pill-red' : 'pill-purple'}`}
@@ -3147,6 +3191,12 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                         <span className="text-danger" style={{ fontWeight: 600 }}>
                           -${Math.abs(Number(b.rollover_out || 0)).toFixed(2)} negative rollover debt to be paid on this category (stays red until positive)
                         </span>
+                      ) : isSavingsCat && over ? (
+                        <span className="text-green" style={{ fontWeight: 700 }}>
+                          🎉 Put +${Math.abs(b.remaining).toFixed(2)} MORE into savings than your ${formatBudgetAmt(b.monthly_limit)} goal!
+                        </span>
+                      ) : isSavingsCat ? (
+                        `$${b.remaining.toFixed(2)} remaining toward ${formatShortMonth(selectedMonth)} savings target`
                       ) : over ? (
                         `Over budget by $${Math.abs(b.remaining).toFixed(2)} in ${formatShortMonth(selectedMonth)}`
                       ) : (
@@ -3797,6 +3847,18 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                 >
                                   <RefreshCw size={12} /> {cat.allow_rollover ? 'Rollover: ON' : 'Rollover: OFF'}
                                 </button>
+                                <select
+                                  className="input input-sm"
+                                  style={{ width: 'auto', minWidth: '140px', height: '28px', fontSize: '0.74rem', padding: '0.15rem 0.45rem' }}
+                                  value={cat.category_type || 'everyday'}
+                                  onChange={(e) => handleUpdateCategoryType(cat.name, e.target.value)}
+                                  title="Category Type: Fixed bills and subscriptions are excluded from recap biggest purchase, peak day & no-spend days"
+                                >
+                                  <option value="everyday">Type: Everyday / Shopping</option>
+                                  <option value="fixed_bill">Type: Fixed Bill / Rent / Utility</option>
+                                  <option value="subscription">Type: Subscription</option>
+                                  <option value="savings">Type: Savings Allocation</option>
+                                </select>
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-xs"

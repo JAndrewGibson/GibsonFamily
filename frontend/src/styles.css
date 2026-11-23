@@ -7621,3 +7621,176 @@ html[data-theme='light'] .splendor-wager-badge {
     padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
   }
 }
+
+/* =====================================================================
+   Gamified Badge Slam Ceremony, Confetti & Fireworks FX
+   ===================================================================== */
+.recap-fx-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 40;
+}
+
+@keyframes recapConfettiFall {
+  0% {
+    transform: translateY(-24px) rotate(0deg) scale(0.8);
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(680px) rotate(640deg) scale(1);
+    opacity: 0;
+  }
+}
+
+.recap-confetti-piece {
+  position: absolute;
+  top: -20px;
+  border-radius: 2px;
+  animation-name: recapConfettiFall;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+}
+
+.recap-firework-origin {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+@keyframes recapFireworkShoot {
+  0% {
+    transform: rotate(var(--ray-angle)) translateY(0) scale(0.4);
+    opacity: 1;
+  }
+  65% {
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(var(--ray-angle)) translateY(-68px) scale(0.1);
+    opacity: 0;
+  }
+}
+
+.recap-firework-spark {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 14px;
+  border-radius: 999px;
+  transform-origin: center center;
+  animation: recapFireworkShoot 0.95s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes badgeCrashDown {
+  0% {
+    transform: translateY(-210px) scale(3.5) rotate(-14deg);
+    opacity: 0;
+    filter: drop-shadow(0 30px 30px rgba(0, 0, 0, 0.8));
+  }
+  55% {
+    transform: translateY(8px) scale(0.84) rotate(4deg);
+    opacity: 1;
+    filter: drop-shadow(0 0 28px rgba(251, 191, 36, 0.95));
+  }
+  75% {
+    transform: translateY(-6px) scale(1.12) rotate(-2deg);
+  }
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+    opacity: 1;
+    filter: drop-shadow(0 0 18px rgba(16, 185, 129, 0.75));
+  }
+}
+
+@keyframes badgeShockwave {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 0.95;
+    border-width: 6px;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.8);
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+@keyframes recapSlamShake {
+  0%, 100% {
+    transform: translate(0, 0);
+  }
+  48% {
+    transform: translate(0, 0);
+  }
+  54% {
+    transform: translate(-6px, 7px);
+  }
+  60% {
+    transform: translate(6px, -5px);
+  }
+  66% {
+    transform: translate(-4px, 3px);
+  }
+  72% {
+    transform: translate(3px, -2px);
+  }
+}
+
+@keyframes badgeLockIntoSlot {
+  0% {
+    transform: scale(1.38);
+    box-shadow: 0 0 36px rgba(251, 191, 36, 0.95), inset 0 0 18px rgba(251, 191, 36, 0.65);
+  }
+  60% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
+  }
+}
+
+.recap-slam-shake {
+  animation: recapSlamShake 0.65s ease-out;
+}
+
+.badge-slam-stage {
+  position: relative;
+  text-align: center;
+  padding: 1.15rem 1rem;
+  border-radius: 18px;
+  background: radial-gradient(circle at center, rgba(251, 191, 36, 0.22) 0%, rgba(99, 102, 241, 0.18) 55%, rgba(15, 23, 42, 0.85) 100%);
+  border: 1.5px solid rgba(251, 191, 36, 0.55);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 28px rgba(251, 191, 36, 0.22);
+  overflow: hidden;
+}
+
+.badge-crash-icon {
+  font-size: 3.4rem;
+  line-height: 1;
+  display: inline-block;
+  animation: badgeCrashDown 0.58s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.badge-shockwave-ring {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 4px solid #fbbf24;
+  pointer-events: none;
+  animation: badgeShockwave 0.75s ease-out 0.28s forwards;
+  opacity: 0;
+}
+
+.badge-slot-just-slammed {
+  animation: badgeLockIntoSlot 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
