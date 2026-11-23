@@ -635,6 +635,159 @@ function PositiveBackdropOverlay({ level, isFadingOut }) {
   );
 }
 
+function GetBackOnTrackModal({ isOpen, onClose, onReviewCategories }) {
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="finance-modal-backdrop"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      style={{ zIndex: 1200 }}
+    >
+      <div
+        className="finance-modal-card finance-modal-lg"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: '540px',
+          maxHeight: '88vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div className="finance-modal-header">
+          <div>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', margin: 0 }}>
+              <ShieldCheck size={20} color="#10b981" />
+              A Rough Month Doesn&apos;t Define You
+            </h3>
+            <p className="text-muted" style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem' }}>
+              One off-track month is feedback, not a character flaw.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-icon-subtle"
+            onClick={onClose}
+            aria-label="Close get back on track guide"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div
+          className="finance-modal-body"
+          style={{
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.95rem',
+            lineHeight: 1.55,
+            fontSize: '0.9rem',
+          }}
+        >
+          <div
+            style={{
+              padding: '0.9rem 1rem',
+              borderRadius: '12px',
+              background: 'rgba(16, 185, 129, 0.1)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+            }}
+          >
+            <p style={{ margin: '0 0 0.55rem 0' }}>
+              Seeing red badges can make you want to close the app and avoid looking at your numbers altogether. That&apos;s normal—but{' '}
+              <strong>you are not a bad person, and you aren&apos;t &ldquo;bad with money.&rdquo;</strong> You just made a few financial choices this month that didn&apos;t line up with your goals.
+            </p>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              There&apos;s a big difference between <em>&ldquo;I messed up&rdquo;</em> and <em>&ldquo;I made a choice I want to handle differently next time.&rdquo;</em> The first one makes you feel stuck. The second one puts you back in the driver&apos;s seat.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ fontWeight: 800, fontSize: '0.92rem' }}>3 Practical Steps to Reset Together</div>
+
+            <div
+              style={{
+                padding: '0.8rem 0.9rem',
+                borderRadius: '12px',
+                background: 'var(--bg-panel)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                1. Walk through your categories with curiosity, not blame
+              </div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                Open your Category Budgets and look at the 1–2 categories that went over. Ask a simple question:{' '}
+                <em>Was this a one-time surprise, an impulse habit, or a budget limit that&apos;s too tight for real life?</em>{' '}
+                If life costs more right now, adjust the limit honestly instead of setting yourself up to fail again.
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: '0.8rem 0.9rem',
+                borderRadius: '12px',
+                background: 'var(--bg-panel)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                2. Make one concrete plan for the future
+              </div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
+                Vague promises (&ldquo;we&apos;ll spend less&rdquo;) rarely stick. Pick <strong>one specific move</strong> for next month:
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '1.15rem', fontSize: '0.83rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <li>Rebalance a category limit before the 1st of the month</li>
+                <li>Set a 24-hour pause rule on non-essential purchases over a set amount</li>
+                <li>Use Rollover on uneven categories so one big week doesn&apos;t derail the whole month</li>
+              </ul>
+            </div>
+
+            <div
+              style={{
+                padding: '0.8rem 0.9rem',
+                borderRadius: '12px',
+                background: 'var(--bg-panel)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                3. Do a quick 5-minute partner check-in
+              </div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                Silence makes money stress heavier. Talk through what felt hard this month, agree on your one adjustment together, and let the rest go. Every 1st of the month is a clean slate—and your next{' '}
+                <strong>Clean Sheet</strong> streak starts with just one intentional month.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="finance-modal-footer"
+          style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}
+        >
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            I&apos;ve Got This
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onReviewCategories}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+          >
+            Review Category Budgets
+            <ArrowRight size={15} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MonthRecapModal({
   isOpen,
   onClose,
@@ -646,6 +799,7 @@ export default function MonthRecapModal({
   const [slideIndex, setSlideIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [badgeFilter, setBadgeFilter] = useState('all');
+  const [showBackOnTrack, setShowBackOnTrack] = useState(false);
   const [ceremonyPhase, setCeremonyPhase] = useState('done'); // 'intro' | 'slam' | 'collapsing' | 'done'
   const [ceremonyMode, setCeremonyMode] = useState('positive'); // 'positive' | 'shame'
   const [chainShameAfter, setChainShameAfter] = useState(false);
@@ -1834,6 +1988,28 @@ export default function MonthRecapModal({
                     ))}
                   </div>
 
+                  {(unlockedShameList.length > 0 || badgeFilter === 'shame') && (
+                    <div style={{ textAlign: 'center', marginTop: '-0.15rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowBackOnTrack(true)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: '0.3rem 0.5rem',
+                          color: '#fca5a5',
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          textDecoration: 'underline',
+                          textUnderlineOffset: '3px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        What to actually do to get back on track.
+                      </button>
+                    </div>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.55rem' }}>
                     {filteredBadges.map((b) => {
                       const isShame = Boolean(b.is_shame);
@@ -2153,6 +2329,17 @@ export default function MonthRecapModal({
           </button>
         </div>
       </div>
+      <GetBackOnTrackModal
+        isOpen={showBackOnTrack}
+        onClose={() => setShowBackOnTrack(false)}
+        onReviewCategories={() => {
+          setShowBackOnTrack(false);
+          onClose();
+          setTimeout(() => {
+            document.querySelector('.category-budgets-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 120);
+        }}
+      />
     </div>
   );
 }
@@ -2163,6 +2350,7 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
   const [recap, setRecap] = useState(null);
   const [filter, setFilter] = useState('all');
   const [familyFilter, setFamilyFilter] = useState('all');
+  const [showBackOnTrack, setShowBackOnTrack] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !selectedMonth) return;
@@ -2254,6 +2442,28 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
               ))}
             </select>
           </div>
+
+          {(filter === 'shame' || badges.some((b) => b.is_shame && b.unlocked)) && (
+            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+              <button
+                type="button"
+                onClick={() => setShowBackOnTrack(true)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: '0.2rem 0',
+                  color: '#f87171',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  textDecoration: 'underline',
+                  textUnderlineOffset: '3px',
+                  cursor: 'pointer',
+                }}
+              >
+                What to actually do to get back on track.
+              </button>
+            </div>
+          )}
 
           {loading ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -2365,6 +2575,18 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
           )}
         </div>
       </div>
+
+      <GetBackOnTrackModal
+        isOpen={showBackOnTrack}
+        onClose={() => setShowBackOnTrack(false)}
+        onReviewCategories={() => {
+          setShowBackOnTrack(false);
+          onClose();
+          setTimeout(() => {
+            document.querySelector('.category-budgets-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 120);
+        }}
+      />
     </div>
   );
 }
