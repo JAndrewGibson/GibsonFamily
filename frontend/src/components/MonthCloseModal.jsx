@@ -55,7 +55,8 @@ export default function MonthCloseModal({
       if (res?.savings_accounts?.length > 0) {
         setSelectedSavingsAccountId(String(res.savings_accounts[0].id));
       }
-      setTransferAmount(res?.leftover_amount ? String(res.leftover_amount) : '0.00');
+      const defaultTransfer = res?.recommended_savings_transfer ?? res?.leftover_amount ?? 0;
+      setTransferAmount(defaultTransfer ? String(defaultTransfer) : '0.00');
     } catch (err) {
       console.error('Failed to load month close status:', err);
     } finally {
@@ -144,6 +145,11 @@ export default function MonthCloseModal({
 
   const isClosed = Boolean(status?.is_closed);
   const leftoverAmt = Number(status?.leftover_amount || 0);
+  const excessIncomeAmt = Number(status?.excess_income || 0);
+  const recommendedTransferAmt = Number(status?.recommended_savings_transfer ?? leftoverAmt);
+  const projectedIncomeAmt = Number(status?.projected_income || 0);
+  const incomeVsProjectedPct = Number(status?.income_vs_projected_pct || 0);
+  const exceededIncome = Boolean(status?.exceeded_income_projection && excessIncomeAmt > 0);
   const leftoverCats = (status?.leftover_categories || []).filter((c) => c.leftover > 0);
   const rolloverCats = status?.rollover_categories || [];
 
@@ -259,6 +265,12 @@ export default function MonthCloseModal({
                   <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '0.2rem', color: '#10b981' }}>
                     ${fmtMoney(status.overview?.total_income || status.total_income)}
                   </div>
+                  {projectedIncomeAmt > 0 && (
+                    <div style={{ fontSize: '0.7rem', color: exceededIncome ? '#10b981' : 'var(--text-muted)', marginTop: '0.15rem', fontWeight: exceededIncome ? 600 : 400 }}>
+                      Proj: ${fmtMoney(projectedIncomeAmt)}
+                      {exceededIncome ? ` (+$${fmtMoney(excessIncomeAmt)} / +${incomeVsProjectedPct}%)` : ''}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ background: 'var(--bg-panel)', padding: '0.75rem 0.9rem', borderRadius: '10px', border: '1px solid var(--border)' }}>
@@ -288,13 +300,38 @@ export default function MonthCloseModal({
                   }}
                 >
                   <div style={{ fontSize: '0.72rem', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 600 }}>
-                    Non-Rollover Leftover
+                    {excessIncomeAmt > 0 ? 'Total Savings Surplus' : 'Non-Rollover Leftover'}
                   </div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 800, marginTop: '0.2rem', color: '#818cf8' }}>
-                    ${fmtMoney(leftoverAmt)}
+                    ${fmtMoney(recommendedTransferAmt)}
                   </div>
                 </div>
               </div>
+
+              {exceededIncome && (
+                <div
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(6, 182, 212, 0.12) 100%)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    borderRadius: '12px',
+                    padding: '0.9rem 1.1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <Sparkles size={22} color="#10b981" style={{ flexShrink: 0 }} />
+                  <div style={{ fontSize: '0.84rem', lineHeight: 1.4 }}>
+                    <strong style={{ color: '#10b981', display: 'block', fontSize: '0.92rem' }}>
+                      Congratulations! You exceeded your savings target!
+                    </strong>
+                    Your actual income (${fmtMoney(status.overview?.total_income || status.total_income)}) beat your
+                    projected income (${fmtMoney(projectedIncomeAmt)}) by{' '}
+                    <strong>+${fmtMoney(excessIncomeAmt)} (+{incomeVsProjectedPct}%)</strong>. Move the full{' '}
+                    <strong>${fmtMoney(recommendedTransferAmt)}</strong> surplus into savings!
+                  </div>
+                </div>
+              )}
 
               {/* CORE INSTRUCTION: Transfer Leftover to Savings */}
               <div
@@ -309,10 +346,12 @@ export default function MonthCloseModal({
                   <PiggyBank size={22} color="#818cf8" />
                   <div>
                     <h4 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                      Transfer Leftover Budget to Savings
+                      {excessIncomeAmt > 0 ? 'Transfer Budget Leftover & Excess Income to Savings' : 'Transfer Leftover Budget to Savings'}
                     </h4>
                     <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      You came in under budget across non-rollover categories! Move this specific leftover into savings.
+                      {excessIncomeAmt > 0
+                        ? 'Move both your unspent non-rollover categories and your extra income above projection into savings.'
+                        : 'You came in under budget across non-rollover categories! Move this specific leftover into savings.'}
                     </p>
                   </div>
                 </div>
@@ -371,15 +410,33 @@ export default function MonthCloseModal({
                         padding: '0.65rem 0.85rem',
                         background: 'var(--bg-panel)',
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        fontWeight: 700,
-                        fontSize: '0.88rem',
+                        flexDirection: 'column',
+                        gap: '0.35rem',
+                        fontSize: '0.86rem',
                       }}
                     >
-                      <span>Total Non-Rollover Leftover:</span>
-                      <span style={{ color: '#818cf8', fontSize: '1.05rem' }}>${fmtMoney(leftoverAmt)}</span>
+                      {excessIncomeAmt > 0 && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            <span>Non-Rollover Category Leftover:</span>
+                            <span>+${fmtMoney(leftoverAmt)}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#10b981', fontWeight: 600 }}>
+                            <span>Excess Income Above Projected:</span>
+                            <span>+${fmtMoney(excessIncomeAmt)}</span>
+                          </div>
+                        </>
+                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.88rem' }}>
+                        <span>{excessIncomeAmt > 0 ? 'Total Recommended Savings Transfer:' : 'Total Non-Rollover Leftover:'}</span>
+                        <span style={{ color: '#818cf8', fontSize: '1.05rem' }}>${fmtMoney(recommendedTransferAmt)}</span>
+                      </div>
                     </div>
+                  </div>
+                ) : excessIncomeAmt > 0 ? (
+                  <div style={{ margin: '0.75rem 0', padding: '0.75rem 0.85rem', background: 'var(--bg-card)', borderRadius: '10px', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.88rem' }}>
+                    <span style={{ color: '#10b981' }}>Excess Income Above Projected:</span>
+                    <span style={{ color: '#818cf8', fontSize: '1.05rem' }}>${fmtMoney(excessIncomeAmt)}</span>
                   </div>
                 ) : (
                   <div style={{ margin: '0.75rem 0', padding: '0.75rem', background: 'var(--bg-card)', borderRadius: '8px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
@@ -409,7 +466,7 @@ export default function MonthCloseModal({
                 )}
 
                 {/* Savings Destination & Transfer Action */}
-                {!isClosed && leftoverAmt > 0 && (
+                {!isClosed && recommendedTransferAmt > 0 && (
                   <div
                     style={{
                       marginTop: '0.85rem',

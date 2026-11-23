@@ -422,6 +422,7 @@ def update_partner(partner_id: int):
     if not partner:
         return jsonify({"error": "Partner not found"}), 404
 
+    name = data.get("name", partner["name"]).strip()
     old_name = partner["name"]
     name = data.get("name", old_name).strip()
     email = data.get("email", partner["email"] or "").strip().lower()

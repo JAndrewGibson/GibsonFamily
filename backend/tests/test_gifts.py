@@ -171,3 +171,43 @@ def test_gift_90_day_limit_ledger_hiding_and_budget_sums(client):
     )
     assert res_unmark.status_code == 200
     assert res_unmark.get_json()["is_gift"] is False
+
+
+def test_month_close_excess_income_above_projected(client):
+    alex_id, alex_hdr, sam_id, sam_hdr = _setup_two_partners(client)
+
+    # Prior month (2026-10) earned $4,000 -> sets projected income for 2026-11 to $4,000
+    client.post(
+        "/api/finance/income",
+        headers=alex_hdr,
+        json={"source_name": "Salary", "amount": 4000.0, "income_type": "payroll", "budget_month": "2026-10", "date": "2026-10-01"},
+    )
+    # Current month (2026-11) earned $5,200 ($1,200 excess above projected!)
+    client.post(
+        "/api/finance/income",
+        headers=alex_hdr,
+        json={"source_name": "Salary + Bonus", "amount": 5200.0, "income_type": "payroll", "budget_month": "2026-11", "date": "2026-11-01"},
+    )
+    client.post(
+        "/api/finance/budgets",
+        headers=alex_hdr,
+        json={"category": "Groceries & Dining", "monthly_limit": 500.0, "budget_month": "2026-11", "allow_rollover": 0},
+    )
+    client.post(
+        "/api/finance/transactions",
+        headers=alex_hdr,
+        json={"name": "Market", "amount": 350.0, "date": "2026-11-05", "budget_month": "2026-11", "category": "Groceries & Dining"},
+    )
+
+    mc = client.get("/api/finance/month-close-status?month=2026-11", headers=alex_hdr).get_json()
+    assert mc["projected_income"] == 4000.0
+    assert mc["total_income"] == 5200.0
+    assert mc["income_vs_projected"] == 1200.0
+    assert mc["excess_income"] == 1200.0
+    assert mc["exceeded_income_projection"] is True
+    assert mc["leftover_amount"] == 150.0
+    assert mc["recommended_savings_transfer"] == 1350.0
+    assert mc["recap"]["overview"]["projected_income"] == 4000.0
+    assert mc["recap"]["overview"]["total_income"] == 5200.0
+    assert mc["recap"]["overview"]["recommended_savings_transfer"] == 1350.0
+

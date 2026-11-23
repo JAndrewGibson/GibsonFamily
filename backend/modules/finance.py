@@ -1087,6 +1087,45 @@ def get_month_close_eligibility(ym: str, ref_date: date | None = None) -> tuple[
     return is_eligible, max(0, days_left), notif_date.isoformat()
 
 
+def _compute_projected_income_for_month(db, ym: str, current_month_income: float = 0.0) -> float:
+    """Computes projected income for `ym` using custom override, trailing 6 active prior months, or expected fallback."""
+    proj_row = db.execute(
+        "SELECT custom_projected_income FROM monthly_income_projections WHERE budget_month = ?",
+        (ym,),
+    ).fetchone()
+    if proj_row and proj_row["custom_projected_income"] is not None and float(proj_row["custom_projected_income"]) > 0:
+        return round(float(proj_row["custom_projected_income"]), 2)
+
+    prior_rows = db.execute(
+        """
+        SELECT COALESCE(NULLIF(budget_month, ''), substr(date, 1, 7)) AS bm,
+               income_type,
+               amount,
+               expected_monthly_amount
+        FROM income_entries
+        """
+    ).fetchall()
+    income_by_m = {}
+    expected_in_ym = 0.0
+    for r in prior_rows:
+        bm = (r["bm"] or "").strip()[:7]
+        itype = (r["income_type"] or "payroll").strip().lower()
+        if not is_real_earned_income(itype):
+            continue
+        amt = float(r["amount"] or 0.0)
+        if bm < ym and amt > 0:
+            income_by_m[bm] = income_by_m.get(bm, 0.0) + amt
+        elif bm == ym:
+            expected_in_ym += float(r["expected_monthly_amount"] or 0.0)
+
+    prior_active = sorted(income_by_m.keys())[-6:]
+    if prior_active:
+        return round(sum(income_by_m[m] for m in prior_active) / len(prior_active), 2)
+    if expected_in_ym > 0:
+        return round(expected_in_ym, 2)
+    return round(float(current_month_income or 0.0), 2)
+
+
 def _compute_month_leftover_data(db, ym: str) -> dict:
     """
     Calculates specific leftover amounts for non-rollover categories (instructed to transfer to savings),
@@ -1193,9 +1232,25 @@ def _compute_month_leftover_data(db, ym: str) -> dict:
             })
 
     net_cashflow = round(total_income - total_spend, 2)
+    projected_income = _compute_projected_income_for_month(db, ym, total_income)
+    income_vs_projected = round(total_income - projected_income, 2)
+    income_vs_projected_pct = (
+        round((income_vs_projected / projected_income) * 100, 1)
+        if projected_income > 0
+        else 0.0
+    )
+    excess_income = round(max(0.0, income_vs_projected), 2)
+    exceeded_income_projection = bool(projected_income > 0 and income_vs_projected > 0)
+    recommended_savings_transfer = round(total_leftover + excess_income, 2)
     return {
         "budget_month": ym,
         "total_leftover": round(total_leftover, 2),
+        "excess_income": excess_income,
+        "recommended_savings_transfer": recommended_savings_transfer,
+        "projected_income": projected_income,
+        "income_vs_projected": income_vs_projected,
+        "income_vs_projected_pct": income_vs_projected_pct,
+        "exceeded_income_projection": exceeded_income_projection,
         "leftover_categories": leftover_categories,
         "rollover_categories": rollover_categories,
         "total_income": round(total_income, 2),
@@ -1617,6 +1672,12 @@ def _build_algorithmic_month_recap(db, ym: str) -> dict:
         "persona": persona,
         "overview": {
             "total_income": this_income,
+            "projected_income": this_leftover["projected_income"],
+            "income_vs_projected": this_leftover["income_vs_projected"],
+            "income_vs_projected_pct": this_leftover["income_vs_projected_pct"],
+            "excess_income": this_leftover["excess_income"],
+            "exceeded_income_projection": this_leftover["exceeded_income_projection"],
+            "recommended_savings_transfer": this_leftover["recommended_savings_transfer"],
             "total_spent": this_spent,
             "net_cashflow": net_cashflow,
             "savings_rate_pct": savings_rate_pct,
@@ -3590,10 +3651,18 @@ def month_close_status():
         },
         {
             "id": "transfer_leftover",
-            "title": f"Transfer ${leftover_info['total_leftover']:.2f} leftover to savings",
+            "title": f"Transfer ${leftover_info['recommended_savings_transfer']:.2f} surplus to savings",
             "status": "completed" if transferred else "action_needed",
-            "amount": leftover_info["total_leftover"],
-            "details": f"Move unspent ${leftover_info['total_leftover']:.2f} from non-rollover categories into your savings account." if leftover_info["total_leftover"] > 0 else "No leftover budget surplus this month.",
+            "amount": leftover_info["recommended_savings_transfer"],
+            "details": (
+                f"Move ${leftover_info['total_leftover']:.2f} unspent budget + ${leftover_info['excess_income']:.2f} excess income into savings!"
+                if leftover_info["excess_income"] > 0
+                else (
+                    f"Move unspent ${leftover_info['total_leftover']:.2f} from non-rollover categories into your savings account."
+                    if leftover_info["total_leftover"] > 0
+                    else "No leftover budget surplus this month."
+                )
+            ),
         },
         {
             "id": "partner_rollovers",
@@ -3637,6 +3706,13 @@ def month_close_status():
         "days_until_eligible": days_until_eligible,
         "notification_date": notif_date_str,
         "leftover_amount": leftover_info["total_leftover"],
+        "excess_income": leftover_info["excess_income"],
+        "recommended_savings_transfer": leftover_info["recommended_savings_transfer"],
+        "projected_income": leftover_info["projected_income"],
+        "total_income": leftover_info["total_income"],
+        "income_vs_projected": leftover_info["income_vs_projected"],
+        "income_vs_projected_pct": leftover_info["income_vs_projected_pct"],
+        "exceeded_income_projection": leftover_info["exceeded_income_projection"],
         "leftover_categories": leftover_info["leftover_categories"],
         "rollover_categories": leftover_info["rollover_categories"],
         "transferred_to_savings": transferred,

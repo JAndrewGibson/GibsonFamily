@@ -407,6 +407,14 @@ export default function MonthRecapModal({
                       <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#10b981', marginTop: '0.2rem' }}>
                         ${fmtMoney(overview.total_income)}
                       </div>
+                      {Number(overview.projected_income || 0) > 0 && (
+                        <div style={{ fontSize: '0.72rem', color: overview.exceeded_income_projection ? '#10b981' : 'var(--text-muted)', marginTop: '0.2rem', fontWeight: overview.exceeded_income_projection ? 700 : 400 }}>
+                          Projected: ${fmtMoney(overview.projected_income)}
+                          {overview.exceeded_income_projection && Number(overview.excess_income || 0) > 0
+                            ? ` (+$${fmtMoney(overview.excess_income)} / +${overview.income_vs_projected_pct}%)`
+                            : ''}
+                        </div>
+                      )}
                       {trends.mom_income_trend && (
                         <div style={{ fontSize: '0.72rem', color: '#10b981', marginTop: '0.25rem', fontWeight: 600 }}>
                           {trends.mom_income_trend}
@@ -780,13 +788,17 @@ export default function MonthRecapModal({
                   >
                     <PiggyBank size={40} color="#818cf8" style={{ margin: '0 auto 0.5rem auto' }} />
                     <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#fff' }}>
-                      ${fmtMoney(overview.total_leftover)}
+                      ${fmtMoney(overview.recommended_savings_transfer ?? overview.total_leftover)}
                     </div>
                     <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#c7d2fe', marginTop: '0.35rem' }}>
-                      Non-Rollover Leftover Budget Surplus
+                      {overview.exceeded_income_projection && Number(overview.excess_income || 0) > 0
+                        ? 'Total Savings Surplus (Leftover + Excess Income)'
+                        : 'Non-Rollover Leftover Budget Surplus'}
                     </div>
                     <p style={{ margin: '0.75rem auto 0 auto', maxWidth: '380px', fontSize: '0.84rem', color: 'rgba(255,255,255,0.85)', lineHeight: 1.45 }}>
-                      This surplus was instructed to transfer directly into your high-yield savings account!
+                      {overview.exceeded_income_projection && Number(overview.excess_income || 0) > 0
+                        ? `Congratulations! You earned $${fmtMoney(overview.excess_income)} above projected income and exceeded your savings target!`
+                        : 'This surplus was instructed to transfer directly into your high-yield savings account!'}
                     </p>
                   </div>
 
