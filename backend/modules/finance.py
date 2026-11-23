@@ -46,6 +46,7 @@ DEFAULT_CATEGORIES = [
     "Shopping & Tech",
     "Health & Medical",
     "Travel & Experiences",
+    "Gifts",
     "Future Purchase Savings",
 ]
 
@@ -126,6 +127,56 @@ def is_tx_cc_payment(tx: dict) -> bool:
         return True
     cat = (tx.get("category") or "").strip().lower()
     return cat in CC_PAYMENT_ALIASES
+
+
+def is_gift_addon_enabled(db=None) -> bool:
+    """Returns True if the optional Gift Surprises add-on is enabled in app_settings."""
+    try:
+        conn = db or get_db()
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'gift_addon_enabled'"
+        ).fetchone()
+        return bool(row and str(row["value"]).strip() == "1")
+    except Exception:
+        return False
+
+
+def _validate_gift_reveal_date(purchase_date_str: str, reveal_date_str: str) -> tuple[bool, str]:
+    """Validates that a gift reveal/delivery date is within 0..90 days of the purchase date."""
+    raw_reveal = (reveal_date_str or "").strip()[:10]
+    raw_purchase = (purchase_date_str or date.today().isoformat()).strip()[:10]
+    try:
+        reveal_dt = date.fromisoformat(raw_reveal)
+    except ValueError:
+        return False, "Please choose a valid gift delivery date (YYYY-MM-DD)."
+    try:
+        purchase_dt = date.fromisoformat(raw_purchase)
+    except ValueError:
+        purchase_dt = date.today()
+
+    if reveal_dt < purchase_dt:
+        return False, "Gift delivery date cannot be before the purchase date."
+    if (reveal_dt - purchase_dt).days > 90:
+        return False, "Gift reveal date cannot be more than 90 days from the purchase date."
+    return True, reveal_dt.isoformat()
+
+
+def _is_gift_hidden_for_partner(
+    tx: dict, actor_partner_id: int | None, today_iso: str | None = None
+) -> bool:
+    """Returns True when a gift transaction should be hidden from the viewing partner's ledger."""
+    if not bool(tx.get("is_gift")):
+        return False
+    reveal_date = (tx.get("gift_reveal_date") or "").strip()[:10]
+    if not reveal_date:
+        return False
+    today_str = today_iso or date.today().isoformat()
+    if today_str >= reveal_date:
+        return False
+    buyer_id = tx.get("gift_buyer_partner_id")
+    if actor_partner_id is None or buyer_id is None:
+        return False
+    return int(actor_partner_id) != int(buyer_id)
 
 
 def classify_savings_account(acc: dict) -> dict:
@@ -2672,9 +2723,51 @@ def delete_plaid_item(item_identifier: str):
     })
 
 
+@finance_bp.route("/gift-addon", methods=["GET", "PUT"])
+def gift_addon_setting():
+    db = get_db()
+    if request.method == "GET":
+        return jsonify({"gift_addon_enabled": is_gift_addon_enabled(db)})
+
+    data = request.get_json(silent=True) or {}
+    was_enabled = is_gift_addon_enabled(db)
+    if "enabled" in data:
+        new_enabled = bool(data["enabled"])
+    else:
+        new_enabled = not was_enabled
+
+    db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('gift_addon_enabled', ?)",
+        ("1" if new_enabled else "0",),
+    )
+    db.commit()
+
+    if new_enabled and not was_enabled:
+        actor = getattr(g, "current_partner", None)
+        actor_name = actor["name"] if actor else "A partner"
+        actor_id = actor["id"] if actor else None
+        for p_row in db.execute("SELECT id FROM partners").fetchall():
+            create_notification(
+                db,
+                recipient_partner_id=p_row["id"],
+                actor_partner_id=actor_id,
+                notif_type="gift_addon_enabled",
+                title="Gift Surprises Add-on Enabled",
+                message=(
+                    f"{actor_name} turned on the Gift Surprises add-on in Budget. "
+                    "Gift transactions still count in all budget totals, but stay hidden from the other partner's ledger until the delivery date."
+                ),
+                link_tab="finance",
+            )
+
+    return jsonify({"gift_addon_enabled": new_enabled})
+
+
 @finance_bp.route("/summary", methods=["GET"])
 def finance_summary():
     db = get_db()
+    actor = getattr(g, "current_partner", None)
+    actor_id = actor["id"] if actor else None
     starting_ym = get_starting_budget_month(db)
     current_ym = max(date.today().strftime("%Y-%m"), starting_ym)
     raw_req_month = (request.args.get("month") or "").strip()[:7]
@@ -2757,6 +2850,14 @@ def finance_summary():
         tx["next_budget_month"] = _shift_year_month(tx["budget_month"], 1)
         tx["is_savings_spend"] = is_tx_savings_spend(tx)
         tx["is_cc_payment"] = is_tx_cc_payment(tx)
+        tx["is_gift"] = bool(tx.get("is_gift"))
+        tx["gift_reveal_date"] = (tx.get("gift_reveal_date") or "").strip()[:10]
+        tx["gift_buyer_partner_id"] = tx.get("gift_buyer_partner_id")
+        tx["is_gift_revealed"] = bool(
+            tx["is_gift"]
+            and tx["gift_reveal_date"]
+            and date.today().isoformat() >= tx["gift_reveal_date"]
+        )
         tx_splits = splits_by_tx.get(tx["id"], [])
         tx["splits"] = tx_splits
         tx["is_split"] = bool(tx.get("is_split")) or len(tx_splits) > 0
@@ -3094,8 +3195,13 @@ def finance_summary():
             "is_using_rollover": sm_using_ro,
             "is_in_debt": sm_in_debt,
             "rollover_ledger": sm_ledger,
-            "transactions": sm_txs,
-            "month_transactions": [t for t in sm_txs if t.get("budget_month") == selected_month],
+            "transactions": [t for t in sm_txs if not _is_gift_hidden_for_partner(t, actor_id)],
+            "month_transactions": [
+                t
+                for t in sm_txs
+                if t.get("budget_month") == selected_month
+                and not _is_gift_hidden_for_partner(t, actor_id)
+            ],
         })
 
     # Mark each transaction with whether its category is currently tracked in its budget month
@@ -3196,7 +3302,18 @@ def finance_summary():
     # Check for month close notification triggers
     check_and_create_month_close_notifications(db)
 
+    visible_month_transactions = [
+        tx for tx in month_transactions if not _is_gift_hidden_for_partner(tx, actor_id)
+    ]
+    visible_all_transactions = [
+        tx for tx in all_transactions if not _is_gift_hidden_for_partner(tx, actor_id)
+    ]
+    visible_savings_transactions = [
+        tx for tx in savings_month_transactions if not _is_gift_hidden_for_partner(tx, actor_id)
+    ]
+
     return jsonify({
+        "gift_addon_enabled": is_gift_addon_enabled(db),
         "starting_budget_month": starting_ym,
         "selected_month": selected_month,
         "current_calendar_month": current_ym,
@@ -3231,7 +3348,7 @@ def finance_summary():
         "total_rollover_spent": total_rollover_spent,
         "total_savings_spent": total_savings_spent,
         "savings_spend_count": len(savings_month_transactions),
-        "savings_transactions": savings_month_transactions,
+        "savings_transactions": visible_savings_transactions,
         "total_monthly_returns": total_monthly_returns,
         "total_cc_payments": total_cc_payments,
         "total_cc_payments_spent": total_cc_payments_spent,
@@ -3268,9 +3385,9 @@ def finance_summary():
         "partner_spending_money": partner_spending_money,
         "rollover_ledgers": ro_ledgers,
         "budgets": enriched_budgets,
-        "transactions": all_transactions if include_all else month_transactions,
-        "month_transaction_count": len(month_transactions),
-        "total_transaction_count": len(all_transactions),
+        "transactions": visible_all_transactions if include_all else visible_month_transactions,
+        "month_transaction_count": len(visible_month_transactions),
+        "total_transaction_count": len(visible_all_transactions),
         "month_close": {
             "budget_month": selected_month,
             "is_closed": bool(closed_row),
@@ -3738,6 +3855,14 @@ def finance_history():
         tx["is_split"] = bool(tx.get("is_split")) or len(tx_splits) > 0
         tx["is_savings_spend"] = is_tx_savings_spend(tx)
         tx["is_cc_payment"] = is_tx_cc_payment(tx)
+        tx["is_gift"] = bool(tx.get("is_gift"))
+        tx["gift_reveal_date"] = (tx.get("gift_reveal_date") or "").strip()[:10]
+        tx["gift_buyer_partner_id"] = tx.get("gift_buyer_partner_id")
+        tx["is_gift_revealed"] = bool(
+            tx["is_gift"]
+            and tx["gift_reveal_date"]
+            and date.today().isoformat() >= tx["gift_reveal_date"]
+        )
 
     starting_ym = get_starting_budget_month(db)
     months_set = {
@@ -4365,12 +4490,26 @@ def create_transaction():
         category = CC_PAYMENT_CATEGORY
 
     db = get_db()
+    is_gift = 1 if bool(data.get("is_gift")) else 0
+    gift_reveal_date = None
+    gift_buyer_partner_id = None
+    if is_gift:
+        if not is_gift_addon_enabled(db):
+            return jsonify({"error": "Gift Surprises add-on is currently disabled. Enable it in Budget Options or Settings."}), 400
+        ok, reveal_or_err = _validate_gift_reveal_date(tx_date, data.get("gift_reveal_date") or "")
+        if not ok:
+            return jsonify({"error": reveal_or_err}), 400
+        gift_reveal_date = reveal_or_err
+        gift_buyer_partner_id = int(actor["id"]) if actor else (int(partner_id) if partner_id else None)
+        is_savings_spend = 0
+        is_cc_payment = 0
+
     if not is_savings_spend and not is_cc_payment and category.lower() != "split":
         _ensure_category_in_catalog(db, category, is_preloaded=1 if category in DEFAULT_CATEGORIES else 0, unarchive=True)
     cur = db.execute(
         """
-        INSERT INTO transactions (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend, is_cc_payment, is_split)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (account_id, savings_account_id, date, budget_month, name, merchant_name, amount, category, partner_id, is_shared, notes, is_pending, is_savings_spend, is_cc_payment, is_split, is_gift, gift_reveal_date, gift_buyer_partner_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(account_id) if account_id else None,
@@ -4388,6 +4527,9 @@ def create_transaction():
             is_savings_spend,
             is_cc_payment,
             0,
+            is_gift,
+            gift_reveal_date,
+            gift_buyer_partner_id,
         ),
     )
     new_id = cur.lastrowid
@@ -4419,6 +4561,12 @@ def create_transaction():
     )
     tx["is_savings_spend"] = is_tx_savings_spend(tx)
     tx["is_cc_payment"] = is_tx_cc_payment(tx)
+    tx["is_gift"] = bool(tx.get("is_gift"))
+    tx["gift_reveal_date"] = (tx.get("gift_reveal_date") or "").strip()[:10]
+    tx["gift_buyer_partner_id"] = tx.get("gift_buyer_partner_id")
+    tx["is_gift_revealed"] = bool(
+        tx["is_gift"] and tx["gift_reveal_date"] and date.today().isoformat() >= tx["gift_reveal_date"]
+    )
     tx["splits"] = []
     tx["is_split"] = False
     return jsonify(tx), 201
@@ -4532,12 +4680,47 @@ def update_transaction(tx_id: int):
 
     new_is_pending = (1 if data["is_pending"] else 0) if "is_pending" in data else existing["is_pending"]
 
+    # 4. Gift Surprise Handling
+    actor = getattr(g, "current_partner", None)
+    if "is_gift" in data:
+        if bool(data["is_gift"]):
+            if not is_gift_addon_enabled(db):
+                return jsonify({"error": "Gift Surprises add-on is currently disabled. Enable it in Budget Options or Settings."}), 400
+            ok, reveal_or_err = _validate_gift_reveal_date(
+                existing["date"], data.get("gift_reveal_date") or ""
+            )
+            if not ok:
+                return jsonify({"error": reveal_or_err}), 400
+            new_is_gift = 1
+            new_gift_reveal_date = reveal_or_err
+            new_gift_buyer_partner_id = (
+                actor["id"]
+                if actor
+                else (existing["gift_buyer_partner_id"] or existing["partner_id"])
+            )
+            new_is_savings_spend = 0
+            new_is_cc_payment = 0
+            new_is_split = 0
+            db.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+        else:
+            new_is_gift = 0
+            new_gift_reveal_date = None
+            new_gift_buyer_partner_id = None
+    else:
+        new_is_gift = int(existing["is_gift"] or 0)
+        new_gift_reveal_date = existing["gift_reveal_date"]
+        new_gift_buyer_partner_id = existing["gift_buyer_partner_id"]
+        if new_is_savings_spend or new_is_cc_payment:
+            new_is_gift = 0
+            new_gift_reveal_date = None
+            new_gift_buyer_partner_id = None
+
     if not new_is_savings_spend and not new_is_cc_payment and new_category.lower() != "split":
         _ensure_category_in_catalog(db, new_category, is_preloaded=1 if new_category in DEFAULT_CATEGORIES else 0, unarchive=True)
     db.execute(
         """
         UPDATE transactions
-        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, savings_account_id = ?, is_pending = ?, is_savings_spend = ?, is_cc_payment = ?, is_split = ?
+        SET category = ?, budget_month = ?, notes = ?, name = ?, account_id = ?, savings_account_id = ?, is_pending = ?, is_savings_spend = ?, is_cc_payment = ?, is_split = ?, is_gift = ?, gift_reveal_date = ?, gift_buyer_partner_id = ?
         WHERE id = ?
         """,
         (
@@ -4551,6 +4734,9 @@ def update_transaction(tx_id: int):
             new_is_savings_spend,
             new_is_cc_payment,
             new_is_split,
+            new_is_gift,
+            new_gift_reveal_date,
+            new_gift_buyer_partner_id,
             tx_id,
         ),
     )
@@ -4572,6 +4758,14 @@ def update_transaction(tx_id: int):
     )
     updated["is_savings_spend"] = is_tx_savings_spend(updated)
     updated["is_cc_payment"] = is_tx_cc_payment(updated)
+    updated["is_gift"] = bool(updated.get("is_gift"))
+    updated["gift_reveal_date"] = (updated.get("gift_reveal_date") or "").strip()[:10]
+    updated["gift_buyer_partner_id"] = updated.get("gift_buyer_partner_id")
+    updated["is_gift_revealed"] = bool(
+        updated["is_gift"]
+        and updated["gift_reveal_date"]
+        and date.today().isoformat() >= updated["gift_reveal_date"]
+    )
     split_rows = db.execute(
         "SELECT id, transaction_id, category, amount, notes FROM transaction_splits WHERE transaction_id = ? ORDER BY id ASC",
         (tx_id,),

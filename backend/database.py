@@ -150,9 +150,13 @@ CREATE TABLE IF NOT EXISTS transactions (
     is_savings_spend INTEGER NOT NULL DEFAULT 0,
     is_cc_payment INTEGER NOT NULL DEFAULT 0,
     is_split INTEGER NOT NULL DEFAULT 0,
+    is_gift INTEGER NOT NULL DEFAULT 0,
+    gift_reveal_date TEXT,
+    gift_buyer_partner_id INTEGER,
     FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL,
     FOREIGN KEY (savings_account_id) REFERENCES accounts (id) ON DELETE SET NULL,
-    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+    FOREIGN KEY (gift_buyer_partner_id) REFERENCES partners (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS transaction_splits (
@@ -637,6 +641,12 @@ def _ensure_schema_migrations(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE transactions ADD COLUMN is_cc_payment INTEGER NOT NULL DEFAULT 0")
     if "is_split" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN is_split INTEGER NOT NULL DEFAULT 0")
+    if "is_gift" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN is_gift INTEGER NOT NULL DEFAULT 0")
+    if "gift_reveal_date" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN gift_reveal_date TEXT")
+    if "gift_buyer_partner_id" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN gift_buyer_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL")
     if "savings_account_id" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN savings_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL")
     db.execute(
@@ -936,6 +946,7 @@ def _ensure_module_definitions(db: sqlite3.Connection) -> None:
         "state_version": str(int(time.time() * 1000)),
         "plaid_banner_dismissed": "0",
         "last_plaid_sync_at": "",
+        "gift_addon_enabled": "0",
     }
     for k, v in defaults.items():
         row = db.execute("SELECT value FROM app_settings WHERE key = ?", (k,)).fetchone()

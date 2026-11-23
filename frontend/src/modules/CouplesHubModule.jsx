@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   CheckSquare,
   Fingerprint,
+  Gift,
   Layers,
   Plus,
   RotateCcw,
@@ -250,6 +251,31 @@ export function ModuleManagerSubModule({
   );
   const [savingStartMonth, setSavingStartMonth] = useState(false);
   const [startMonthSavedMsg, setStartMonthSavedMsg] = useState('');
+  const [giftAddonEnabled, setGiftAddonEnabled] = useState(false);
+  const [togglingGiftAddon, setTogglingGiftAddon] = useState(false);
+
+  useEffect(() => {
+    apiFetch('/api/finance/gift-addon')
+      .then((res) => setGiftAddonEnabled(Boolean(res?.gift_addon_enabled)))
+      .catch(() => {});
+  }, []);
+
+  const handleToggleGiftAddon = async () => {
+    if (togglingGiftAddon) return;
+    setTogglingGiftAddon(true);
+    try {
+      const res = await apiFetch('/api/finance/gift-addon', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !giftAddonEnabled }),
+      });
+      setGiftAddonEnabled(Boolean(res?.gift_addon_enabled));
+      if (onRefreshState) onRefreshState();
+    } catch {
+      // ignore
+    } finally {
+      setTogglingGiftAddon(false);
+    }
+  };
 
   useEffect(() => {
     setFamilyNameInput(householdName || '');
@@ -558,6 +584,69 @@ export function ModuleManagerSubModule({
                     {mod.enabled ? 'Hide from Sidebar' : 'Enable in Sidebar'}
                   </button>
                 </div>
+
+                {mod.id === 'finance' && (
+                  <div
+                    style={{
+                      marginTop: '1rem',
+                      paddingTop: '0.85rem',
+                      borderTop: '1px solid var(--border)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.55rem',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
+                      Budget Add-ons
+                    </span>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.65rem',
+                        padding: '0.55rem 0.7rem',
+                        borderRadius: '8px',
+                        background: 'var(--bg-panel)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <Gift size={14} style={{ color: '#ec4899' }} />
+                          <strong style={{ fontSize: '0.88rem' }}>Gift Surprises</strong>
+                          <span
+                            className={`pill ${giftAddonEnabled ? 'pill-green' : 'pill-amber'}`}
+                            style={{ fontSize: '0.68rem', padding: '0.1rem 0.45rem' }}
+                          >
+                            {giftAddonEnabled ? 'Active' : 'Disabled'}
+                          </span>
+                          <InfoTip text="Optional Budget add-on: mark partner gift purchases with a category and delivery date (max 90 days). Amounts stay in all budget totals, while the transaction stays hidden from your partner's ledger until the delivery date. Turning this on sends a notification to all users." />
+                        </div>
+                        <small className="text-muted" style={{ display: 'block', fontSize: '0.75rem' }}>
+                          Hide partner gift details on the ledger until delivery date (max 90 days) while keeping budget sums accurate.
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${giftAddonEnabled ? 'btn-secondary' : 'btn-primary'}`}
+                        onClick={handleToggleGiftAddon}
+                        disabled={togglingGiftAddon}
+                        style={{ flexShrink: 0 }}
+                      >
+                        {togglingGiftAddon ? 'Saving...' : giftAddonEnabled ? 'Disable' : 'Activate'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {childModules.length > 0 && (
                   <div

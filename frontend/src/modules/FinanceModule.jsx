@@ -20,6 +20,7 @@ import {
   Edit3,
   FileText,
   Filter,
+  Gift,
   History,
   Key,
   Link2,
@@ -55,6 +56,7 @@ const DEFAULT_CATEGORIES = [
   'Shopping & Tech',
   'Health & Medical',
   'Travel & Experiences',
+  'Gifts',
   'Future Purchase Savings',
 ];
 
@@ -134,6 +136,15 @@ function shiftMonthString(ym, delta) {
   const ny = Math.floor(total / 12);
   const nm = (total % 12) + 1;
   return `${String(ny).padStart(4, '0')}-${String(nm).padStart(2, '0')}`;
+}
+
+function addDaysToIso(isoDate, days) {
+  const base = (isoDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const [y, m, d] = base.split('-').map(Number);
+  if (!y || !m || !d) return base;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
 }
 
 function formatIncomeTypeBadge(type, category = '') {
@@ -349,6 +360,14 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
   const [splitRows, setSplitRows] = useState([]);
   const [splitError, setSplitError] = useState('');
   const [splitSaving, setSplitSaving] = useState(false);
+
+  // Gift Surprise Modal State
+  const [giftTx, setGiftTx] = useState(null);
+  const [giftCategory, setGiftCategory] = useState('Gifts');
+  const [giftRevealDate, setGiftRevealDate] = useState('');
+  const [giftError, setGiftError] = useState('');
+  const [giftSaving, setGiftSaving] = useState(false);
+  const [togglingGiftAddon, setTogglingGiftAddon] = useState(false);
 
   // Transaction Note Modal State
   const [editingNoteTx, setEditingNoteTx] = useState(null);
@@ -824,6 +843,93 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
         fallback_category: 'General',
       }),
     });
+    await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+    onDataChanged?.();
+  };
+
+  const handleToggleGiftAddon = async () => {
+    if (togglingGiftAddon) return;
+    setTogglingGiftAddon(true);
+    try {
+      await apiFetch('/api/finance/gift-addon', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !summary.gift_addon_enabled }),
+      });
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } finally {
+      setTogglingGiftAddon(false);
+    }
+  };
+
+  const handleOpenGiftModal = (tx) => {
+    setOpenMenuTxId(null);
+    setGiftTx(tx);
+    setGiftError('');
+    const fallbackCat =
+      tx.category &&
+      tx.category !== 'Credit Card Payment' &&
+      tx.category !== 'Spent from Savings' &&
+      tx.category !== 'Split'
+        ? tx.category
+        : availableCategories.includes('Gifts')
+          ? 'Gifts'
+          : availableCategories[0] || 'Gifts';
+    setGiftCategory(fallbackCat);
+    setGiftRevealDate(tx.gift_reveal_date || addDaysToIso(tx.date, 7));
+  };
+
+  const handleCloseGiftModal = () => {
+    setGiftTx(null);
+    setGiftError('');
+    setGiftSaving(false);
+  };
+
+  const handleSaveGift = async (e) => {
+    e.preventDefault();
+    if (!giftTx) return;
+    const purchaseDate = (giftTx.date || '').slice(0, 10);
+    const maxDate = addDaysToIso(purchaseDate, 90);
+    if (!giftRevealDate) {
+      setGiftError('Please select a gift delivery / reveal date.');
+      return;
+    }
+    if (giftRevealDate < purchaseDate) {
+      setGiftError('Gift delivery date cannot be before the purchase date.');
+      return;
+    }
+    if (giftRevealDate > maxDate) {
+      setGiftError('Gift reveal date cannot be more than 90 days from the purchase date.');
+      return;
+    }
+    setGiftSaving(true);
+    setGiftError('');
+    try {
+      await apiFetch(`/api/finance/transactions/${giftTx.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          is_gift: true,
+          category: giftCategory,
+          gift_reveal_date: giftRevealDate,
+        }),
+      });
+      handleCloseGiftModal();
+      await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
+      onDataChanged?.();
+    } catch (err) {
+      setGiftError(err?.message || 'Failed to save gift settings.');
+    } finally {
+      setGiftSaving(false);
+    }
+  };
+
+  const handleUnmarkGift = async (tx) => {
+    setOpenMenuTxId(null);
+    await apiFetch(`/api/finance/transactions/${tx.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_gift: false }),
+    });
+    if (giftTx?.id === tx.id) handleCloseGiftModal();
     await loadFinanceData(selectedMonth, showAllMonthsInLedger, true);
     onDataChanged?.();
   };
@@ -2133,6 +2239,35 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                       </small>
                     </div>
                   </button>
+
+                  <div
+                    className="finance-option-item"
+                    style={{ cursor: 'pointer' }}
+                    onClick={handleToggleGiftAddon}
+                  >
+                    <Gift size={16} style={{ color: '#ec4899', flexShrink: 0 }} />
+                    <div className="finance-option-copy">
+                      <div className="request-badges">
+                        <strong>Gift Surprises Add-on</strong>
+                        <span
+                          className={`pill ${summary.gift_addon_enabled ? 'pill-green' : 'pill-outline'}`}
+                          style={{ fontSize: '0.68rem' }}
+                        >
+                          {togglingGiftAddon
+                            ? 'Saving...'
+                            : summary.gift_addon_enabled
+                              ? 'Enabled'
+                              : 'Off'}
+                        </span>
+                        <InfoTip text="Optional add-on: mark a partner gift purchase with a budget category and delivery date (max 90 days). It counts in all budget sums, while hiding the transaction from your partner's ledger until delivery. Turning this on notifies all users." />
+                      </div>
+                      <small>
+                        {summary.gift_addon_enabled
+                          ? 'Click to disable gift hiding • Gifts count in all sums'
+                          : 'Click to enable • Notifies all users for transparency'}
+                      </small>
+                    </div>
+                  </div>
 
                   <button
                     type="button"
@@ -4111,6 +4246,32 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                     <Scissors size={11} /> Split ({tx.splits?.length || 2})
                                   </span>
                                 )}
+                                {Boolean(tx.is_gift) && (
+                                  <span
+                                    className="pill"
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      backgroundColor: 'rgba(236, 72, 153, 0.15)',
+                                      color: '#ec4899',
+                                      borderColor: 'rgba(236, 72, 153, 0.35)',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.25rem',
+                                    }}
+                                    onClick={() => handleOpenGiftModal(tx)}
+                                    title={
+                                      tx.is_gift_revealed
+                                        ? `Gift revealed on ${tx.gift_reveal_date}`
+                                        : `Surprise gift hidden from partner until ${tx.gift_reveal_date} (still counted in budget totals)`
+                                    }
+                                  >
+                                    <Gift size={11} />{' '}
+                                    {tx.is_gift_revealed
+                                      ? `Gift · Revealed`
+                                      : `Gift · Reveals ${tx.gift_reveal_date}`}
+                                  </span>
+                                )}
                               </div>
                               {Boolean(tx.notes && tx.notes.trim() && tx.notes.trim() !== 'Synced from Plaid') && (
                                 <small className="tx-note"> — {tx.notes.trim()}</small>
@@ -4333,6 +4494,41 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                                         ? 'Edit Note'
                                         : 'Add Note'}
                                     </button>
+
+                                    {(Boolean(summary.gift_addon_enabled) || Boolean(tx.is_gift)) && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="tx-popover-item"
+                                          onClick={() => handleOpenGiftModal(tx)}
+                                          style={{
+                                            fontWeight: 600,
+                                            color: '#ec4899',
+                                          }}
+                                        >
+                                          <Gift size={14} />
+                                          <span style={{ flex: 1, textAlign: 'left' }}>
+                                            {tx.is_gift
+                                              ? `Edit Gift (Reveals ${tx.gift_reveal_date})`
+                                              : 'Mark as Gift (Hide Until Delivery)'}
+                                          </span>
+                                          <InfoTip
+                                            align="right"
+                                            text="Mark as a surprise gift: choose the category and delivery date (max 90 days). Counts in all budget sums, hidden from your partner's ledger until delivery."
+                                          />
+                                        </button>
+                                        {Boolean(tx.is_gift) && (
+                                          <button
+                                            type="button"
+                                            className="tx-popover-item tx-popover-danger"
+                                            onClick={() => handleUnmarkGift(tx)}
+                                          >
+                                            <RotateCcw size={14} />
+                                            Unmark Gift (Show on Partner Ledger)
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
 
                                     <button
                                       type="button"
@@ -6839,6 +7035,144 @@ export default function FinanceModule({ activePartner, onDataChanged, syncVersio
                   }
                 >
                   {splitSaving ? 'Saving Split...' : 'Save Split Allocation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING MODAL: MARK AS GIFT SURPRISE
+         ===================================================================== */}
+      {giftTx && (
+        <div
+          className="finance-modal-backdrop finance-modal-backdrop-secondary"
+          onClick={handleCloseGiftModal}
+        >
+          <div
+            className="finance-modal-card note-modal-card"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="finance-modal-header">
+              <div>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Gift size={18} style={{ color: '#ec4899' }} />
+                  {giftTx.is_gift ? 'Edit Gift Surprise' : 'Mark Transaction as Gift'}
+                  <InfoTip text="Gift transactions are treated like normal transactions and count in all budget totals, but remain hidden from your partner's ledger until the delivery/reveal date (up to 90 days from purchase)." />
+                </h3>
+                <p className="text-muted">
+                  Keep the surprise on the ledger until delivery while still accounting for it in your budget.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon-subtle"
+                onClick={handleCloseGiftModal}
+                aria-label="Close gift modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form className="finance-modal-body" onSubmit={handleSaveGift}>
+              <div className="split-hero-banner" style={{ marginBottom: '1rem' }}>
+                <div className="split-hero-meta">
+                  <span className="split-hero-name">{giftTx.name}</span>
+                  <span className="split-hero-sub">
+                    Purchased {giftTx.date}
+                    {giftTx.account_name ? ` • ${giftTx.account_name}` : ''}
+                  </span>
+                </div>
+                <div className="split-hero-total">
+                  ${Number(giftTx.amount || 0).toFixed(2)}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '0.9rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  Budget Category
+                  <InfoTip text="Choose which budget category this gift purchase comes out of (e.g. Gifts, Spending Money, or Shopping & Tech)." />
+                </label>
+                <select
+                  className="input"
+                  value={giftCategory}
+                  onChange={(e) => setGiftCategory(e.target.value)}
+                  required
+                >
+                  {availableCategories
+                    .filter((c) => {
+                      const lower = (c || '').trim().toLowerCase();
+                      return (
+                        lower &&
+                        lower !== 'split' &&
+                        lower !== 'spent from savings' &&
+                        lower !== 'credit card payment'
+                      );
+                    })
+                    .map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '0.9rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  Gift Delivery / Reveal Date
+                  <InfoTip text="Your partner will not see this transaction on their ledger until this date. Must be within 90 days of the purchase date." />
+                </label>
+                <input
+                  type="date"
+                  className="input"
+                  value={giftRevealDate}
+                  min={(giftTx.date || '').slice(0, 10)}
+                  max={addDaysToIso(giftTx.date, 90)}
+                  onChange={(e) => {
+                    setGiftRevealDate(e.target.value);
+                    setGiftError('');
+                  }}
+                  required
+                />
+                <small className="text-muted" style={{ display: 'block', marginTop: '0.3rem' }}>
+                  Reveal date must be on or before{' '}
+                  <strong>{addDaysToIso(giftTx.date, 90)}</strong> (max 90 days from purchase).
+                </small>
+              </div>
+
+              {giftError && (
+                <div className="error-banner" style={{ marginBottom: '0.9rem' }}>
+                  <AlertTriangle size={15} /> {giftError}
+                </div>
+              )}
+
+              <div className="finance-modal-footer" style={{ padding: 0, borderTop: 'none', marginTop: '0.5rem' }}>
+                {Boolean(giftTx.is_gift) && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleUnmarkGift(giftTx)}
+                    disabled={giftSaving}
+                  >
+                    Remove Gift Status
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleCloseGiftModal}
+                  disabled={giftSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={giftSaving}
+                >
+                  <Gift size={15} />
+                  {giftSaving ? 'Saving...' : 'Save Gift Surprise'}
                 </button>
               </div>
             </form>
