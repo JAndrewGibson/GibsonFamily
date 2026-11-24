@@ -107,11 +107,11 @@ function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBu
               y1={budgetY}
               x2={w - padR}
               y2={budgetY}
-              stroke="rgba(255,255,255,0.22)"
+              stroke="var(--border)"
               strokeDasharray="4 4"
               strokeWidth="1"
             />
-            <text x={w - padR} y={Math.max(10, budgetY - 4)} textAnchor="end" fill="rgba(255,255,255,0.5)" fontSize="8.5">
+            <text x={w - padR} y={Math.max(10, budgetY - 4)} textAnchor="end" fill="var(--text-muted)" fontSize="8.5">
               Budget ${fmtMoney(totalBudget)}
             </text>
           </g>
@@ -155,7 +155,9 @@ function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBu
             cx={p.x}
             cy={p.y}
             r={hoveredDay === p.day ? 4 : 2}
-            fill={hoveredDay === p.day ? '#fff' : '#06b6d4'}
+            fill={hoveredDay === p.day ? 'var(--bg-card)' : '#06b6d4'}
+            stroke={hoveredDay === p.day ? '#06b6d4' : 'none'}
+            strokeWidth={hoveredDay === p.day ? 2 : 0}
             opacity={hoveredDay === p.day || p.day === pts.length ? 1 : 0}
             style={{ cursor: 'pointer' }}
             onMouseEnter={() => setHoveredDay(p.day)}
@@ -163,20 +165,20 @@ function AnimatedMonthlySpendChart({ dailySpending = [], peakDay = null, totalBu
           />
         ))}
 
-        <text x={padL} y={h - 4} fill="rgba(255,255,255,0.5)" fontSize="9">
+        <text x={padL} y={h - 4} fill="var(--text-muted)" fontSize="9">
           Day 1
         </text>
-        <text x={padL + plotW / 2} y={h - 4} textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="9">
+        <text x={padL + plotW / 2} y={h - 4} textAnchor="middle" fill="var(--text-muted)" fontSize="9">
           Day {Math.ceil(n / 2)}
         </text>
-        <text x={w - padR} y={h - 4} textAnchor="end" fill="rgba(255,255,255,0.5)" fontSize="9">
+        <text x={w - padR} y={h - 4} textAnchor="end" fill="var(--text-muted)" fontSize="9">
           Day {n}
         </text>
       </svg>
 
       {peakDay && peakDay.daily_spent > 0 && (
         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem', display: 'flex', justifyContent: 'space-between' }}>
-          <span>Peak shopping day: <strong style={{ color: '#fbbf24' }}>{peakDay.date}</strong> (${fmtMoney(peakDay.daily_spent)})</span>
+          <span>Peak shopping day: <strong style={{ color: 'var(--amber)' }}>{peakDay.date}</strong> (${fmtMoney(peakDay.daily_spent)})</span>
           <span>Tap/hover bars to inspect days</span>
         </div>
       )}
@@ -984,8 +986,6 @@ export default function MonthRecapModal({
       onClick={onClose}
       style={{
         zIndex: 1100,
-        background: 'rgba(5, 8, 16, 0.88)',
-        backdropFilter: 'blur(10px)',
       }}
     >
       <div
@@ -1004,13 +1004,11 @@ export default function MonthRecapModal({
           minHeight: '620px',
           maxHeight: '92vh',
           borderRadius: '24px',
-          boxShadow: '0 30px 80px rgba(0, 0, 0, 0.85), 0 0 40px rgba(99, 102, 241, 0.25)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
           position: 'relative',
           background: 'var(--bg-card)',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
         }}
       >
         {(slideIndex === 5 || slideIndex === 7) && unlockedBadgesList.length > 0 && (
@@ -1036,8 +1034,6 @@ export default function MonthRecapModal({
             right: 0,
             padding: '12px 16px 28px 16px',
             zIndex: 30,
-            background:
-              'linear-gradient(180deg, var(--bg-card) 0%, var(--bg-card) 64%, rgba(15, 23, 42, 0.82) 84%, rgba(15, 23, 42, 0) 100%)',
             pointerEvents: 'none',
           }}
         >
@@ -1057,29 +1053,10 @@ export default function MonthRecapModal({
                 <div
                   key={i}
                   onClick={() => setSlideIndex(i)}
-                  style={{
-                    flex: 1,
-                    height: '4px',
-                    borderRadius: '2px',
-                    background: isCompleted
-                      ? 'rgba(255, 255, 255, 0.95)'
-                      : isActive
-                      ? 'rgba(255, 255, 255, 0.95)'
-                      : 'rgba(255, 255, 255, 0.25)',
-                    cursor: 'pointer',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    transition: 'background 0.2s ease',
-                  }}
+                  className={`month-recap-progress-seg ${isCompleted || isActive ? 'is-filled' : ''}`}
                 >
                   {isActive && isPlaying && (
-                    <div
-                      style={{
-                        height: '100%',
-                        background: '#fff',
-                        animation: 'recapProgress 6s linear infinite',
-                      }}
-                    />
+                    <div className="month-recap-progress-fill" />
                   )}
                 </div>
               );
@@ -1096,20 +1073,7 @@ export default function MonthRecapModal({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-              <span
-                style={{
-                  fontSize: '0.74rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  background: 'rgba(0, 0, 0, 0.55)',
-                  padding: '0.22rem 0.65rem',
-                  borderRadius: '999px',
-                  color: '#fff',
-                  border: '1px solid rgba(255, 255, 255, 0.18)',
-                  backdropFilter: 'blur(4px)',
-                }}
-              >
+              <span className="month-recap-pill">
                 {recap?.month_label || selectedMonth} Recap
               </span>
             </div>
@@ -1117,19 +1081,7 @@ export default function MonthRecapModal({
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <button
                 onClick={() => setIsPlaying((p) => !p)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  background: 'rgba(0, 0, 0, 0.55)',
-                  border: '1px solid rgba(255, 255, 255, 0.18)',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  backdropFilter: 'blur(4px)',
-                }}
+                className="month-recap-icon-btn"
                 title={isPlaying ? 'Pause recap' : 'Play recap'}
               >
                 {isPlaying ? <Pause size={14} /> : <Play size={14} style={{ marginLeft: '2px' }} />}
@@ -1137,19 +1089,7 @@ export default function MonthRecapModal({
 
               <button
                 onClick={onClose}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  background: 'rgba(0, 0, 0, 0.55)',
-                  border: '1px solid rgba(255, 255, 255, 0.18)',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  backdropFilter: 'blur(4px)',
-                }}
+                className="month-recap-icon-btn"
                 aria-label="Close recap"
               >
                 <X size={16} />
@@ -1180,45 +1120,21 @@ export default function MonthRecapModal({
               {/* SLIDE 0: Cover & Household Persona */}
               {slideIndex === 0 && (
                 <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.25rem' }}>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      padding: '0.35rem 0.85rem',
-                      borderRadius: '999px',
-                      background: 'rgba(255, 255, 255, 0.12)',
-                      border: '1px solid rgba(255, 255, 255, 0.25)',
-                      fontSize: '0.8rem',
-                      fontWeight: 700,
-                      color: '#fff',
-                    }}
-                  >
-                    <Sparkles size={14} color="#fbbf24" />
+                  <div className="recap-cover-pill">
+                    <Sparkles size={14} color="var(--amber)" />
                     Household Financial Wrapped
                   </div>
 
-                  <h1
-                    style={{
-                      fontSize: '2.4rem',
-                      fontWeight: 900,
-                      margin: 0,
-                      letterSpacing: '-0.03em',
-                      lineHeight: 1.1,
-                      background: 'linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%)',
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent',
-                    }}
-                  >
+                  <h1 className="recap-cover-title">
                     {recap?.month_label}
                   </h1>
 
                   <div
+                    className="recap-persona-card"
                     style={{
                       padding: '1.75rem 1.5rem',
                       borderRadius: '20px',
                       background: persona.theme_gradient,
-                      boxShadow: '0 16px 40px rgba(0, 0, 0, 0.5)',
                       border: '1px solid rgba(255, 255, 255, 0.2)',
                       width: '100%',
                       maxWidth: '380px',
@@ -1281,7 +1197,7 @@ export default function MonthRecapModal({
                       {fmtSignedMoney(overview.net_cashflow)}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                      Household Savings Rate: <strong style={{ color: '#fff' }}>{overview.savings_rate_pct}%</strong>
+                      Household Savings Rate: <strong style={{ color: 'var(--text-main)' }}>{overview.savings_rate_pct}%</strong>
                     </div>
                   </div>
 
@@ -1325,20 +1241,7 @@ export default function MonthRecapModal({
                   {/* Key Trends (MoM and YoY) Highlight Pill Cards */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
                     {trends.mom_spend_trend && (
-                      <div
-                        style={{
-                          background: 'rgba(99, 102, 241, 0.12)',
-                          border: '1px solid rgba(99, 102, 241, 0.35)',
-                          borderRadius: '10px',
-                          padding: '0.65rem 0.95rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.6rem',
-                          fontSize: '0.85rem',
-                          fontWeight: 600,
-                          color: '#c7d2fe',
-                        }}
-                      >
+                      <div className="recap-trend-pill is-indigo">
                         {trends.mom_spend_trend.includes('down') ? (
                           <TrendingDown size={18} color="#10b981" />
                         ) : (
@@ -1349,20 +1252,7 @@ export default function MonthRecapModal({
                     )}
 
                     {trends.yoy_spend_trend && (
-                      <div
-                        style={{
-                          background: 'rgba(16, 185, 129, 0.12)',
-                          border: '1px solid rgba(16, 185, 129, 0.35)',
-                          borderRadius: '10px',
-                          padding: '0.65rem 0.95rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.6rem',
-                          fontSize: '0.85rem',
-                          fontWeight: 600,
-                          color: '#a7f3d0',
-                        }}
-                      >
+                      <div className="recap-trend-pill is-green">
                         <Award size={18} color="#10b981" />
                         <span>{trends.yoy_spend_trend}</span>
                       </div>
@@ -1418,7 +1308,7 @@ export default function MonthRecapModal({
                               style={{
                                 fontSize: '0.9rem',
                                 fontWeight: 800,
-                                color: cat.rank === 1 ? '#fbbf24' : 'var(--text-muted)',
+                                color: cat.rank === 1 ? 'var(--amber)' : 'var(--text-muted)',
                                 width: '22px',
                               }}
                             >
@@ -1427,7 +1317,7 @@ export default function MonthRecapModal({
                             <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>{cat.category}</span>
                           </div>
                           <div style={{ textAlign: 'right' }}>
-                            <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#fff' }}>
+                            <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-main)' }}>
                               ${fmtMoney(cat.spent)}
                             </span>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
@@ -1437,7 +1327,7 @@ export default function MonthRecapModal({
                         </div>
 
                         {/* Progress Bar */}
-                        <div style={{ height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ height: '5px', background: 'rgba(148, 163, 184, 0.25)', borderRadius: '3px', overflow: 'hidden' }}>
                           <div
                             style={{
                               width: `${Math.min(cat.pct, 100)}%`,
@@ -1455,7 +1345,7 @@ export default function MonthRecapModal({
                     <div
                       style={{
                         padding: '0.75rem 1rem',
-                        background: 'rgba(255, 255, 255, 0.04)',
+                        background: 'var(--bg-panel)',
                         borderRadius: '10px',
                         border: '1px solid var(--border)',
                         fontSize: '0.82rem',
@@ -1500,17 +1390,17 @@ export default function MonthRecapModal({
                         padding: '1.25rem',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#f59e0b', fontSize: '0.76rem', textTransform: 'uppercase', fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--amber)', fontSize: '0.76rem', textTransform: 'uppercase', fontWeight: 700 }}>
                         <Flame size={16} />
                         MOST FREQUENTED SPOT
                       </div>
-                      <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#fff', marginTop: '0.35rem' }}>
+                      <div className="recap-highlight-title" style={{ fontSize: '1.6rem', fontWeight: 900, marginTop: '0.35rem' }}>
                         {recap.top_merchant.name}
                       </div>
-                      <div style={{ fontSize: '0.9rem', color: '#fef08a', marginTop: '0.25rem', fontWeight: 600 }}>
+                      <div className="recap-highlight-amber-accent" style={{ fontSize: '0.9rem', marginTop: '0.25rem', fontWeight: 600 }}>
                         Visited {recap.top_merchant.count} times this month (${fmtMoney(recap.top_merchant.total_spent)} total)
                       </div>
-                      <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.8)', marginTop: '0.4rem' }}>
+                      <div className="recap-highlight-sub" style={{ fontSize: '0.8rem', marginTop: '0.4rem' }}>
                         You are practically on a first-name basis here! 🛒
                       </div>
                     </div>
@@ -1575,17 +1465,17 @@ export default function MonthRecapModal({
                         padding: '1.25rem',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.76rem', textTransform: 'uppercase', fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--green)', fontSize: '0.76rem', textTransform: 'uppercase', fontWeight: 700 }}>
                         <Award size={16} />
                         BUDGET MVP OF THE MONTH
                       </div>
-                      <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#fff', marginTop: '0.35rem' }}>
+                      <div className="recap-highlight-title" style={{ fontSize: '1.6rem', fontWeight: 900, marginTop: '0.35rem' }}>
                         {recap.budget_mvp.category}
                       </div>
-                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#6ee7b7', marginTop: '0.2rem' }}>
+                      <div className="recap-highlight-green-accent" style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem' }}>
                         +${fmtMoney(recap.budget_mvp.saved)} Under Limit!
                       </div>
-                      <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.85)', marginTop: '0.35rem' }}>
+                      <div className="recap-highlight-sub" style={{ fontSize: '0.82rem', marginTop: '0.35rem' }}>
                         {recap.budget_mvp.comment}
                       </div>
                     </div>
@@ -1680,16 +1570,16 @@ export default function MonthRecapModal({
                       padding: '1.75rem 1.25rem',
                     }}
                   >
-                    <PiggyBank size={40} color="#818cf8" style={{ margin: '0 auto 0.5rem auto' }} />
-                    <div style={{ fontSize: '2.5rem', fontWeight: 900, color: '#fff' }}>
+                    <PiggyBank size={40} color="var(--primary)" style={{ margin: '0 auto 0.5rem auto' }} />
+                    <div className="recap-highlight-title" style={{ fontSize: '2.5rem', fontWeight: 900 }}>
                       ${fmtMoney(overview.recommended_savings_transfer ?? overview.total_leftover)}
                     </div>
-                    <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#c7d2fe', marginTop: '0.35rem' }}>
+                    <div className="recap-highlight-indigo-accent" style={{ fontSize: '0.95rem', fontWeight: 600, marginTop: '0.35rem' }}>
                       {overview.exceeded_income_projection && Number(overview.excess_income || 0) > 0
                         ? 'Total Savings Surplus (Leftover + Excess Income)'
                         : 'Non-Rollover Leftover Budget Surplus'}
                     </div>
-                    <p style={{ margin: '0.75rem auto 0 auto', maxWidth: '380px', fontSize: '0.84rem', color: 'rgba(255,255,255,0.85)', lineHeight: 1.45 }}>
+                    <p className="recap-highlight-sub" style={{ margin: '0.75rem auto 0 auto', maxWidth: '380px', fontSize: '0.84rem', lineHeight: 1.45 }}>
                       {overview.exceeded_income_projection && Number(overview.excess_income || 0) > 0
                         ? `Congratulations! You earned $${fmtMoney(overview.excess_income)} above projected income and exceeded your savings target!`
                         : 'This surplus was instructed to transfer directly into your high-yield savings account!'}
@@ -1733,7 +1623,7 @@ export default function MonthRecapModal({
                           <span style={{ fontSize: '1.2rem' }}>{m.emoji || '🏆'}</span>
                           <span style={{ fontWeight: 700, fontSize: '0.78rem' }}>{m.title}</span>
                           {!m.unlocked && (
-                            <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#fbbf24', textTransform: 'uppercase' }}>
+                            <span style={{ fontSize: '0.62rem', fontWeight: 800, color: 'var(--amber)', textTransform: 'uppercase' }}>
                               ⏳ Unlocks on Close
                             </span>
                           )}
@@ -1771,7 +1661,7 @@ export default function MonthRecapModal({
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
                         Favorite Shopping Day
                       </div>
-                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fbbf24', marginTop: '0.2rem' }}>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--amber)', marginTop: '0.2rem' }}>
                         {funFacts.favorite_day_of_week?.day_name || 'Saturday'}
                       </div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
@@ -1802,7 +1692,7 @@ export default function MonthRecapModal({
                       <span>1st Half (Days 1–15): {funFacts.first_half_pct ?? 50}%</span>
                       <span>2nd Half (Days 16+): {funFacts.second_half_pct ?? 50}%</span>
                     </div>
-                    <div style={{ fontSize: '0.74rem', color: '#818cf8', fontWeight: 600, marginTop: '0.25rem' }}>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--primary)', fontWeight: 600, marginTop: '0.25rem' }}>
                       Pacing Verdict: {funFacts.pacing_label || 'Evenly Paced Month'}
                     </div>
                   </div>
@@ -1865,7 +1755,7 @@ export default function MonthRecapModal({
                         fontSize: '0.75rem',
                         fontWeight: 700,
                         textTransform: 'uppercase',
-                        color: '#fbbf24',
+                        color: 'var(--amber)',
                         letterSpacing: '0.06em',
                       }}
                     >
@@ -1884,7 +1774,7 @@ export default function MonthRecapModal({
                             height: '30px',
                             borderRadius: '50%',
                             border: '1px solid rgba(251, 191, 36, 0.45)',
-                            color: '#fbbf24',
+                            color: 'var(--amber)',
                             background: 'rgba(251, 191, 36, 0.1)',
                           }}
                           title="Replay Unlock Ceremony"
@@ -1962,26 +1852,7 @@ export default function MonthRecapModal({
                         key={tab.id}
                         type="button"
                         onClick={() => setBadgeFilter(tab.id)}
-                        style={{
-                          padding: '0.28rem 0.7rem',
-                          borderRadius: '999px',
-                          fontSize: '0.74rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          border:
-                            tab.id === 'shame'
-                              ? '1px solid rgba(239, 68, 68, 0.5)'
-                              : '1px solid rgba(255,255,255,0.2)',
-                          background:
-                            badgeFilter === tab.id
-                              ? tab.id === 'shame'
-                                ? 'rgba(239, 68, 68, 0.38)'
-                                : 'rgba(99, 102, 241, 0.35)'
-                              : tab.id === 'shame'
-                              ? 'rgba(239, 68, 68, 0.12)'
-                              : 'rgba(255,255,255,0.06)',
-                          color: tab.id === 'shame' ? '#fecaca' : '#fff',
-                        }}
+                        className={`recap-badge-filter-pill ${badgeFilter === tab.id ? 'is-active' : ''} ${tab.id === 'shame' ? 'is-shame' : ''}`}
                       >
                         {tab.label}
                       </button>
@@ -1997,7 +1868,7 @@ export default function MonthRecapModal({
                           background: 'none',
                           border: 'none',
                           padding: '0.3rem 0.5rem',
-                          color: '#fca5a5',
+                          color: 'var(--red)',
                           fontSize: '0.78rem',
                           fontWeight: 600,
                           textDecoration: 'underline',
@@ -2055,7 +1926,7 @@ export default function MonthRecapModal({
                                 : 'rgba(245, 158, 11, 0.08)'
                               : isShame
                               ? 'rgba(239, 68, 68, 0.04)'
-                              : 'rgba(255, 255, 255, 0.03)',
+                              : 'var(--bg-panel)',
                             border: isLockedIntoPlace
                               ? isShame
                                 ? '1px solid rgba(239, 68, 68, 0.65)'
@@ -2068,7 +1939,7 @@ export default function MonthRecapModal({
                                 : '1px dashed rgba(245, 158, 11, 0.5)'
                               : isShame
                               ? '1px dashed rgba(239, 68, 68, 0.28)'
-                              : '1px dashed rgba(255, 255, 255, 0.15)',
+                              : '1px dashed var(--border)',
                             borderRadius: '12px',
                             padding: '0.7rem 0.65rem',
                             display: 'flex',
@@ -2091,36 +1962,24 @@ export default function MonthRecapModal({
                                     fontWeight: 900,
                                     padding: '0.1rem 0.42rem',
                                     borderRadius: '999px',
-                                    background: isShame ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.25)',
-                                    color: isShame ? '#fca5a5' : '#fbbf24',
-                                    border: isShame ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid rgba(245, 158, 11, 0.45)',
+                                    background: isShame ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                    color: isShame ? 'var(--red)' : 'var(--amber)',
+                                    border: isShame ? '1px solid rgba(239, 68, 68, 0.45)' : '1px solid rgba(245, 158, 11, 0.45)',
                                   }}
                                 >
                                   ×{b.times_earned}
                                 </span>
                               )}
                               <span
-                                style={{
-                                  fontSize: '0.6rem',
-                                  fontWeight: 800,
-                                  textTransform: 'uppercase',
-                                  padding: '0.1rem 0.4rem',
-                                  borderRadius: '999px',
-                                  background: b.unlocked
+                                className={`recap-badge-status ${
+                                  b.unlocked
                                     ? isShame
-                                      ? 'rgba(239, 68, 68, 0.25)'
-                                      : 'rgba(16, 185, 129, 0.2)'
+                                      ? 'is-shame'
+                                      : 'is-unlocked'
                                     : b.pending_unlock
-                                    ? 'rgba(245, 158, 11, 0.2)'
-                                    : 'rgba(255, 255, 255, 0.08)',
-                                  color: b.unlocked
-                                    ? isShame
-                                      ? '#fca5a5'
-                                      : '#6ee7b7'
-                                    : b.pending_unlock
-                                    ? '#fbbf24'
-                                    : 'var(--text-muted)',
-                                }}
+                                    ? 'is-pending'
+                                    : 'is-locked'
+                                }`}
                               >
                                 {b.unlocked ? (isShame ? 'Shame 🚨' : 'Unlocked') : b.pending_unlock ? 'Pending Close ⏳' : 'Locked 🔒'}
                               </span>
@@ -2132,15 +1991,25 @@ export default function MonthRecapModal({
                                 fontSize: '0.62rem',
                                 fontWeight: 700,
                                 textTransform: 'uppercase',
-                                color: isShame ? '#f87171' : b.is_repeatable ? '#fbbf24' : '#818cf8',
+                                color: isShame ? 'var(--red)' : b.is_repeatable ? 'var(--amber)' : 'var(--primary)',
                                 letterSpacing: '0.04em',
                               }}
                             >
                               {b.tier_label}
                             </div>
                           )}
-                          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: isShame && b.unlocked ? '#fecaca' : '#fff' }}>{b.title}</div>
-                          <div style={{ fontSize: '0.69rem', color: b.unlocked ? (isShame ? '#fca5a5' : '#c7d2fe') : 'var(--text-muted)', lineHeight: 1.3 }}>
+                          <div
+                            className={`recap-badge-title ${isShame && b.unlocked ? 'is-shame-unlocked' : ''}`}
+                            style={{ fontWeight: 800, fontSize: '0.82rem' }}
+                          >
+                            {b.title}
+                          </div>
+                          <div
+                            className={`recap-badge-sub ${
+                              b.unlocked ? (isShame ? 'is-shame-unlocked' : 'is-unlocked') : ''
+                            }`}
+                            style={{ fontSize: '0.69rem', color: b.unlocked ? undefined : 'var(--text-muted)', lineHeight: 1.3 }}
+                          >
                             {b.unlocked ? b.subtitle : b.criteria}
                           </div>
                           {!b.is_repeatable && b.progress_text && (
@@ -2149,7 +2018,7 @@ export default function MonthRecapModal({
                                 <span>Progress</span>
                                 <strong>{b.progress_text}</strong>
                               </div>
-                              <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                              <div style={{ height: '4px', background: 'rgba(148, 163, 184, 0.25)', borderRadius: '2px', overflow: 'hidden' }}>
                                 <div
                                   style={{
                                     width: `${pct}%`,
@@ -2267,62 +2136,23 @@ export default function MonthRecapModal({
         </div>
 
         {/* Bottom Story Navigation (Prev / Next Buttons & Touch zones) */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            padding: '14px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            zIndex: 30,
-            background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)',
-          }}
-        >
+        <div className="month-recap-bottom-nav">
           <button
             onClick={handlePrev}
             disabled={slideIndex === 0}
-            style={{
-              padding: '0.45rem 0.9rem',
-              borderRadius: '999px',
-              background: 'rgba(0, 0, 0, 0.45)',
-              border: '1px solid rgba(255, 255, 255, 0.18)',
-              color: slideIndex === 0 ? 'rgba(255,255,255,0.3)' : '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-              fontSize: '0.82rem',
-              fontWeight: 600,
-              cursor: slideIndex === 0 ? 'default' : 'pointer',
-              backdropFilter: 'blur(4px)',
-            }}
+            className="month-recap-nav-btn"
           >
             <ChevronLeft size={16} />
             Back
           </button>
 
-          <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>
+          <span className="month-recap-nav-counter">
             {slideIndex + 1} of {totalSlides}
           </span>
 
           <button
             onClick={handleNext}
-            style={{
-              padding: '0.45rem 1rem',
-              borderRadius: '999px',
-              background: 'rgba(255, 255, 255, 0.2)',
-              border: '1px solid rgba(255, 255, 255, 0.35)',
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-              fontSize: '0.82rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              backdropFilter: 'blur(4px)',
-            }}
+            className="month-recap-nav-btn is-next"
           >
             {slideIndex === totalSlides - 1 ? 'Finish' : 'Next'}
             <ChevronRight size={16} />
@@ -2417,8 +2247,8 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
                     t.id === 'shame'
                       ? {
                           borderColor: 'rgba(239, 68, 68, 0.55)',
-                          background: filter === 'shame' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(239, 68, 68, 0.1)',
-                          color: '#fca5a5',
+                          background: filter === 'shame' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.1)',
+                          color: 'var(--red)',
                         }
                       : undefined
                   }
@@ -2452,7 +2282,7 @@ export function BadgeShowroomModal({ isOpen, onClose, selectedMonth }) {
                   background: 'none',
                   border: 'none',
                   padding: '0.2rem 0',
-                  color: '#f87171',
+                  color: 'var(--red)',
                   fontSize: '0.8rem',
                   fontWeight: 600,
                   textDecoration: 'underline',
