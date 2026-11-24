@@ -1878,6 +1878,7 @@ html[data-theme='light'] .tx-table tr.tx-row.tx-row-pending {
     transform: translateX(-105%);
     transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
     overflow-y: auto;
+    padding-top: calc(1.25rem + env(safe-area-inset-top, 0px));
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
   }
 
@@ -1908,8 +1909,9 @@ html[data-theme='light'] .tx-table tr.tx-row.tx-row-pending {
     position: sticky;
     top: 0;
     z-index: 750;
-    height: 56px;
-    padding: 0 0.85rem;
+    height: auto;
+    min-height: calc(56px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 0.85rem 0;
     gap: 0.5rem;
     background: rgba(17, 24, 39, 0.94);
     backdrop-filter: blur(10px);
@@ -2091,7 +2093,7 @@ html[data-theme='light'] .tx-table tr.tx-row.tx-row-pending {
   /* Notification Dropdown Centered on Phone Viewport */
   .notif-dropdown-card {
     position: fixed;
-    top: 62px;
+    top: calc(62px + env(safe-area-inset-top, 0px));
     left: 0.75rem;
     right: 0.75rem;
     width: auto;
@@ -7272,7 +7274,7 @@ html[data-theme='light'] .splendor-wager-badge {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.75rem;
+  padding: calc(0.75rem + env(safe-area-inset-top, 0px)) 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
 }
 
 .recap-player-shell {
